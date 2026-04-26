@@ -1,0 +1,15 @@
+server:
+  port: 8888
+
+spring:
+  application:
+    name: config-server
+  cloud:
+    config:
+      server:
+        git:
+          uri: file:///C:/Users/hardi/workspace/antigravity/micro-eCommerce/config-repo
+          # In a real environment, you would use a remote Git repository:
+          # uri: https://github.com/your-username/ecommerce-config-repo.git
+          default-label: main
+          clone-on-start: true
