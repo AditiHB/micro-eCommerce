@@ -1,5 +1,7 @@
 package com.ecommerce.orderservice.service;
 
+import com.ecommerce.common.constants.ApiConstants;
+import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.OrderStatus;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.exception.EventPublishingException;
@@ -10,6 +12,10 @@ import com.ecommerce.orderservice.dto.CreateOrderRequest;
 import com.ecommerce.orderservice.dto.OrderResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
@@ -73,17 +79,28 @@ public class OrderService {
     }
 
     /**
-     * Retrieves all orders.
+     * Retrieves all orders with pagination.
      *
-     * @return list of order responses
+     * @param pageNumber the page number (0-indexed)
+     * @param pageSize the page size
+     * @param sortBy the field to sort by
+     * @return paged order responses
      */
     @Transactional(readOnly = true)
-    public List<OrderResponse> getAllOrders() {
-        log.info("Fetching all orders");
-        return orderRepository.findAll()
+    public PagedResponse<OrderResponse> getAllOrders(int pageNumber, int pageSize, String sortBy) {
+        log.info("Fetching orders - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
+
+        pageSize = Math.min(pageSize, ApiConstants.MAX_PAGE_SIZE);
+
+        Pageable pageable = PageRequest.of(pageNumber, pageSize, Sort.by(sortBy).ascending());
+        Page<Order> page = orderRepository.findAll(pageable);
+
+        List<OrderResponse> responses = page.getContent()
             .stream()
             .map(this::mapToResponse)
             .toList();
+
+        return PagedResponse.of(responses, pageNumber, pageSize, page.getTotalElements());
     }
 
     /**

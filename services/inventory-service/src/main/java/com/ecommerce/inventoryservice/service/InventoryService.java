@@ -1,5 +1,7 @@
 package com.ecommerce.inventoryservice.service;
 
+import com.ecommerce.common.constants.ApiConstants;
+import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.exception.BusinessException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.inventoryservice.Inventory;
@@ -8,6 +10,10 @@ import com.ecommerce.inventoryservice.dto.CreateInventoryRequest;
 import com.ecommerce.inventoryservice.dto.InventoryResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -59,17 +65,28 @@ public class InventoryService {
     }
 
     /**
-     * Retrieves all inventory items.
+     * Retrieves all inventory items with pagination.
      *
-     * @return list of inventory responses
+     * @param pageNumber the page number (0-indexed)
+     * @param pageSize the page size
+     * @param sortBy the field to sort by
+     * @return paged inventory responses
      */
     @Transactional(readOnly = true)
-    public List<InventoryResponse> getAllInventory() {
-        log.info("Fetching all inventory items");
-        return inventoryRepository.findAll()
+    public PagedResponse<InventoryResponse> getAllInventory(int pageNumber, int pageSize, String sortBy) {
+        log.info("Fetching inventory items - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
+
+        pageSize = Math.min(pageSize, ApiConstants.MAX_PAGE_SIZE);
+
+        Pageable pageable = PageRequest.of(pageNumber, pageSize, Sort.by(sortBy).ascending());
+        Page<Inventory> page = inventoryRepository.findAll(pageable);
+
+        List<InventoryResponse> responses = page.getContent()
             .stream()
             .map(this::mapToResponse)
             .toList();
+
+        return PagedResponse.of(responses, pageNumber, pageSize, page.getTotalElements());
     }
 
     /**

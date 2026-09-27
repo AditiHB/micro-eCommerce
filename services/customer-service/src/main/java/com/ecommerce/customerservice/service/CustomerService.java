@@ -1,5 +1,7 @@
 package com.ecommerce.customerservice.service;
 
+import com.ecommerce.common.constants.ApiConstants;
+import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.customerservice.Customer;
 import com.ecommerce.customerservice.CustomerRepository;
@@ -7,6 +9,10 @@ import com.ecommerce.customerservice.dto.CreateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -58,17 +64,29 @@ public class CustomerService {
     }
 
     /**
-     * Retrieves all customers.
+     * Retrieves all customers with pagination.
      *
-     * @return list of customer responses
+     * @param pageNumber the page number (0-indexed)
+     * @param pageSize the page size
+     * @param sortBy the field to sort by
+     * @return paged customer responses
      */
     @Transactional(readOnly = true)
-    public List<CustomerResponse> getAllCustomers() {
-        log.info("Fetching all customers");
-        return customerRepository.findAll()
+    public PagedResponse<CustomerResponse> getAllCustomers(int pageNumber, int pageSize, String sortBy) {
+        log.info("Fetching customers - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
+
+        // Validate pagination parameters
+        pageSize = Math.min(pageSize, ApiConstants.MAX_PAGE_SIZE);
+
+        Pageable pageable = PageRequest.of(pageNumber, pageSize, Sort.by(sortBy).ascending());
+        Page<Customer> page = customerRepository.findAll(pageable);
+
+        List<CustomerResponse> responses = page.getContent()
             .stream()
             .map(this::mapToResponse)
             .toList();
+
+        return PagedResponse.of(responses, pageNumber, pageSize, page.getTotalElements());
     }
 
     /**

@@ -1,5 +1,7 @@
 package com.ecommerce.paymentservice.service;
 
+import com.ecommerce.common.constants.ApiConstants;
+import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.PaymentStatus;
 import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.exception.EventPublishingException;
@@ -10,6 +12,10 @@ import com.ecommerce.paymentservice.dto.ProcessPaymentRequest;
 import com.ecommerce.paymentservice.dto.PaymentResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.Message;
@@ -76,17 +82,28 @@ public class PaymentService {
     }
 
     /**
-     * Retrieves all payments.
+     * Retrieves all payments with pagination.
      *
-     * @return list of payment responses
+     * @param pageNumber the page number (0-indexed)
+     * @param pageSize the page size
+     * @param sortBy the field to sort by
+     * @return paged payment responses
      */
     @Transactional(readOnly = true)
-    public List<PaymentResponse> getAllPayments() {
-        log.info("Fetching all payments");
-        return paymentRepository.findAll()
+    public PagedResponse<PaymentResponse> getAllPayments(int pageNumber, int pageSize, String sortBy) {
+        log.info("Fetching payments - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
+
+        pageSize = Math.min(pageSize, ApiConstants.MAX_PAGE_SIZE);
+
+        Pageable pageable = PageRequest.of(pageNumber, pageSize, Sort.by(sortBy).ascending());
+        Page<Payment> page = paymentRepository.findAll(pageable);
+
+        List<PaymentResponse> responses = page.getContent()
             .stream()
             .map(this::mapToResponse)
             .toList();
+
+        return PagedResponse.of(responses, pageNumber, pageSize, page.getTotalElements());
     }
 
     /**
