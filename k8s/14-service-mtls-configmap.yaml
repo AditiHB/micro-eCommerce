@@ -1,0 +1,95 @@
+---
+# mTLS Configuration for all services
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mtls-config
+  namespace: ecommerce
+  labels:
+    app: mtls-configuration
+data:
+  ssl.properties: |
+    # Spring Boot SSL Configuration
+    # Enable SSL/TLS for all services
+    server.ssl.enabled=true
+    server.ssl.key-store-type=PKCS12
+    server.ssl.client-auth=need
+
+  restclient.properties: |
+    # RestClient SSL Configuration for inter-service communication
+    # Connection timeouts
+    restclient.connect-timeout=10000
+    restclient.read-timeout=30000
+    restclient.socket-timeout=30000
+
+  services-endpoints.properties: |
+    # Service endpoints - HTTPS for mTLS
+    service.customer.url=https://customer-service.ecommerce.svc.cluster.local:8081
+    service.order.url=https://order-service.ecommerce.svc.cluster.local:8083
+    service.inventory.url=https://inventory-service.ecommerce.svc.cluster.local:8082
+    service.payment.url=https://payment-service.ecommerce.svc.cluster.local:8084
+    service.api-gateway.url=https://api-gateway.ecommerce.svc.cluster.local:8080
+    service.config.url=https://config-server.ecommerce.svc.cluster.local:8888
+    service.discovery.url=https://discovery-server.ecommerce.svc.cluster.local:8761
+
+---
+# Certificate Paths ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: certificate-paths
+  namespace: ecommerce
+  labels:
+    app: certificate-configuration
+data:
+  customer-service-paths.sh: |
+    export CERT_MOUNT_PATH="/etc/certs/customer-service"
+    export CERT_FILE="${CERT_MOUNT_PATH}/tls.crt"
+    export KEY_FILE="${CERT_MOUNT_PATH}/tls.key"
+    export CA_FILE="${CERT_MOUNT_PATH}/ca.crt"
+    export KEYSTORE_PATH="${CERT_MOUNT_PATH}/keystore.p12"
+    export TRUSTSTORE_PATH="${CERT_MOUNT_PATH}/truststore.p12"
+
+  order-service-paths.sh: |
+    export CERT_MOUNT_PATH="/etc/certs/order-service"
+    export CERT_FILE="${CERT_MOUNT_PATH}/tls.crt"
+    export KEY_FILE="${CERT_MOUNT_PATH}/tls.key"
+    export CA_FILE="${CERT_MOUNT_PATH}/ca.crt"
+    export KEYSTORE_PATH="${CERT_MOUNT_PATH}/keystore.p12"
+    export TRUSTSTORE_PATH="${CERT_MOUNT_PATH}/truststore.p12"
+
+  inventory-service-paths.sh: |
+    export CERT_MOUNT_PATH="/etc/certs/inventory-service"
+    export CERT_FILE="${CERT_MOUNT_PATH}/tls.crt"
+    export KEY_FILE="${CERT_MOUNT_PATH}/tls.key"
+    export CA_FILE="${CERT_MOUNT_PATH}/ca.crt"
+    export KEYSTORE_PATH="${CERT_MOUNT_PATH}/keystore.p12"
+    export TRUSTSTORE_PATH="${CERT_MOUNT_PATH}/truststore.p12"
+
+  payment-service-paths.sh: |
+    export CERT_MOUNT_PATH="/etc/certs/payment-service"
+    export CERT_FILE="${CERT_MOUNT_PATH}/tls.crt"
+    export KEY_FILE="${CERT_MOUNT_PATH}/tls.key"
+    export CA_FILE="${CERT_MOUNT_PATH}/ca.crt"
+    export KEYSTORE_PATH="${CERT_MOUNT_PATH}/keystore.p12"
+    export TRUSTSTORE_PATH="${CERT_MOUNT_PATH}/truststore.p12"
+
+---
+# Spring Boot SSL Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ssl-properties
+  namespace: ecommerce
+  labels:
+    app: ssl-configuration
+data:
+  ssl-common.yml: |
+    server:
+      ssl:
+        enabled: true
+        key-store-type: PKCS12
+        client-auth: need  # Require client certificates for mTLS
+        key-store: file:/etc/certs/${SERVICE_NAME}/tls.crt
+        key-store-password: changeit
+        key-alias: ${SERVICE_NAME}

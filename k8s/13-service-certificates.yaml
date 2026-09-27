@@ -1,0 +1,146 @@
+---
+# Customer Service Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: customer-service-cert
+  namespace: ecommerce
+spec:
+  secretName: customer-service-tls
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days before expiry
+  commonName: customer-service.default.svc.cluster.local
+  dnsNames:
+    - customer-service
+    - customer-service.default
+    - customer-service.default.svc
+    - customer-service.default.svc.cluster.local
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
+
+---
+# Order Service Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: order-service-cert
+  namespace: ecommerce
+spec:
+  secretName: order-service-tls
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days before expiry
+  commonName: order-service.default.svc.cluster.local
+  dnsNames:
+    - order-service
+    - order-service.default
+    - order-service.default.svc
+    - order-service.default.svc.cluster.local
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
+
+---
+# Inventory Service Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: inventory-service-cert
+  namespace: ecommerce
+spec:
+  secretName: inventory-service-tls
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days before expiry
+  commonName: inventory-service.default.svc.cluster.local
+  dnsNames:
+    - inventory-service
+    - inventory-service.default
+    - inventory-service.default.svc
+    - inventory-service.default.svc.cluster.local
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
+
+---
+# Payment Service Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: payment-service-cert
+  namespace: ecommerce
+spec:
+  secretName: payment-service-tls
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days before expiry
+  commonName: payment-service.default.svc.cluster.local
+  dnsNames:
+    - payment-service
+    - payment-service.default
+    - payment-service.default.svc
+    - payment-service.default.svc.cluster.local
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
+
+---
+# API Gateway Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: api-gateway-cert
+  namespace: ecommerce
+spec:
+  secretName: api-gateway-tls
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days before expiry
+  commonName: api-gateway.default.svc.cluster.local
+  dnsNames:
+    - api-gateway
+    - api-gateway.default
+    - api-gateway.default.svc
+    - api-gateway.default.svc.cluster.local
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
+
+---
+# Config Server Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: config-server-cert
+  namespace: ecommerce
+spec:
+  secretName: config-server-tls
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days before expiry
+  commonName: config-server.default.svc.cluster.local
+  dnsNames:
+    - config-server
+    - config-server.default
+    - config-server.default.svc
+    - config-server.default.svc.cluster.local
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
+
+---
+# Discovery Server Certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: discovery-server-cert
+  namespace: ecommerce
+spec:
+  secretName: discovery-server-tls
+  duration: 2160h  # 90 days
+  renewBefore: 720h  # 30 days before expiry
+  commonName: discovery-server.default.svc.cluster.local
+  dnsNames:
+    - discovery-server
+    - discovery-server.default
+    - discovery-server.default.svc
+    - discovery-server.default.svc.cluster.local
+  issuerRef:
+    name: ca-issuer
+    kind: ClusterIssuer
