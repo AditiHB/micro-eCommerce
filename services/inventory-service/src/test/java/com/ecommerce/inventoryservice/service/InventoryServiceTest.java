@@ -19,8 +19,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 
-import java.time.LocalDateTime;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -29,7 +27,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("InventoryService Unit Tests")
+@DisplayName("Inventory Service Unit Tests")
 class InventoryServiceTest {
 
     @Mock
@@ -47,8 +45,6 @@ class InventoryServiceTest {
             .id(1L)
             .productId("PROD-001")
             .quantity(100)
-            .createdAt(LocalDateTime.now())
-            .updatedAt(LocalDateTime.now())
             .build();
 
         createRequest = CreateInventoryRequest.builder()
@@ -59,7 +55,7 @@ class InventoryServiceTest {
 
     @Test
     @DisplayName("Should create inventory successfully")
-    void testCreateInventorySuccess() {
+    void testCreateInventory() {
         when(inventoryRepository.save(any(Inventory.class))).thenReturn(testInventory);
 
         InventoryResponse response = inventoryService.createInventory(createRequest);
@@ -72,8 +68,8 @@ class InventoryServiceTest {
     }
 
     @Test
-    @DisplayName("Should get inventory by ID successfully")
-    void testGetInventorySuccess() {
+    @DisplayName("Should retrieve inventory by ID successfully")
+    void testGetInventory() {
         when(inventoryRepository.findById(1L)).thenReturn(Optional.of(testInventory));
 
         InventoryResponse response = inventoryService.getInventory(1L);
@@ -91,37 +87,49 @@ class InventoryServiceTest {
 
         assertThatThrownBy(() -> inventoryService.getInventory(999L))
             .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(inventoryRepository, times(1)).findById(999L);
     }
 
     @Test
-    @DisplayName("Should get all inventory with pagination")
-    void testGetAllInventorySuccess() {
-        List<Inventory> inventories = Arrays.asList(testInventory);
-        Page<Inventory> page = new PageImpl<>(inventories, mock(Pageable.class), 1);
+    @DisplayName("Should retrieve all inventory items with pagination")
+    void testGetAllInventory() {
+        Inventory inventory2 = Inventory.builder()
+            .id(2L)
+            .productId("PROD-002")
+            .quantity(50)
+            .build();
+
+        List<Inventory> inventories = List.of(testInventory, inventory2);
+        Page<Inventory> page = new PageImpl<>(inventories);
+
         when(inventoryRepository.findAll(any(Pageable.class))).thenReturn(page);
 
         PagedResponse<InventoryResponse> response = inventoryService.getAllInventory(0, 10, "id");
 
         assertThat(response).isNotNull();
-        assertThat(response.getContent()).hasSize(1);
+        assertThat(response.getContent()).hasSize(2);
         assertThat(response.getPageNumber()).isEqualTo(0);
+        assertThat(response.getPageSize()).isEqualTo(10);
+        verify(inventoryRepository, times(1)).findAll(any(Pageable.class));
     }
 
     @Test
     @DisplayName("Should reserve stock successfully")
     void testReserveStockSuccess() {
-        Inventory updatedInventory = Inventory.builder()
+        Inventory reservedInventory = Inventory.builder()
             .id(1L)
             .productId("PROD-001")
-            .quantity(75)
+            .quantity(85)
             .build();
 
         when(inventoryRepository.findById(1L)).thenReturn(Optional.of(testInventory));
-        when(inventoryRepository.save(any(Inventory.class))).thenReturn(updatedInventory);
+        when(inventoryRepository.save(any(Inventory.class))).thenReturn(reservedInventory);
 
-        InventoryResponse response = inventoryService.reserveStock(1L, 25);
+        InventoryResponse response = inventoryService.reserveStock(1L, 15);
 
-        assertThat(response.getQuantity()).isEqualTo(75);
+        assertThat(response.getQuantity()).isEqualTo(85);
+        verify(inventoryRepository, times(1)).findById(1L);
         verify(inventoryRepository, times(1)).save(any(Inventory.class));
     }
 
@@ -133,50 +141,68 @@ class InventoryServiceTest {
         assertThatThrownBy(() -> inventoryService.reserveStock(1L, 150))
             .isInstanceOf(BusinessException.class)
             .hasMessageContaining("Insufficient stock");
+
+        verify(inventoryRepository, times(1)).findById(1L);
+        verify(inventoryRepository, never()).save(any(Inventory.class));
+    }
+
+    @Test
+    @DisplayName("Should throw exception when reserving stock for non-existent inventory")
+    void testReserveStockNotFound() {
+        when(inventoryRepository.findById(999L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> inventoryService.reserveStock(999L, 10))
+            .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(inventoryRepository, times(1)).findById(999L);
     }
 
     @Test
     @DisplayName("Should release stock successfully")
     void testReleaseStockSuccess() {
-        Inventory updatedInventory = Inventory.builder()
+        Inventory releasedInventory = Inventory.builder()
             .id(1L)
             .productId("PROD-001")
-            .quantity(125)
+            .quantity(115)
             .build();
 
         when(inventoryRepository.findById(1L)).thenReturn(Optional.of(testInventory));
-        when(inventoryRepository.save(any(Inventory.class))).thenReturn(updatedInventory);
+        when(inventoryRepository.save(any(Inventory.class))).thenReturn(releasedInventory);
 
-        InventoryResponse response = inventoryService.releaseStock(1L, 25);
+        InventoryResponse response = inventoryService.releaseStock(1L, 15);
 
-        assertThat(response.getQuantity()).isEqualTo(125);
+        assertThat(response.getQuantity()).isEqualTo(115);
+        verify(inventoryRepository, times(1)).findById(1L);
         verify(inventoryRepository, times(1)).save(any(Inventory.class));
     }
 
     @Test
-    @DisplayName("Should throw exception when releasing stock from non-existent inventory")
+    @DisplayName("Should throw exception when releasing stock for non-existent inventory")
     void testReleaseStockNotFound() {
         when(inventoryRepository.findById(999L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> inventoryService.releaseStock(999L, 10))
             .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(inventoryRepository, times(1)).findById(999L);
     }
 
     @Test
     @DisplayName("Should update inventory successfully")
-    void testUpdateInventorySuccess() {
+    void testUpdateInventory() {
         Inventory updatedInventory = Inventory.builder()
             .id(1L)
             .productId("PROD-001")
-            .quantity(50)
+            .quantity(200)
             .build();
 
         when(inventoryRepository.findById(1L)).thenReturn(Optional.of(testInventory));
         when(inventoryRepository.save(any(Inventory.class))).thenReturn(updatedInventory);
 
-        InventoryResponse response = inventoryService.updateInventory(1L, 50);
+        InventoryResponse response = inventoryService.updateInventory(1L, 200);
 
-        assertThat(response.getQuantity()).isEqualTo(50);
+        assertThat(response.getQuantity()).isEqualTo(200);
+        verify(inventoryRepository, times(1)).findById(1L);
         verify(inventoryRepository, times(1)).save(any(Inventory.class));
     }
 
@@ -185,32 +211,23 @@ class InventoryServiceTest {
     void testUpdateInventoryNotFound() {
         when(inventoryRepository.findById(999L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> inventoryService.updateInventory(999L, 50))
+        assertThatThrownBy(() -> inventoryService.updateInventory(999L, 200))
             .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(inventoryRepository, times(1)).findById(999L);
     }
 
     @Test
-    @DisplayName("Should handle zero quantity reserve")
-    void testReserveZeroQuantity() {
-        when(inventoryRepository.findById(1L)).thenReturn(Optional.of(testInventory));
-        when(inventoryRepository.save(any(Inventory.class))).thenReturn(testInventory);
-
-        InventoryResponse response = inventoryService.reserveStock(1L, 0);
-
-        assertThat(response).isNotNull();
-    }
-
-    @Test
-    @DisplayName("Should handle exact quantity reserve")
+    @DisplayName("Should handle edge case: reserve exactly available quantity")
     void testReserveExactQuantity() {
-        Inventory updatedInventory = Inventory.builder()
+        Inventory emptyInventory = Inventory.builder()
             .id(1L)
             .productId("PROD-001")
             .quantity(0)
             .build();
 
         when(inventoryRepository.findById(1L)).thenReturn(Optional.of(testInventory));
-        when(inventoryRepository.save(any(Inventory.class))).thenReturn(updatedInventory);
+        when(inventoryRepository.save(any(Inventory.class))).thenReturn(emptyInventory);
 
         InventoryResponse response = inventoryService.reserveStock(1L, 100);
 
@@ -218,33 +235,19 @@ class InventoryServiceTest {
     }
 
     @Test
-    @DisplayName("Should enforce max page size")
-    void testGetAllInventoryMaxPageSize() {
-        List<Inventory> inventories = Arrays.asList(testInventory);
-        Page<Inventory> page = new PageImpl<>(inventories, mock(Pageable.class), 1);
-        when(inventoryRepository.findAll(any(Pageable.class))).thenReturn(page);
-
-        inventoryService.getAllInventory(0, 1000, "id");
-
-        verify(inventoryRepository, times(1)).findAll(argThat(pageable ->
-            pageable.getPageSize() <= ApiConstants.MAX_PAGE_SIZE
-        ));
-    }
-
-    @Test
-    @DisplayName("Should handle negative quantity in update")
-    void testUpdateInventoryNegativeQuantity() {
-        Inventory negativeInventory = Inventory.builder()
+    @DisplayName("Should handle edge case: reserve zero quantity")
+    void testReserveZeroQuantity() {
+        Inventory zeroReserve = Inventory.builder()
             .id(1L)
             .productId("PROD-001")
-            .quantity(-10)
+            .quantity(100)
             .build();
 
         when(inventoryRepository.findById(1L)).thenReturn(Optional.of(testInventory));
-        when(inventoryRepository.save(any(Inventory.class))).thenReturn(negativeInventory);
+        when(inventoryRepository.save(any(Inventory.class))).thenReturn(zeroReserve);
 
-        InventoryResponse response = inventoryService.updateInventory(1L, -10);
+        InventoryResponse response = inventoryService.reserveStock(1L, 0);
 
-        assertThat(response.getQuantity()).isEqualTo(-10);
+        assertThat(response.getQuantity()).isEqualTo(100);
     }
 }

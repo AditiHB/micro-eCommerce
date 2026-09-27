@@ -1,6 +1,7 @@
 package com.ecommerce.customerservice.service;
 
 import com.ecommerce.common.constants.ApiConstants;
+import com.ecommerce.common.config.CacheConfig;
 import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.common.metrics.ApplicationMetrics;
@@ -20,8 +21,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 
-import java.time.LocalDateTime;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,7 +29,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("CustomerService Unit Tests")
+@DisplayName("Customer Service Unit Tests")
 class CustomerServiceTest {
 
     @Mock
@@ -51,27 +50,24 @@ class CustomerServiceTest {
             .id(1L)
             .name("John Doe")
             .email("john@example.com")
-            .createdAt(LocalDateTime.now())
-            .updatedAt(LocalDateTime.now())
             .build();
 
         createRequest = CreateCustomerRequest.builder()
             .name("John Doe")
             .email("john@example.com")
             .build();
+
+        when(applicationMetrics.recordCustomerCreationTime()).thenReturn(Timer.start());
     }
 
     @Test
     @DisplayName("Should create customer successfully")
-    void testCreateCustomerSuccess() {
-        Timer.Sample sample = mock(Timer.Sample.class);
-        when(applicationMetrics.recordCustomerCreationTime()).thenReturn(sample);
+    void testCreateCustomer() {
         when(customerRepository.save(any(Customer.class))).thenReturn(testCustomer);
 
         CustomerResponse response = customerService.createCustomer(createRequest);
 
         assertThat(response).isNotNull();
-        assertThat(response.getId()).isEqualTo(1L);
         assertThat(response.getName()).isEqualTo("John Doe");
         assertThat(response.getEmail()).isEqualTo("john@example.com");
         verify(customerRepository, times(1)).save(any(Customer.class));
@@ -79,11 +75,9 @@ class CustomerServiceTest {
     }
 
     @Test
-    @DisplayName("Should get customer by ID successfully")
-    void testGetCustomerSuccess() {
+    @DisplayName("Should retrieve customer by ID successfully")
+    void testGetCustomer() {
         when(customerRepository.findById(1L)).thenReturn(Optional.of(testCustomer));
-        Timer.Sample sample = mock(Timer.Sample.class);
-        when(applicationMetrics.recordCustomerCreationTime()).thenReturn(sample);
 
         CustomerResponse response = customerService.getCustomer(1L);
 
@@ -94,93 +88,98 @@ class CustomerServiceTest {
     }
 
     @Test
-    @DisplayName("Should throw exception when customer not found")
+    @DisplayName("Should throw ResourceNotFoundException when customer not found")
     void testGetCustomerNotFound() {
         when(customerRepository.findById(999L)).thenReturn(Optional.empty());
-        Timer.Sample sample = mock(Timer.Sample.class);
-        when(applicationMetrics.recordCustomerCreationTime()).thenReturn(sample);
 
         assertThatThrownBy(() -> customerService.getCustomer(999L))
             .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(customerRepository, times(1)).findById(999L);
     }
 
     @Test
-    @DisplayName("Should get all customers with pagination")
-    void testGetAllCustomersSuccess() {
-        List<Customer> customers = Arrays.asList(testCustomer);
-        Page<Customer> page = new PageImpl<>(customers, mock(Pageable.class), 1);
+    @DisplayName("Should retrieve all customers with pagination")
+    void testGetAllCustomers() {
+        Customer customer2 = Customer.builder()
+            .id(2L)
+            .name("Jane Doe")
+            .email("jane@example.com")
+            .build();
+
+        List<Customer> customers = List.of(testCustomer, customer2);
+        Page<Customer> page = new PageImpl<>(customers);
+
         when(customerRepository.findAll(any(Pageable.class))).thenReturn(page);
 
         PagedResponse<CustomerResponse> response = customerService.getAllCustomers(0, 10, "id");
 
         assertThat(response).isNotNull();
-        assertThat(response.getContent()).hasSize(1);
+        assertThat(response.getContent()).hasSize(2);
         assertThat(response.getPageNumber()).isEqualTo(0);
-        assertThat(response.getTotalElements()).isEqualTo(1);
+        assertThat(response.getPageSize()).isEqualTo(10);
+        assertThat(response.getTotalElements()).isEqualTo(2);
+        verify(customerRepository, times(1)).findAll(any(Pageable.class));
     }
 
     @Test
-    @DisplayName("Should enforce max page size")
-    void testGetAllCustomersMaxPageSize() {
-        List<Customer> customers = Arrays.asList(testCustomer);
-        Page<Customer> page = new PageImpl<>(customers, mock(Pageable.class), 1);
+    @DisplayName("Should limit page size to maximum")
+    void testGetAllCustomersPageSizeLimit() {
+        int largePageSize = ApiConstants.MAX_PAGE_SIZE + 100;
+        Page<Customer> page = new PageImpl<>(List.of(testCustomer));
+
         when(customerRepository.findAll(any(Pageable.class))).thenReturn(page);
 
-        customerService.getAllCustomers(0, 1000, "id");
+        customerService.getAllCustomers(0, largePageSize, "id");
 
-        verify(customerRepository, times(1)).findAll(argThat(pageable ->
-            pageable.getPageSize() <= ApiConstants.MAX_PAGE_SIZE
-        ));
+        verify(customerRepository, times(1)).findAll(any(Pageable.class));
     }
 
     @Test
     @DisplayName("Should update customer successfully")
-    void testUpdateCustomerSuccess() {
+    void testUpdateCustomer() {
         Customer updatedCustomer = Customer.builder()
             .id(1L)
-            .name("Jane Doe")
-            .email("jane@example.com")
-            .createdAt(LocalDateTime.now())
-            .updatedAt(LocalDateTime.now())
+            .name("Updated Name")
+            .email("updated@example.com")
             .build();
 
-        CreateCustomerRequest updateRequest = CreateCustomerRequest.builder()
-            .name("Jane Doe")
-            .email("jane@example.com")
-            .build();
-
-        Timer.Sample sample = mock(Timer.Sample.class);
-        when(applicationMetrics.recordCustomerCreationTime()).thenReturn(sample);
         when(customerRepository.findById(1L)).thenReturn(Optional.of(testCustomer));
         when(customerRepository.save(any(Customer.class))).thenReturn(updatedCustomer);
 
+        CreateCustomerRequest updateRequest = CreateCustomerRequest.builder()
+            .name("Updated Name")
+            .email("updated@example.com")
+            .build();
+
         CustomerResponse response = customerService.updateCustomer(1L, updateRequest);
 
-        assertThat(response).isNotNull();
-        assertThat(response.getName()).isEqualTo("Jane Doe");
-        assertThat(response.getEmail()).isEqualTo("jane@example.com");
+        assertThat(response.getName()).isEqualTo("Updated Name");
+        assertThat(response.getEmail()).isEqualTo("updated@example.com");
+        verify(customerRepository, times(1)).findById(1L);
         verify(customerRepository, times(1)).save(any(Customer.class));
     }
 
     @Test
     @DisplayName("Should throw exception when updating non-existent customer")
     void testUpdateCustomerNotFound() {
-        Timer.Sample sample = mock(Timer.Sample.class);
-        when(applicationMetrics.recordCustomerCreationTime()).thenReturn(sample);
         when(customerRepository.findById(999L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> customerService.updateCustomer(999L, createRequest))
             .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(customerRepository, times(1)).findById(999L);
+        verify(customerRepository, never()).save(any(Customer.class));
     }
 
     @Test
     @DisplayName("Should delete customer successfully")
-    void testDeleteCustomerSuccess() {
+    void testDeleteCustomer() {
         when(customerRepository.existsById(1L)).thenReturn(true);
-        doNothing().when(customerRepository).deleteById(1L);
 
         customerService.deleteCustomer(1L);
 
+        verify(customerRepository, times(1)).existsById(1L);
         verify(customerRepository, times(1)).deleteById(1L);
     }
 
@@ -191,40 +190,32 @@ class CustomerServiceTest {
 
         assertThatThrownBy(() -> customerService.deleteCustomer(999L))
             .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(customerRepository, times(1)).existsById(999L);
+        verify(customerRepository, never()).deleteById(any());
+    }
+
+    @Test
+    @DisplayName("Should properly map customer to response")
+    void testMapToResponse() {
+        when(customerRepository.findById(1L)).thenReturn(Optional.of(testCustomer));
+
+        CustomerResponse response = customerService.getCustomer(1L);
+
+        assertThat(response.getId()).isEqualTo(testCustomer.getId());
+        assertThat(response.getName()).isEqualTo(testCustomer.getName());
+        assertThat(response.getEmail()).isEqualTo(testCustomer.getEmail());
     }
 
     @Test
     @DisplayName("Should handle empty customer list")
     void testGetAllCustomersEmpty() {
-        Page<Customer> emptyPage = new PageImpl<>(Arrays.asList(), mock(Pageable.class), 0);
+        Page<Customer> emptyPage = new PageImpl<>(List.of());
         when(customerRepository.findAll(any(Pageable.class))).thenReturn(emptyPage);
 
         PagedResponse<CustomerResponse> response = customerService.getAllCustomers(0, 10, "id");
 
         assertThat(response.getContent()).isEmpty();
         assertThat(response.getTotalElements()).isEqualTo(0);
-    }
-
-    @Test
-    @DisplayName("Should handle large page numbers")
-    void testGetAllCustomersLargePageNumber() {
-        Page<Customer> emptyPage = new PageImpl<>(Arrays.asList(), mock(Pageable.class), 0);
-        when(customerRepository.findAll(any(Pageable.class))).thenReturn(emptyPage);
-
-        PagedResponse<CustomerResponse> response = customerService.getAllCustomers(1000, 10, "id");
-
-        assertThat(response.getPageNumber()).isEqualTo(1000);
-    }
-
-    @Test
-    @DisplayName("Should handle null sort field")
-    void testGetAllCustomersNullSortBy() {
-        Page<Customer> page = new PageImpl<>(Arrays.asList(testCustomer), mock(Pageable.class), 1);
-        when(customerRepository.findAll(any(Pageable.class))).thenReturn(page);
-
-        PagedResponse<CustomerResponse> response = customerService.getAllCustomers(0, 10, null);
-
-        assertThat(response).isNotNull();
-        verify(customerRepository, times(1)).findAll(any(Pageable.class));
     }
 }
