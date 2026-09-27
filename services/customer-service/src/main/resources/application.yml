@@ -41,6 +41,10 @@ eureka:
     service-url:
       defaultZone: http://localhost:8761/eureka/
 
+jwt:
+  secret: mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890
+  expiration: 86400000
+
 management:
   endpoints:
     web:

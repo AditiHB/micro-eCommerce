@@ -1,5 +1,6 @@
 package com.ecommerce.orderservice;
 
+import com.ecommerce.common.enums.OrderStatus;
 import com.ecommerce.common.events.InventoryFailedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
@@ -18,7 +19,7 @@ public class OrderEventListener {
     @KafkaListener(topics = "payment-processed", groupId = "order-group")
     public void handlePaymentProcessed(PaymentProcessedEvent event) {
         repository.findById(event.getOrderId()).ifPresent(order -> {
-            order.setStatus("COMPLETED");
+            order.setStatus(OrderStatus.COMPLETED);
             repository.save(order);
         });
     }
@@ -26,7 +27,7 @@ public class OrderEventListener {
     @KafkaListener(topics = "inventory-failed", groupId = "order-group")
     public void handleInventoryFailed(InventoryFailedEvent event) {
         repository.findById(event.getOrderId()).ifPresent(order -> {
-            order.setStatus("CANCELLED");
+            order.setStatus(OrderStatus.CANCELLED);
             repository.save(order);
         });
     }
@@ -34,7 +35,7 @@ public class OrderEventListener {
     @KafkaListener(topics = "payment-failed", groupId = "order-group")
     public void handlePaymentFailed(PaymentFailedEvent event) {
         repository.findById(event.getOrderId()).ifPresent(order -> {
-            order.setStatus("CANCELLED");
+            order.setStatus(OrderStatus.CANCELLED);
             repository.save(order);
         });
     }
