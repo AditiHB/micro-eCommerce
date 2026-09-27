@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "E-Commerce Webhooks Schema",
+  "description": "Webhook event payloads for E-Commerce Microservices",
+  "type": "object",
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for the webhook event"
+    },
+    "eventType": {
+      "type": "string",
+      "description": "Type of webhook event",
+      "enum": [
+        "order.created",
+        "order.confirmed",
+        "order.shipped",
+        "order.delivered",
+        "order.cancelled",
+        "payment.processed",
+        "payment.failed",
+        "payment.refunded",
+        "inventory.reserved",
+        "inventory.released",
+        "inventory.low_stock",
+        "customer.created",
+        "customer.updated",
+        "customer.deleted"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the event occurred"
+    },
+    "data": {
+      "type": "object",
+      "description": "Event-specific data payload"
+    },
+    "retryCount": {
+      "type": "integer",
+      "description": "Number of delivery retries for this webhook"
+    }
+  },
+  "required": ["eventId", "eventType", "timestamp", "data"],
+  "webhookEvents": {
+    "order.created": {
+      "description": "Triggered when a new order is created",
+      "data": {
+        "type": "object",
+        "properties": {
+          "orderId": {"type": "integer"},
+          "customerId": {"type": "integer"},
+          "totalAmount": {"type": "number"},
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "productId": {"type": "integer"},
+                "quantity": {"type": "integer"},
+                "unitPrice": {"type": "number"}
+              }
+            }
+          },
+          "createdAt": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    "order.shipped": {
+      "description": "Triggered when an order is shipped",
+      "data": {
+        "type": "object",
+        "properties": {
+          "orderId": {"type": "integer"},
+          "customerId": {"type": "integer"},
+          "trackingNumber": {"type": "string"},
+          "carrier": {"type": "string"},
+          "estimatedDeliveryDate": {"type": "string", "format": "date"}
+        }
+      }
+    },
+    "order.delivered": {
+      "description": "Triggered when an order is delivered",
+      "data": {
+        "type": "object",
+        "properties": {
+          "orderId": {"type": "integer"},
+          "customerId": {"type": "integer"},
+          "deliveredAt": {"type": "string", "format": "date-time"},
+          "signedBy": {"type": "string"}
+        }
+      }
+    },
+    "payment.processed": {
+      "description": "Triggered when a payment is successfully processed",
+      "data": {
+        "type": "object",
+        "properties": {
+          "paymentId": {"type": "integer"},
+          "orderId": {"type": "integer"},
+          "customerId": {"type": "integer"},
+          "amount": {"type": "number"},
+          "currency": {"type": "string"},
+          "transactionId": {"type": "string"},
+          "processedAt": {"type": "string", "format": "date-time"}
+        }
+      }
+    },
+    "payment.failed": {
+      "description": "Triggered when a payment fails",
+      "data": {
+        "type": "object",
+        "properties": {
+          "paymentId": {"type": "integer"},
+          "orderId": {"type": "integer"},
+          "amount": {"type": "number"},
+          "reason": {"type": "string"},
+          "retryable": {"type": "boolean"}
+        }
+      }
+    },
+    "inventory.reserved": {
+      "description": "Triggered when inventory is reserved",
+      "data": {
+        "type": "object",
+        "properties": {
+          "inventoryId": {"type": "integer"},
+          "productId": {"type": "integer"},
+          "orderId": {"type": "integer"},
+          "quantity": {"type": "integer"},
+          "reservationId": {"type": "string"}
+        }
+      }
+    },
+    "inventory.low_stock": {
+      "description": "Triggered when stock levels fall below reorder level",
+      "data": {
+        "type": "object",
+        "properties": {
+          "inventoryId": {"type": "integer"},
+          "productId": {"type": "integer"},
+          "currentQuantity": {"type": "integer"},
+          "reorderLevel": {"type": "integer"}
+        }
+      }
+    }
+  }
+}

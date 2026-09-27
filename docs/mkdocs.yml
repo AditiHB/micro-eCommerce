@@ -1,0 +1,73 @@
+site_name: E-Commerce Microservices API Documentation
+site_description: Complete API documentation for E-Commerce Microservices
+site_author: E-Commerce Team
+
+theme:
+  name: material
+  palette:
+    - scheme: light
+      primary: indigo
+      accent: indigo
+    - scheme: dark
+      primary: indigo
+      accent: indigo
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+
+plugins:
+  - search
+  - swagger-ui
+  - monorepo
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Overview: getting-started/overview.md
+    - Authentication: getting-started/authentication.md
+    - Quick Start: getting-started/quickstart.md
+  - API Reference:
+    - Authentication: api-reference/authentication.md
+    - Customers: api-reference/customers.md
+    - Orders: api-reference/orders.md
+    - Inventory: api-reference/inventory.md
+    - Payments: api-reference/payments.md
+  - Guides:
+    - Rate Limiting: RATE-LIMITING.md
+    - Webhooks: webhooks.md
+    - Error Handling: guides/error-handling.md
+    - Best Practices: guides/best-practices.md
+  - SDKs:
+    - Overview: sdks/overview.md
+    - Java: sdks/java.md
+    - Python: sdks/python.md
+    - TypeScript: sdks/typescript.md
+    - Client Generation: CLIENT-SDK-GENERATION.md
+  - Examples: API-EXAMPLES.md
+  - Event APIs: events.md
+  - Postman: postman.md
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - admonition
+  - codehilite
+  - toc
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/swagger-ui-dist@3/swagger-ui.js
+
+# Repository configuration
+repo_name: micro-ecommerce
+repo_url: https://github.com/cleancoder007/micro-ecommerce
