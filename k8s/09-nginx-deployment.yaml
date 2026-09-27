@@ -1,0 +1,173 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: ecommerce
+  labels:
+    app: nginx
+    component: reverse-proxy
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+        component: reverse-proxy
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        fsGroup: 101
+
+      containers:
+      - name: nginx
+        image: nginx:1.25-alpine
+        imagePullPolicy: IfNotPresent
+
+        ports:
+        - name: http
+          containerPort: 80
+          protocol: TCP
+        - name: https
+          containerPort: 443
+          protocol: TCP
+
+        # Volume mounts for configuration
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        - name: nginx-config
+          mountPath: /etc/nginx/ssl.conf
+          subPath: ssl.conf
+          readOnly: true
+        - name: nginx-config
+          mountPath: /etc/nginx/ssl-params.conf
+          subPath: ssl-params.conf
+          readOnly: true
+        - name: nginx-config
+          mountPath: /etc/nginx/upstream.conf
+          subPath: upstream.conf
+          readOnly: true
+        - name: nginx-certs
+          mountPath: /etc/nginx/certs
+          readOnly: true
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run/nginx
+
+        # Environment variables
+        env:
+        - name: TZ
+          value: "UTC"
+
+        # Health checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: https
+            scheme: HTTPS
+          initialDelaySeconds: 15
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: https
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # Resource limits
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        # Security context for container
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_BIND_SERVICE
+
+        # Startup probe
+        startupProbe:
+          httpGet:
+            path: /health
+            port: https
+            scheme: HTTPS
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+
+      # Volumes
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: nginx-config
+          defaultMode: 0644
+      - name: nginx-certs
+        secret:
+          secretName: nginx-tls
+          defaultMode: 0600
+      - name: nginx-cache
+        emptyDir: {}
+      - name: nginx-run
+        emptyDir: {}
+
+      # Pod disruption budget
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - nginx
+              topologyKey: kubernetes.io/hostname
+
+      # Restart policy
+      restartPolicy: Always
+
+      # Termination grace period
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nginx-pdb
+  namespace: ecommerce
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nginx
