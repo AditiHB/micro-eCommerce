@@ -1,24 +1,19 @@
 package com.ecommerce.common.events;
 
 /**
- * Event published when inventory is successfully reserved.
- * Includes product and quantity information for potential compensation.
+ * Event published when inventory reservation is released (compensating transaction).
+ * Triggered when payment fails or order is cancelled.
  */
-public class InventoryReservedEvent extends DomainEvent {
+public class InventoryReleasedEvent extends DomainEvent {
     private Long orderId;
     private String productId;
     private Integer quantity;
 
-    public InventoryReservedEvent() {
+    public InventoryReleasedEvent() {
         super();
     }
 
-    public InventoryReservedEvent(Long orderId) {
-        super(String.valueOf(orderId), "Inventory");
-        this.orderId = orderId;
-    }
-
-    public InventoryReservedEvent(Long orderId, String productId, Integer quantity) {
+    public InventoryReleasedEvent(Long orderId, String productId, Integer quantity) {
         super(String.valueOf(orderId), "Inventory");
         this.orderId = orderId;
         this.productId = productId;
