@@ -1,11 +1,14 @@
 package com.ecommerce.common.events;
 
-public class InventoryFailedEvent {
+public class InventoryFailedEvent extends DomainEvent {
     private Long orderId;
 
-    public InventoryFailedEvent() {}
+    public InventoryFailedEvent() {
+        super();
+    }
 
     public InventoryFailedEvent(Long orderId) {
+        super(String.valueOf(orderId), "Inventory");
         this.orderId = orderId;
     }
 

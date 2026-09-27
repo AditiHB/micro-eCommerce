@@ -1,0 +1,232 @@
+name: Deploy to Kubernetes
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_run:
+    workflows: [ Docker Build & Push ]
+    types: [ completed ]
+    branches: [ main, develop ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  KUBE_CONFIG_FOLDER: /home/runner/.kube
+
+jobs:
+  deploy-staging:
+    if: github.ref_name == 'develop' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://staging.ecommerce.example.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ${{ env.KUBE_CONFIG_FOLDER }}
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > ${{ env.KUBE_CONFIG_FOLDER }}/config
+          chmod 600 ${{ env.KUBE_CONFIG_FOLDER }}/config
+        env:
+          KUBE_CONFIG: ${{ env.KUBE_CONFIG_FOLDER }}/config
+
+      - name: Deploy to Staging Namespace
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl set image deployment/ecommerce-platform \
+            -n staging \
+            customer-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-customer-service:develop \
+            inventory-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-inventory-service:develop \
+            order-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-order-service:develop \
+            payment-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-payment-service:develop \
+            --record || true
+
+      - name: Wait for rollout
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl rollout status deployment/ecommerce-platform -n staging --timeout=5m
+
+      - name: Verify deployment
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl get deployments -n staging
+          kubectl get pods -n staging
+
+      - name: Notify Slack - Staging Deployment
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "Staging Deployment Status",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Staging Deployment*\n${{ job.status == 'success' && '✅ Deployment Successful' || '❌ Deployment Failed' }}\nEnvironment: `staging`\nBranch: `${{ github.ref_name }}`\nCommit: `${{ github.sha }}`"
+                  }
+                }
+              ]
+            }
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+
+  deploy-production:
+    if: startsWith(github.ref, 'refs/tags/v') && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://ecommerce.example.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: extract_version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl for Production
+        run: |
+          mkdir -p ${{ env.KUBE_CONFIG_FOLDER }}
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > ${{ env.KUBE_CONFIG_FOLDER }}/config
+          chmod 600 ${{ env.KUBE_CONFIG_FOLDER }}/config
+        env:
+          KUBE_CONFIG: ${{ env.KUBE_CONFIG_FOLDER }}/config
+
+      - name: Create backup of current deployment
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl get deployment ecommerce-platform -n production -o yaml > deployment-backup-${{ steps.extract_version.outputs.version }}.yaml || true
+
+      - name: Deploy to Production
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl set image deployment/ecommerce-platform \
+            -n production \
+            customer-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-customer-service:${{ steps.extract_version.outputs.version }} \
+            inventory-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-inventory-service:${{ steps.extract_version.outputs.version }} \
+            order-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-order-service:${{ steps.extract_version.outputs.version }} \
+            payment-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-payment-service:${{ steps.extract_version.outputs.version }} \
+            --record
+
+      - name: Wait for rollout
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl rollout status deployment/ecommerce-platform -n production --timeout=5m
+
+      - name: Verify production deployment
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl get deployments -n production
+          kubectl get pods -n production
+          kubectl get svc -n production
+
+      - name: Check pod readiness
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl wait --for=condition=Ready pod \
+            -l app=ecommerce-platform \
+            -n production \
+            --timeout=300s || echo "Warning: Pods not ready"
+
+      - name: Upload deployment backup
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-deployment-backup
+          path: deployment-backup-*.yaml
+          retention-days: 30
+
+      - name: Notify Slack - Production Deployment
+        if: always()
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "Production Deployment Status",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*🚀 Production Deployment*\n${{ job.status == 'success' && '✅ Deployment Successful' || '❌ Deployment Failed' }}\nVersion: `${{ steps.extract_version.outputs.version }}`\nEnvironment: `production`"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Deployment"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+
+  rollback:
+    if: failure() && startsWith(github.ref, 'refs/tags/v')
+    needs: deploy-production
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.0'
+
+      - name: Configure kubectl
+        run: |
+          mkdir -p ${{ env.KUBE_CONFIG_FOLDER }}
+          echo "${{ secrets.KUBE_CONFIG_PRODUCTION }}" | base64 -d > ${{ env.KUBE_CONFIG_FOLDER }}/config
+          chmod 600 ${{ env.KUBE_CONFIG_FOLDER }}/config
+        env:
+          KUBE_CONFIG: ${{ env.KUBE_CONFIG_FOLDER }}/config
+
+      - name: Rollback deployment
+        run: |
+          export KUBECONFIG=${{ env.KUBE_CONFIG_FOLDER }}/config
+          kubectl rollout undo deployment/ecommerce-platform -n production
+          kubectl rollout status deployment/ecommerce-platform -n production --timeout=5m
+
+      - name: Notify Slack - Rollback
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "⚠️ Deployment Rollback Initiated",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Automatic Rollback*\nThe production deployment has been rolled back to the previous stable version due to deployment failure."
+                  }
+                }
+              ]
+            }
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}

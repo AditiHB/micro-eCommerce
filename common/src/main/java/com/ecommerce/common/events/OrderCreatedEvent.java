@@ -1,14 +1,17 @@
 package com.ecommerce.common.events;
 
-public class OrderCreatedEvent {
+public class OrderCreatedEvent extends DomainEvent {
     private Long orderId;
     private Long customerId;
     private String productId;
     private Integer quantity;
 
-    public OrderCreatedEvent() {}
+    public OrderCreatedEvent() {
+        super();
+    }
 
     public OrderCreatedEvent(Long orderId, Long customerId, String productId, Integer quantity) {
+        super(String.valueOf(orderId), "Order");
         this.orderId = orderId;
         this.customerId = customerId;
         this.productId = productId;

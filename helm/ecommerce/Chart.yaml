@@ -1,0 +1,15 @@
+apiVersion: v2
+name: ecommerce
+description: Helm chart for micro-ecommerce microservices deployment
+type: application
+version: 1.0.0
+appVersion: "1.0"
+keywords:
+  - microservices
+  - ecommerce
+  - spring-boot
+home: https://github.com/cleancoder007/micro-ecommerce
+sources:
+  - https://github.com/cleancoder007/micro-ecommerce
+maintainers:
+  - name: ecommerce-team

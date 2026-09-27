@@ -1,0 +1,182 @@
+package com.ecommerce.common.config;
+
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.annotation.EnableKafka;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.config.KafkaListenerContainerFactory;
+import org.springframework.kafka.config.TopicBuilder;
+import org.springframework.kafka.core.*;
+import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
+import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
+import org.springframework.kafka.support.serializer.JsonDeserializer;
+import org.springframework.kafka.support.serializer.JsonSerializer;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Configuration
+@EnableKafka
+public class KafkaEventConfig {
+
+    @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
+    private String bootstrapServers;
+
+    @Value("${kafka.event.replication-factor:1}")
+    private short replicationFactor;
+
+    @Value("${kafka.event.partitions:3}")
+    private int partitions;
+
+    @Value("${kafka.event.dlq-suffix:-dlq}")
+    private String dlqSuffix;
+
+    @Bean
+    public KafkaAdmin kafkaAdmin() {
+        Map<String, Object> configs = new HashMap<>();
+        configs.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        return new KafkaAdmin(configs);
+    }
+
+    @Bean
+    public ProducerFactory<String, Object> producerFactory() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
+        configProps.put(ProducerConfig.ACKS_CONFIG, "all");
+        configProps.put(ProducerConfig.RETRIES_CONFIG, 3);
+        configProps.put(ProducerConfig.RETRY_BACKOFF_MS_CONFIG, 1000);
+        configProps.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
+        return new DefaultKafkaProducerFactory<>(configProps);
+    }
+
+    @Bean
+    public KafkaTemplate<String, Object> kafkaTemplate() {
+        return new KafkaTemplate<>(producerFactory());
+    }
+
+    @Bean
+    public ConsumerFactory<String, Object> consumerFactory() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        configProps.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, JsonDeserializer.class.getName());
+        configProps.put(JsonDeserializer.VALUE_DEFAULT_TYPE, "com.ecommerce.common.events.DomainEvent");
+        configProps.put(JsonDeserializer.TRUSTED_PACKAGES, "*");
+        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        configProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        configProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 100);
+        configProps.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 30000);
+        return new DefaultKafkaConsumerFactory<>(configProps);
+    }
+
+    @Bean
+    public KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<String, Object>> kafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, Object> factory =
+            new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory());
+        factory.setConcurrency(3);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
+        return factory;
+    }
+
+    @Bean("dlqKafkaListenerContainerFactory")
+    public KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<String, Object>> dlqKafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, Object> factory =
+            new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory());
+        factory.setConcurrency(1);
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
+        return factory;
+    }
+
+    @Bean
+    public NewTopic orderCreatedTopic() {
+        return TopicBuilder.name("order-created")
+            .partitions(partitions)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic orderCreatedDlqTopic() {
+        return TopicBuilder.name("order-created" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic paymentProcessedTopic() {
+        return TopicBuilder.name("payment-processed")
+            .partitions(partitions)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic paymentProcessedDlqTopic() {
+        return TopicBuilder.name("payment-processed" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic paymentFailedTopic() {
+        return TopicBuilder.name("payment-failed")
+            .partitions(partitions)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic paymentFailedDlqTopic() {
+        return TopicBuilder.name("payment-failed" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic inventoryReservedTopic() {
+        return TopicBuilder.name("inventory-reserved")
+            .partitions(partitions)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic inventoryReservedDlqTopic() {
+        return TopicBuilder.name("inventory-reserved" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic inventoryFailedTopic() {
+        return TopicBuilder.name("inventory-failed")
+            .partitions(partitions)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic inventoryFailedDlqTopic() {
+        return TopicBuilder.name("inventory-failed" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
+}
