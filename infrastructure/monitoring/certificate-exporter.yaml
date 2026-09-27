@@ -1,0 +1,111 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: certificate-exporter-config
+  namespace: monitoring
+data:
+  exporter.sh: |
+    #!/bin/bash
+    # Certificate Expiration Exporter for Prometheus
+    # Metrics: ssl_certificate_not_after, ssl_certificate_valid_days
+
+    PORT=${PORT:-9090}
+    CERT_PATHS=${CERT_PATHS:-"/etc/ssl/certs"}
+
+    generate_cert_metrics() {
+      local cert_path=$1
+
+      if [ -f "$cert_path" ]; then
+        # Get certificate expiration timestamp
+        local expiry=$(openssl x509 -enddate -noout -in "$cert_path" 2>/dev/null | cut -d= -f2)
+        if [ -z "$expiry" ]; then
+          return
+        fi
+
+        local expiry_epoch=$(date -d "$expiry" +%s 2>/dev/null)
+        local current_epoch=$(date +%s)
+        local days_left=$(( ($expiry_epoch - $current_epoch) / 86400 ))
+
+        # Get certificate CN
+        local cn=$(openssl x509 -noout -subject -in "$cert_path" 2>/dev/null | grep -oP 'CN\s*=\s*\K[^,]+' || echo "unknown")
+
+        # Output Prometheus metrics
+        echo "# HELP ssl_certificate_not_after Certificate expiration timestamp"
+        echo "# TYPE ssl_certificate_not_after gauge"
+        echo "ssl_certificate_not_after{path=\"$cert_path\",common_name=\"$cn\"} $expiry_epoch"
+
+        echo "# HELP ssl_certificate_valid_days Days until certificate expiration"
+        echo "# TYPE ssl_certificate_valid_days gauge"
+        echo "ssl_certificate_valid_days{path=\"$cert_path\",common_name=\"$cn\"} $days_left"
+
+        # Cipher suite info
+        local cipher=$(openssl s_client -connect localhost:443 -tls1_3 2>/dev/null </dev/null | grep "Cipher" | awk '{print $NF}' || echo "unknown")
+        echo "# HELP ssl_cipher_in_use Current cipher suite in use"
+        echo "# TYPE ssl_cipher_in_use gauge"
+        echo "ssl_cipher_in_use{cipher=\"$cipher\"} 1"
+      fi
+    }
+
+    # Export metrics
+    (
+      echo "# Certificate Expiration Metrics"
+      for cert in $(find "$CERT_PATHS" -name "*.crt" -o -name "*.pem" 2>/dev/null); do
+        generate_cert_metrics "$cert"
+      done
+    ) > /tmp/cert_metrics.txt
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: certificate-exporter
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: certificate-exporter
+  template:
+    metadata:
+      labels:
+        app: certificate-exporter
+    spec:
+      containers:
+      - name: exporter
+        image: prom/prometheus:latest
+        ports:
+        - containerPort: 9090
+        volumeMounts:
+        - name: certs
+          mountPath: /etc/ssl/certs
+          readOnly: true
+        - name: config
+          mountPath: /etc/exporter
+          readOnly: true
+        env:
+        - name: CERT_PATHS
+          value: "/etc/ssl/certs"
+      volumes:
+      - name: certs
+        hostPath:
+          path: /etc/ssl/certs
+      - name: config
+        configMap:
+          name: certificate-exporter-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: certificate-exporter
+  namespace: monitoring
+  labels:
+    app: certificate-exporter
+spec:
+  selector:
+    app: certificate-exporter
+  ports:
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  type: ClusterIP
