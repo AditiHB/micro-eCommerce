@@ -1,27 +1,49 @@
 package com.ecommerce.paymentservice;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
+import com.ecommerce.common.enums.PaymentStatus;
+import jakarta.persistence.*;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotNull;
+import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
+
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 @Entity
+@Table(name = "payments")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+@ToString
+@EqualsAndHashCode(of = "id")
 public class Payment {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-    private Long orderId;
-    private BigDecimal amount;
-    private String status; // e.g. PROCESSED, FAILED
 
-    // Getters and Setters
-    public Long getId() { return id; }
-    public void setId(Long id) { this.id = id; }
-    public Long getOrderId() { return orderId; }
-    public void setOrderId(Long orderId) { this.orderId = orderId; }
-    public BigDecimal getAmount() { return amount; }
-    public void setAmount(BigDecimal amount) { this.amount = amount; }
-    public String getStatus() { return status; }
-    public void setStatus(String status) { this.status = status; }
+    @NotNull(message = "Order ID cannot be null")
+    @Column(nullable = false)
+    private Long orderId;
+
+    @NotNull(message = "Amount cannot be null")
+    @DecimalMin(value = "0.01", message = "Amount must be greater than 0")
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal amount;
+
+    @NotNull(message = "Status cannot be null")
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private PaymentStatus status;
+
+    @CreationTimestamp
+    @Column(nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @UpdateTimestamp
+    @Column(nullable = false)
+    private LocalDateTime updatedAt;
 }
