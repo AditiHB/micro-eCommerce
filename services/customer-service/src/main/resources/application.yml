@@ -6,6 +6,12 @@ spring:
     name: customer-service
   config:
     import: "optional:configserver:http://localhost:8888/"
+  flyway:
+    enabled: true
+    baselineOnMigrate: true
+    validateOnMigrate: true
+    locations: classpath:db/migration
+    outOfOrder: false
   datasource:
     url: jdbc:h2:mem:customer_db
     driverClassName: org.h2.Driver

@@ -21,6 +21,7 @@ spring:
           batch_size: 20
         order_inserts: true
         order_updates: true
+    show-sql: false
   liquibase:
     enabled: true
     change-log: classpath:db/changelog/db.changelog-master.xml
