@@ -12,25 +12,21 @@ public class ApplicationMetrics {
 
     private final MeterRegistry meterRegistry;
 
-    // Counters for API operations
     private Counter customersCreatedCounter;
     private Counter ordersCreatedCounter;
     private Counter paymentsProcessedCounter;
     private Counter inventoryReservedCounter;
 
-    // Timers for operation latency
     private Timer createCustomerTimer;
     private Timer createOrderTimer;
     private Timer processPaymentTimer;
     private Timer reserveInventoryTimer;
 
-    // Error counters
     private Counter authenticationFailureCounter;
     private Counter validationErrorCounter;
     private Counter businessExceptionCounter;
 
     public void initialize() {
-        // Initialize counters
         customersCreatedCounter = Counter.builder("ecommerce.customers.created")
                 .description("Total number of customers created")
                 .register(meterRegistry);
@@ -47,7 +43,6 @@ public class ApplicationMetrics {
                 .description("Total number of inventory reservations")
                 .register(meterRegistry);
 
-        // Initialize timers
         createCustomerTimer = Timer.builder("ecommerce.customer.creation.time")
                 .description("Time taken to create a customer")
                 .register(meterRegistry);
@@ -64,7 +59,6 @@ public class ApplicationMetrics {
                 .description("Time taken to reserve inventory")
                 .register(meterRegistry);
 
-        // Initialize error counters
         authenticationFailureCounter = Counter.builder("ecommerce.auth.failures")
                 .description("Total authentication failures")
                 .register(meterRegistry);
@@ -78,7 +72,6 @@ public class ApplicationMetrics {
                 .register(meterRegistry);
     }
 
-    // Customer metrics
     public void recordCustomerCreated() {
         customersCreatedCounter.increment();
     }
@@ -91,7 +84,6 @@ public class ApplicationMetrics {
         sample.stop(createCustomerTimer);
     }
 
-    // Order metrics
     public void recordOrderCreated() {
         ordersCreatedCounter.increment();
     }
@@ -104,7 +96,6 @@ public class ApplicationMetrics {
         sample.stop(createOrderTimer);
     }
 
-    // Payment metrics
     public void recordPaymentProcessed() {
         paymentsProcessedCounter.increment();
     }
@@ -117,7 +108,6 @@ public class ApplicationMetrics {
         sample.stop(processPaymentTimer);
     }
 
-    // Inventory metrics
     public void recordInventoryReserved() {
         inventoryReservedCounter.increment();
     }
@@ -130,7 +120,6 @@ public class ApplicationMetrics {
         sample.stop(reserveInventoryTimer);
     }
 
-    // Error metrics
     public void recordAuthenticationFailure() {
         authenticationFailureCounter.increment();
     }

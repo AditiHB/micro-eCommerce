@@ -12,11 +12,13 @@ import org.springframework.stereotype.Component;
 public class MetricsInitializer {
 
     private final ApplicationMetrics applicationMetrics;
+    private final BusinessMetrics businessMetrics;
 
     @EventListener(ApplicationStartedEvent.class)
     public void initializeMetrics() {
-        log.info("Initializing application metrics");
+        log.info("Initializing application and business metrics");
         applicationMetrics.initialize();
-        log.info("Application metrics initialized successfully");
+        businessMetrics.initialize();
+        log.info("All metrics initialized successfully");
     }
 }
