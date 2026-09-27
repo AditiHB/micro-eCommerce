@@ -244,7 +244,17 @@ class ProductServiceTest {
 
     @Test
     void testGetLowStockProducts_Success() {
-        Product lowStockProduct = testProduct.toBuilder().quantityAvailable(5).build();
+        Product lowStockProduct = Product.builder()
+                .id(testProduct.getId())
+                .name(testProduct.getName())
+                .description(testProduct.getDescription())
+                .price(testProduct.getPrice())
+                .sku(testProduct.getSku())
+                .category(testProduct.getCategory())
+                .quantityAvailable(5)
+                .createdAt(testProduct.getCreatedAt())
+                .updatedAt(testProduct.getUpdatedAt())
+                .build();
         when(productRepository.findLowStockProducts()).thenReturn(List.of(lowStockProduct));
 
         List<ProductDTO> result = productService.getLowStockProducts();

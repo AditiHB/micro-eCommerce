@@ -1,5 +1,6 @@
 package com.ecommerce.productservice;
 
+import com.ecommerce.productservice.config.TestSecurityConfig;
 import com.ecommerce.productservice.dto.CreateProductRequest;
 import com.ecommerce.productservice.dto.ProductDTO;
 import com.ecommerce.productservice.dto.UpdateProductRequest;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
@@ -27,9 +29,11 @@ import static org.hamcrest.Matchers.*;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(TestSecurityConfig.class)
 @TestPropertySource(properties = {
         "spring.jpa.hibernate.ddl-auto=create-drop",
-        "spring.kafka.bootstrap-servers=localhost:9092"
+        "spring.kafka.bootstrap-servers=localhost:9092",
+        "spring.liquibase.enabled=false"
 })
 class ProductServiceIntegrationTest {
     @Autowired
