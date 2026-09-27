@@ -1,0 +1,268 @@
+groups:
+  - name: microservices
+    interval: 30s
+    rules:
+      # Service availability alerts
+      - alert: ServiceDown
+        expr: up{job=~".*-service|api-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: "{{ $labels.job }}"
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.job }} on {{ $labels.instance }} has been down for more than 1 minute"
+
+      # High CPU usage
+      - alert: HighCpuUsage
+        expr: |
+          (1 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])))) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          type: resource
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          type: resource
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value | humanizePercentage }} on {{ $labels.instance }}"
+
+      # High disk usage
+      - alert: HighDiskUsage
+        expr: |
+          (1 - (node_filesystem_avail_bytes{fstype=~"ext4|xfs"} / node_filesystem_size_bytes{fstype=~"ext4|xfs"})) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          type: resource
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }}"
+          description: "Disk {{ $labels.device }} is {{ $value | humanizePercentage }} full on {{ $labels.instance }}"
+
+  - name: application_metrics
+    interval: 30s
+    rules:
+      # HTTP error rate
+      - alert: HighErrorRate
+        expr: |
+          (sum by (job) (rate(http_requests_total{status=~"5.."}[5m])) /
+           sum by (job) (rate(http_requests_total[5m]))) > 0.05
+        for: 3m
+        labels:
+          severity: critical
+          type: application
+        annotations:
+          summary: "High error rate in {{ $labels.job }}"
+          description: "Error rate is {{ $value | humanizePercentage }} in {{ $labels.job }}"
+
+      # High latency
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, sum by (le, job) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+        for: 5m
+        labels:
+          severity: warning
+          type: performance
+        annotations:
+          summary: "High latency in {{ $labels.job }}"
+          description: "P95 latency is {{ $value }}s in {{ $labels.job }}"
+
+      # Slow requests
+      - alert: SlowRequests
+        expr: |
+          histogram_quantile(0.99, sum by (le, job) (rate(http_request_duration_seconds_bucket[5m]))) > 2
+        for: 5m
+        labels:
+          severity: warning
+          type: performance
+        annotations:
+          summary: "Slow requests detected in {{ $labels.job }}"
+          description: "P99 latency is {{ $value }}s in {{ $labels.job }}"
+
+      # Request queue depth
+      - alert: HighQueueDepth
+        expr: |
+          max by (job) (http_requests_total{status="pending"}) > 100
+        for: 3m
+        labels:
+          severity: warning
+          type: performance
+        annotations:
+          summary: "High request queue depth in {{ $labels.job }}"
+          description: "Queue depth is {{ $value }} requests in {{ $labels.job }}"
+
+  - name: business_metrics
+    interval: 1m
+    rules:
+      # Order processing SLA
+      - alert: OrderProcessingSLAViolation
+        expr: |
+          histogram_quantile(0.99, sum by (le) (rate(order_processing_duration_seconds_bucket[5m]))) > 30
+        for: 5m
+        labels:
+          severity: critical
+          type: sla
+        annotations:
+          summary: "Order processing SLA violation"
+          description: "Order processing P99 latency is {{ $value }}s (SLA: 30s)"
+
+      # Low order throughput
+      - alert: LowOrderThroughput
+        expr: |
+          rate(orders_created_total[5m]) < 1
+        for: 10m
+        labels:
+          severity: warning
+          type: business
+        annotations:
+          summary: "Low order throughput"
+          description: "Order creation rate is {{ $value }} orders/sec"
+
+      # Payment processing failures
+      - alert: HighPaymentFailureRate
+        expr: |
+          (sum(rate(payment_processing_failures_total[5m])) /
+           sum(rate(payments_processed_total[5m]))) > 0.02
+        for: 5m
+        labels:
+          severity: critical
+          type: business
+        annotations:
+          summary: "High payment processing failure rate"
+          description: "Payment failure rate is {{ $value | humanizePercentage }}"
+
+      # Inventory stock critical
+      - alert: InventoryStockLow
+        expr: |
+          inventory_stock_available < 10
+        for: 5m
+        labels:
+          severity: warning
+          type: business
+        annotations:
+          summary: "Low inventory stock for product {{ $labels.product_id }}"
+          description: "Stock level is {{ $value }} units"
+
+      # Customer acquisition trend
+      - alert: CustomerGrowthAnomaly
+        expr: |
+          rate(customers_created_total[1d]) < avg_over_time(rate(customers_created_total[1d])[7d:1d]) * 0.5
+        for: 1h
+        labels:
+          severity: warning
+          type: business
+        annotations:
+          summary: "Anomaly detected in customer acquisition"
+          description: "Customer creation rate is {{ $value | humanizePercentage }} below 7-day average"
+
+  - name: infrastructure
+    interval: 30s
+    rules:
+      # Kafka lag alert
+      - alert: HighKafkaConsumerLag
+        expr: |
+          kafka_consumer_lag > 10000
+        for: 5m
+        labels:
+          severity: warning
+          type: infrastructure
+        annotations:
+          summary: "High Kafka consumer lag for group {{ $labels.consumer_group }}"
+          description: "Consumer lag is {{ $value }} messages for partition {{ $labels.partition }}"
+
+      # Elasticsearch cluster health
+      - alert: ElasticsearchClusterUnhealthy
+        expr: |
+          elasticsearch_cluster_health_status != 1
+        for: 5m
+        labels:
+          severity: critical
+          type: infrastructure
+        annotations:
+          summary: "Elasticsearch cluster is not healthy"
+          description: "Cluster health status: {{ $value }}"
+
+      # Elasticsearch disk usage
+      - alert: ElasticsearchDiskUsage
+        expr: |
+          (elasticsearch_filesystem_data_used_bytes / elasticsearch_filesystem_data_size_bytes) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          type: infrastructure
+        annotations:
+          summary: "High disk usage on Elasticsearch node {{ $labels.node_name }}"
+          description: "Disk usage is {{ $value | humanizePercentage }}"
+
+      # Zookeeper alerts
+      - alert: ZookeeperDown
+        expr: |
+          zk_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          type: infrastructure
+        annotations:
+          summary: "Zookeeper is down on {{ $labels.instance }}"
+          description: "Zookeeper has been down for more than 1 minute"
+
+      # Dead letter queue processing
+      - alert: DeadLetterQueueBuildup
+        expr: |
+          kafka_messages_in_dlq > 1000
+        for: 10m
+        labels:
+          severity: warning
+          type: infrastructure
+        annotations:
+          summary: "Dead letter queue buildup detected"
+          description: "{{ $value }} messages in dead letter queue for topic {{ $labels.topic }}"
+
+  - name: sla_and_availability
+    interval: 1m
+    rules:
+      # Overall system availability
+      - alert: SystemAvailabilityDegraded
+        expr: |
+          (count(up{job=~".*-service"} == 1) / count(up{job=~".*-service"})) < 0.95
+        for: 5m
+        labels:
+          severity: critical
+          type: sla
+        annotations:
+          summary: "System availability degraded"
+          description: "Only {{ $value | humanizePercentage }} of services are up"
+
+      # API gateway availability
+      - alert: APIGatewayAvailability
+        expr: |
+          up{job="api-gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          type: sla
+        annotations:
+          summary: "API Gateway is unavailable"
+          description: "API Gateway has been down for more than 2 minutes - impacting all external traffic"
+
+      # Database connection pool exhaustion
+      - alert: DatabaseConnectionPoolLow
+        expr: |
+          (db_connection_pool_available / db_connection_pool_max) < 0.2
+        for: 5m
+        labels:
+          severity: warning
+          type: infrastructure
+        annotations:
+          summary: "Database connection pool running low"
+          description: "Available connections: {{ $value | humanizePercentage }} for {{ $labels.datasource }}"

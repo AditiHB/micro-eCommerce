@@ -1,0 +1,586 @@
+asyncapi: '2.6.0'
+info:
+  title: E-Commerce Microservices Event APIs
+  version: '1.0.0'
+  description: |
+    Event-driven architecture documentation for E-Commerce Microservices
+    using Apache Kafka as the message broker. This specification documents
+    all events published and consumed by microservices.
+  contact:
+    name: E-Commerce API Support
+    email: api-support@ecommerce.local
+
+defaultContentType: application/json
+
+servers:
+  development:
+    url: kafka://kafka:9092
+    protocol: kafka
+    description: Development Kafka cluster
+
+  staging:
+    url: kafka://kafka-staging:9092
+    protocol: kafka
+    description: Staging Kafka cluster
+
+  production:
+    url: kafka://kafka-prod:9092
+    protocol: kafka
+    description: Production Kafka cluster
+
+channels:
+  order-created:
+    description: Events published when a new order is created
+    subscribe:
+      operationId: onOrderCreated
+      message:
+        $ref: '#/components/messages/OrderCreatedEvent'
+
+  order-confirmed:
+    description: Events published when an order is confirmed
+    subscribe:
+      operationId: onOrderConfirmed
+      message:
+        $ref: '#/components/messages/OrderConfirmedEvent'
+
+  inventory-reserved:
+    description: Events published when inventory stock is reserved
+    subscribe:
+      operationId: onInventoryReserved
+      message:
+        $ref: '#/components/messages/InventoryReservedEvent'
+
+  inventory-failed:
+    description: Events published when inventory reservation fails
+    subscribe:
+      operationId: onInventoryFailed
+      message:
+        $ref: '#/components/messages/InventoryFailedEvent'
+
+  inventory-released:
+    description: Events published when reserved inventory is released
+    subscribe:
+      operationId: onInventoryReleased
+      message:
+        $ref: '#/components/messages/InventoryReleasedEvent'
+
+  payment-processed:
+    description: Events published when a payment is successfully processed
+    subscribe:
+      operationId: onPaymentProcessed
+      message:
+        $ref: '#/components/messages/PaymentProcessedEvent'
+
+  payment-failed:
+    description: Events published when a payment fails
+    subscribe:
+      operationId: onPaymentFailed
+      message:
+        $ref: '#/components/messages/PaymentFailedEvent'
+
+  payment-refunded:
+    description: Events published when a payment is refunded
+    subscribe:
+      operationId: onPaymentRefunded
+      message:
+        $ref: '#/components/messages/PaymentRefundedEvent'
+
+  order-shipped:
+    description: Events published when an order is shipped
+    subscribe:
+      operationId: onOrderShipped
+      message:
+        $ref: '#/components/messages/OrderShippedEvent'
+
+  order-delivered:
+    description: Events published when an order is delivered
+    subscribe:
+      operationId: onOrderDelivered
+      message:
+        $ref: '#/components/messages/OrderDeliveredEvent'
+
+components:
+  messages:
+    OrderCreatedEvent:
+      name: OrderCreatedEvent
+      title: Order Created Event
+      summary: Fired when a new order is created
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - orderId
+          - customerId
+          - totalAmount
+          - items
+        properties:
+          eventId:
+            type: string
+            format: uuid
+            description: Unique event identifier
+          eventType:
+            type: string
+            enum:
+              - ORDER_CREATED
+            description: Type of event
+          timestamp:
+            type: string
+            format: date-time
+            description: When the event occurred
+          source:
+            type: string
+            enum:
+              - order-service
+            description: Service that published the event
+          orderId:
+            type: integer
+            format: int64
+            description: Order ID
+          customerId:
+            type: integer
+            format: int64
+            description: Customer ID
+          totalAmount:
+            type: number
+            format: double
+            description: Total order amount
+          items:
+            type: array
+            items:
+              type: object
+              properties:
+                productId:
+                  type: integer
+                  format: int64
+                quantity:
+                  type: integer
+                unitPrice:
+                  type: number
+                  format: double
+          shippingAddress:
+            type: string
+            description: Shipping address for the order
+      examples:
+        - payload:
+            eventId: "123e4567-e89b-12d3-a456-426614174000"
+            eventType: "ORDER_CREATED"
+            timestamp: "2024-01-15T10:30:00Z"
+            source: "order-service"
+            orderId: 1001
+            customerId: 5
+            totalAmount: 299.99
+            items:
+              - productId: 1
+                quantity: 2
+                unitPrice: 149.99
+            shippingAddress: "123 Main St, Anytown, USA"
+
+    OrderConfirmedEvent:
+      name: OrderConfirmedEvent
+      title: Order Confirmed Event
+      summary: Fired when an order is confirmed
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - orderId
+          - customerId
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - ORDER_CONFIRMED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - order-service
+          orderId:
+            type: integer
+            format: int64
+          customerId:
+            type: integer
+            format: int64
+          confirmationNumber:
+            type: string
+
+    InventoryReservedEvent:
+      name: InventoryReservedEvent
+      title: Inventory Reserved Event
+      summary: Fired when inventory stock is reserved for an order
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - orderId
+          - inventoryId
+          - quantity
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - INVENTORY_RESERVED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - inventory-service
+          orderId:
+            type: integer
+            format: int64
+          inventoryId:
+            type: integer
+            format: int64
+          productId:
+            type: integer
+            format: int64
+          quantity:
+            type: integer
+          reservationId:
+            type: string
+
+    InventoryFailedEvent:
+      name: InventoryFailedEvent
+      title: Inventory Reservation Failed Event
+      summary: Fired when inventory reservation fails due to insufficient stock
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - orderId
+          - inventoryId
+          - requestedQuantity
+          - availableQuantity
+          - reason
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - INVENTORY_FAILED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - inventory-service
+          orderId:
+            type: integer
+            format: int64
+          inventoryId:
+            type: integer
+            format: int64
+          productId:
+            type: integer
+            format: int64
+          requestedQuantity:
+            type: integer
+          availableQuantity:
+            type: integer
+          reason:
+            type: string
+            enum:
+              - INSUFFICIENT_STOCK
+              - ITEM_NOT_FOUND
+              - SYSTEM_ERROR
+
+    InventoryReleasedEvent:
+      name: InventoryReleasedEvent
+      title: Inventory Released Event
+      summary: Fired when reserved inventory is released back to stock
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - inventoryId
+          - quantity
+          - reason
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - INVENTORY_RELEASED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - inventory-service
+          inventoryId:
+            type: integer
+            format: int64
+          productId:
+            type: integer
+            format: int64
+          quantity:
+            type: integer
+          reason:
+            type: string
+            enum:
+              - ORDER_CANCELLED
+              - PAYMENT_FAILED
+              - MANUAL_RELEASE
+
+    PaymentProcessedEvent:
+      name: PaymentProcessedEvent
+      title: Payment Processed Event
+      summary: Fired when a payment is successfully processed
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - paymentId
+          - orderId
+          - amount
+          - transactionId
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - PAYMENT_PROCESSED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - payment-service
+          paymentId:
+            type: integer
+            format: int64
+          orderId:
+            type: integer
+            format: int64
+          customerId:
+            type: integer
+            format: int64
+          amount:
+            type: number
+            format: double
+          currency:
+            type: string
+          paymentMethod:
+            type: string
+          transactionId:
+            type: string
+
+    PaymentFailedEvent:
+      name: PaymentFailedEvent
+      title: Payment Failed Event
+      summary: Fired when a payment fails
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - paymentId
+          - orderId
+          - reason
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - PAYMENT_FAILED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - payment-service
+          paymentId:
+            type: integer
+            format: int64
+          orderId:
+            type: integer
+            format: int64
+          amount:
+            type: number
+            format: double
+          reason:
+            type: string
+            enum:
+              - INSUFFICIENT_FUNDS
+              - INVALID_CARD
+              - EXPIRED_CARD
+              - DECLINED
+              - TIMEOUT
+              - SYSTEM_ERROR
+
+    PaymentRefundedEvent:
+      name: PaymentRefundedEvent
+      title: Payment Refunded Event
+      summary: Fired when a payment is refunded
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - paymentId
+          - orderId
+          - refundAmount
+          - reason
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - PAYMENT_REFUNDED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - payment-service
+          paymentId:
+            type: integer
+            format: int64
+          orderId:
+            type: integer
+            format: int64
+          refundAmount:
+            type: number
+            format: double
+          currency:
+            type: string
+          reason:
+            type: string
+            enum:
+              - ORDER_CANCELLED
+              - CUSTOMER_REQUEST
+              - DUPLICATE_CHARGE
+              - SYSTEM_ERROR
+
+    OrderShippedEvent:
+      name: OrderShippedEvent
+      title: Order Shipped Event
+      summary: Fired when an order is shipped
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - orderId
+          - customerId
+          - trackingNumber
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - ORDER_SHIPPED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - order-service
+          orderId:
+            type: integer
+            format: int64
+          customerId:
+            type: integer
+            format: int64
+          trackingNumber:
+            type: string
+          carrier:
+            type: string
+          estimatedDeliveryDate:
+            type: string
+            format: date
+
+    OrderDeliveredEvent:
+      name: OrderDeliveredEvent
+      title: Order Delivered Event
+      summary: Fired when an order is delivered
+      contentType: application/json
+      payload:
+        type: object
+        required:
+          - eventId
+          - eventType
+          - timestamp
+          - orderId
+          - customerId
+          - deliveredAt
+        properties:
+          eventId:
+            type: string
+            format: uuid
+          eventType:
+            type: string
+            enum:
+              - ORDER_DELIVERED
+          timestamp:
+            type: string
+            format: date-time
+          source:
+            type: string
+            enum:
+              - order-service
+          orderId:
+            type: integer
+            format: int64
+          customerId:
+            type: integer
+            format: int64
+          deliveredAt:
+            type: string
+            format: date-time
+          signedBy:
+            type: string
+          notes:
+            type: string

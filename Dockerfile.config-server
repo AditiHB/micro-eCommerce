@@ -1,0 +1,30 @@
+# Stage 1: Build
+FROM maven:3.8-openjdk-11 as builder
+
+WORKDIR /build
+
+COPY pom.xml .
+COPY common ./common
+COPY infrastructure/pom.xml ./infrastructure/
+COPY infrastructure/config-server ./infrastructure/config-server/
+
+RUN mvn clean package -DskipTests -pl infrastructure/config-server -am
+
+# Stage 2: Runtime
+FROM openjdk:11-jre-slim
+
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /build/infrastructure/config-server/target/config-server-*.jar app.jar
+COPY config-repo /app/config-repo
+
+EXPOSE 8888
+
+ENV SERVER_PORT=8888
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:8888/actuator/health/readiness || exit 1
+
+ENTRYPOINT ["java", "-jar", "app.jar"]

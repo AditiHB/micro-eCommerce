@@ -1,0 +1,80 @@
+{{ define "slack.default.title" -}}
+{{ .CommonLabels.alertname }} ({{ .Status }})
+{{- end }}
+
+{{ define "slack.default.text" -}}
+{{ range .Alerts.Firing -}}
+*Alert:* {{ .Labels.alertname }}
+*Severity:* {{ .Labels.severity }}
+*Service:* {{ .Labels.service | default "N/A" }}
+*Description:* {{ .Annotations.description }}
+{{- if .Annotations.runbook_url }}
+*Runbook:* <{{ .Annotations.runbook_url }}|View>
+{{- end }}
+{{- end }}
+{{ range .Alerts.Resolved -}}
+*Resolved:* {{ .Labels.alertname }}
+*Service:* {{ .Labels.service | default "N/A" }}
+{{- end }}
+{{- end }}
+
+{{ define "email.default.subject" -}}
+[{{ .GroupLabels.alertname }}] {{ .Status | toUpper }}
+{{- end }}
+
+{{ define "email.default.html" -}}
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .alert { border-left: 4px solid #{{ if eq .Status "firing" }}d32f2f{{ else }}388e3c{{ end }}; padding: 10px; margin: 10px 0; background-color: #f5f5f5; }
+        .critical { border-left-color: #d32f2f; }
+        .warning { border-left-color: #f57c00; }
+        .resolved { border-left-color: #388e3c; }
+        h2 { color: #{{ if eq .Status "firing" }}d32f2f{{ else }}388e3c{{ end }}; }
+        table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
+        th { background-color: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h2>{{ if eq .Status "firing" }}🚨 Alert Triggered{{ else }}✅ Alert Resolved{{ end }}</h2>
+
+    {{ range .Alerts.Firing }}
+    <div class="alert {{ .Labels.severity }}">
+        <h3>{{ .Labels.alertname }}</h3>
+        <table>
+            <tr><th>Severity</th><td>{{ .Labels.severity }}</td></tr>
+            <tr><th>Service</th><td>{{ .Labels.service | default "N/A" }}</td></tr>
+            <tr><th>Instance</th><td>{{ .Labels.instance | default "N/A" }}</td></tr>
+            <tr><th>Description</th><td>{{ .Annotations.description }}</td></tr>
+            <tr><th>Details</th><td>{{ .Annotations.summary }}</td></tr>
+        </table>
+    </div>
+    {{ end }}
+
+    {{ range .Alerts.Resolved }}
+    <div class="alert resolved">
+        <h3>{{ .Labels.alertname }} - RESOLVED</h3>
+        <table>
+            <tr><th>Service</th><td>{{ .Labels.service | default "N/A" }}</td></tr>
+            <tr><th>Resolved at</th><td>{{ .StartsAt.Format "2006-01-02 15:04:05" }} UTC</td></tr>
+        </table>
+    </div>
+    {{ end }}
+</body>
+</html>
+{{- end }}
+
+{{ define "pagerduty.default.description" -}}
+{{ .GroupLabels.alertname }} - {{ range .Alerts.Firing }}{{ .Annotations.description }}{{ end }}
+{{- end }}
+
+{{ define "pagerduty.default.client" -}}
+Prometheus {{ .GroupLabels.cluster }}
+{{- end }}
+
+{{ define "pagerduty.default.client_url" -}}
+{{ range .Alerts.Firing }}{{ .GeneratorURL }}{{ end }}
+{{- end }}

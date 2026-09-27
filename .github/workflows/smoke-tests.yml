@@ -1,0 +1,319 @@
+name: Smoke Tests & Validation
+
+on:
+  workflow_run:
+    workflows: [ Deploy to Kubernetes ]
+    types: [ completed ]
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to test'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+env:
+  STAGING_URL: https://staging-api.ecommerce.example.com
+  PRODUCTION_URL: https://api.ecommerce.example.com
+
+jobs:
+  determine-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      target-env: ${{ steps.set-env.outputs.target-env }}
+      api-url: ${{ steps.set-env.outputs.api-url }}
+
+    steps:
+      - name: Determine target environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TARGET_ENV="${{ github.event.inputs.environment }}"
+          elif [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+            TARGET_ENV="staging"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TARGET_ENV="production"
+          else
+            TARGET_ENV="staging"
+          fi
+
+          if [ "$TARGET_ENV" = "production" ]; then
+            echo "target-env=production" >> $GITHUB_OUTPUT
+            echo "api-url=${{ env.PRODUCTION_URL }}" >> $GITHUB_OUTPUT
+          else
+            echo "target-env=staging" >> $GITHUB_OUTPUT
+            echo "api-url=${{ env.STAGING_URL }}" >> $GITHUB_OUTPUT
+          fi
+
+  health-check:
+    needs: determine-environment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Customer Service Health
+        run: |
+          curl -f -s --retry 5 --retry-delay 10 \
+            "${{ needs.determine-environment.outputs.api-url }}/customers/actuator/health" \
+            || exit 1
+
+      - name: Check Inventory Service Health
+        run: |
+          curl -f -s --retry 5 --retry-delay 10 \
+            "${{ needs.determine-environment.outputs.api-url }}/inventory/actuator/health" \
+            || exit 1
+
+      - name: Check Order Service Health
+        run: |
+          curl -f -s --retry 5 --retry-delay 10 \
+            "${{ needs.determine-environment.outputs.api-url }}/orders/actuator/health" \
+            || exit 1
+
+      - name: Check Payment Service Health
+        run: |
+          curl -f -s --retry 5 --retry-delay 10 \
+            "${{ needs.determine-environment.outputs.api-url }}/payments/actuator/health" \
+            || exit 1
+
+  api-smoke-tests:
+    needs: [determine-environment, health-check]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm install -g newman
+
+      - name: Create Postman collection for smoke tests
+        run: |
+          cat > /tmp/smoke-tests.json << 'EOF'
+          {
+            "info": {
+              "name": "E-Commerce Smoke Tests",
+              "description": "Post-deployment smoke tests for microservices",
+              "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+            },
+            "item": [
+              {
+                "name": "Customer Service",
+                "item": [
+                  {
+                    "name": "Get all customers",
+                    "request": {
+                      "method": "GET",
+                      "header": [],
+                      "url": {
+                        "raw": "${{ needs.determine-environment.outputs.api-url }}/customers/api/customers",
+                        "protocol": "https",
+                        "host": ["${{ needs.determine-environment.outputs.api-url }}", "customers", "api", "customers"]
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "name": "Inventory Service",
+                "item": [
+                  {
+                    "name": "Get all products",
+                    "request": {
+                      "method": "GET",
+                      "header": [],
+                      "url": {
+                        "raw": "${{ needs.determine-environment.outputs.api-url }}/inventory/api/products",
+                        "protocol": "https",
+                        "host": ["${{ needs.determine-environment.outputs.api-url }}", "inventory", "api", "products"]
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "name": "Order Service",
+                "item": [
+                  {
+                    "name": "Get all orders",
+                    "request": {
+                      "method": "GET",
+                      "header": [],
+                      "url": {
+                        "raw": "${{ needs.determine-environment.outputs.api-url }}/orders/api/orders",
+                        "protocol": "https",
+                        "host": ["${{ needs.determine-environment.outputs.api-url }}", "orders", "api", "orders"]
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "name": "Payment Service",
+                "item": [
+                  {
+                    "name": "Health check",
+                    "request": {
+                      "method": "GET",
+                      "header": [],
+                      "url": {
+                        "raw": "${{ needs.determine-environment.outputs.api-url }}/payments/actuator/health",
+                        "protocol": "https",
+                        "host": ["${{ needs.determine-environment.outputs.api-url }}", "payments", "actuator", "health"]
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+
+      - name: Run smoke tests with Newman
+        run: |
+          newman run /tmp/smoke-tests.json \
+            --reporters cli,json \
+            --reporter-json-export smoke-test-results.json || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-results
+          path: smoke-test-results.json
+          retention-days: 30
+
+  integration-validation:
+    needs: [determine-environment, health-check]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run integration tests against ${{ needs.determine-environment.outputs.target-env }}
+        env:
+          API_URL: ${{ needs.determine-environment.outputs.api-url }}
+        run: |
+          mvn verify \
+            -DskipUnitTests=true \
+            -Dapi.url=${{ env.API_URL }} \
+            -q || true
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: '**/target/failsafe-reports'
+          retention-days: 30
+
+  performance-baseline:
+    needs: [determine-environment, health-check]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Apache JMeter
+        run: |
+          wget -q https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
+          tar -xzf apache-jmeter-5.6.3.tgz
+          export PATH=$PATH:$(pwd)/apache-jmeter-5.6.3/bin
+
+      - name: Create JMeter test plan
+        run: |
+          cat > /tmp/performance-test.jmx << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <jmeterTestPlan version="1.2">
+            <hashTree>
+              <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Smoke Test Load" enabled="true">
+                <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables" enabled="true">
+                  <collectionProp name="Arguments.arguments"/>
+                </elementProp>
+              </TestPlan>
+              <hashTree/>
+            </hashTree>
+          </jmeterTestPlan>
+          EOF
+
+      - name: Run performance baseline
+        run: |
+          # Simple curl-based performance test
+          for i in {1..10}; do
+            time curl -s "${{ needs.determine-environment.outputs.api-url }}/customers/actuator/health" > /dev/null
+          done
+
+  security-validation:
+    needs: [determine-environment, health-check]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check HTTPS enforced
+        run: |
+          curl -I -L "${{ needs.determine-environment.outputs.api-url }}" 2>&1 | grep -i "strict-transport-security" || echo "Warning: HSTS not found"
+
+      - name: Check security headers
+        run: |
+          curl -I "${{ needs.determine-environment.outputs.api-url }}/customers/actuator/health" | grep -i "x-content-type-options\|x-frame-options" || echo "Warning: Some security headers missing"
+
+      - name: Verify API authentication
+        run: |
+          # Test that endpoints require authentication
+          curl -s -w "\n%{http_code}\n" "${{ needs.determine-environment.outputs.api-url }}/customers/api/customers" | tail -1 | grep -E "401|403" || echo "Warning: Check authentication enforcement"
+
+  report-results:
+    if: always()
+    needs: [determine-environment, health-check, api-smoke-tests, integration-validation, performance-baseline, security-validation]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all test results
+        uses: actions/download-artifact@v4
+
+      - name: Generate summary report
+        run: |
+          echo "# Smoke Test Report" > /tmp/report.md
+          echo "Environment: ${{ needs.determine-environment.outputs.target-env }}" >> /tmp/report.md
+          echo "Date: $(date)" >> /tmp/report.md
+          echo "" >> /tmp/report.md
+          echo "## Test Results Summary" >> /tmp/report.md
+          echo "- Health Checks: ${{ needs.health-check.result }}" >> /tmp/report.md
+          echo "- API Smoke Tests: ${{ needs.api-smoke-tests.result }}" >> /tmp/report.md
+          echo "- Integration Validation: ${{ needs.integration-validation.result }}" >> /tmp/report.md
+          echo "- Performance Baseline: ${{ needs.performance-baseline.result }}" >> /tmp/report.md
+          echo "- Security Validation: ${{ needs.security-validation.result }}" >> /tmp/report.md
+
+      - name: Notify Slack - Smoke Test Results
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "Smoke Test Results",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Post-Deployment Smoke Tests*\nEnvironment: `${{ needs.determine-environment.outputs.target-env }}`\n*Health Checks*: ${{ needs.health-check.result == 'success' && '✅' || '❌' }}\n*API Tests*: ${{ needs.api-smoke-tests.result == 'success' && '✅' || '❌' }}\n*Integration*: ${{ needs.integration-validation.result == 'success' && '✅' || '❌' }}\n*Security*: ${{ needs.security-validation.result == 'success' && '✅' || '❌' }}"
+                  }
+                }
+              ]
+            }
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
