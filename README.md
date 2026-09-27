@@ -102,6 +102,17 @@ This project implements a cloud-native microservices architecture for an e-comme
   - Refund management
   - Transaction logging and reconciliation
 
+### 5. **Product Service** (Port 8085)
+- **Responsibility:** Product catalog management and inventory coordination
+- **Key Features:**
+  - Product CRUD operations (Create, Read, Update, Delete)
+  - Product catalog browsing with pagination and filtering
+  - Product categorization
+  - Inventory tracking and availability monitoring
+  - Event-driven updates with Kafka
+  - Multi-database support (H2, PostgreSQL, Oracle)
+  - Product search and low-stock alerts
+
 ---
 
 ## 💻 Technology Stack
@@ -161,7 +172,10 @@ micro-eCommerce/
 │   ├── order-service/                          # Order management
 │   │   ├── pom.xml
 │   │   └── src/
-│   └── payment-service/                        # Payment processing
+│   ├── payment-service/                        # Payment processing
+│   │   ├── pom.xml
+│   │   └── src/
+│   └── product-service/                        # Product catalog management
 │       ├── pom.xml
 │       └── src/
 │
@@ -236,6 +250,12 @@ cd services/payment-service
 mvn spring-boot:run
 ```
 
+**Terminal 8: Product Service**
+```bash
+cd services/product-service
+mvn spring-boot:run
+```
+
 ---
 
 ## 🐳 Docker Deployment
@@ -267,6 +287,7 @@ docker-compose down
 - **Inventory Service:** http://localhost:8082
 - **Order Service:** http://localhost:8083
 - **Payment Service:** http://localhost:8084
+- **Product Service:** http://localhost:8085
 - **Kafka Broker:** localhost:9092
 - **Zookeeper:** localhost:2181
 
