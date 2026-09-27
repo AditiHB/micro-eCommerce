@@ -1,5 +1,6 @@
 package com.ecommerce.paymentservice;
 
+import com.ecommerce.common.enums.PaymentStatus;
 import com.ecommerce.common.events.InventoryReservedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -24,9 +25,9 @@ public class PaymentEventListener {
         Payment payment = new Payment();
         payment.setOrderId(event.getOrderId());
         payment.setAmount(new BigDecimal("99.99")); // Static for simplicity
-        payment.setStatus("PROCESSED");
-        repository.save(payment);
+        payment.setStatus(PaymentStatus.PROCESSED);
+        Payment savedPayment = repository.save(payment);
 
-        kafkaTemplate.send("payment-processed", new PaymentProcessedEvent(event.getOrderId()));
+        kafkaTemplate.send("payment-processed", new PaymentProcessedEvent(savedPayment.getId(), event.getOrderId(), savedPayment.getAmount()));
     }
 }
