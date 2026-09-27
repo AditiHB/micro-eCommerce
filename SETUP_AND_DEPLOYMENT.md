@@ -17,8 +17,8 @@
 ### Required Software
 ```bash
 # Java Development Kit
-java -version                    # Should be 21+
-# Verify: openjdk version "21.x.x"
+java -version                    # Should be 17+
+# Verify: openjdk version "17.x.x"
 
 # Maven (build tool)
 mvn -version                     # Should be 3.9+

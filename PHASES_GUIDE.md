@@ -18,7 +18,7 @@ Building professional-grade Java code following SOLID principles and industry st
 - **Documentation**: Javadoc for public APIs
 
 ### Technologies
-- Java 21
+- Java 17
 - Maven 3.9+
 - Spring Framework conventions
 
