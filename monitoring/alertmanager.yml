@@ -1,0 +1,150 @@
+global:
+  resolve_timeout: 5m
+  slack_api_url: '${SLACK_WEBHOOK_URL}'
+  pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
+
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+route:
+  receiver: 'default'
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical'
+      group_wait: 5s
+      repeat_interval: 2h
+
+    # SLA violations - PagerDuty and Slack
+    - match:
+        type: sla
+      receiver: 'sla-violations'
+      group_wait: 5s
+      repeat_interval: 4h
+
+    # Business metrics - email and Slack
+    - match:
+        type: business
+      receiver: 'business-alerts'
+      group_wait: 1m
+      repeat_interval: 6h
+
+    # Infrastructure alerts - Slack
+    - match:
+        type: infrastructure
+      receiver: 'infrastructure'
+      group_wait: 30s
+      repeat_interval: 4h
+
+    # Performance warnings - email
+    - match:
+        type: performance
+      receiver: 'performance'
+      group_wait: 5m
+      repeat_interval: 8h
+
+    # Resource warnings - Slack
+    - match:
+        type: resource
+      receiver: 'resource-alerts'
+      group_wait: 5m
+      repeat_interval: 8h
+
+receivers:
+  - name: 'default'
+    slack_configs:
+      - channel: '#monitoring'
+        title: 'Micro-eCommerce Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+  - name: 'critical'
+    slack_configs:
+      - channel: '#critical-alerts'
+        title: '🔴 CRITICAL ALERT'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY}'
+        description: '{{ .GroupLabels.alertname }}'
+    email_configs:
+      - to: 'oncall@company.com'
+        from: 'alertmanager@company.com'
+        smarthost: 'smtp.gmail.com:587'
+        auth_username: '${SMTP_USERNAME}'
+        auth_password: '${SMTP_PASSWORD}'
+        headers:
+          Subject: '🔴 CRITICAL: {{ .GroupLabels.alertname }}'
+
+  - name: 'sla-violations'
+    slack_configs:
+      - channel: '#sla-violations'
+        title: '⚠️ SLA VIOLATION'
+        text: '{{ range .Alerts }}Service: {{ .Labels.service }}\nDescription: {{ .Annotations.description }}{{ end }}'
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SLA_KEY}'
+    email_configs:
+      - to: 'sre-team@company.com'
+        from: 'alertmanager@company.com'
+        smarthost: 'smtp.gmail.com:587'
+        auth_username: '${SMTP_USERNAME}'
+        auth_password: '${SMTP_PASSWORD}'
+        headers:
+          Subject: '⚠️ SLA Violation: {{ .GroupLabels.alertname }}'
+
+  - name: 'business-alerts'
+    slack_configs:
+      - channel: '#business-metrics'
+        title: '📊 Business Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    email_configs:
+      - to: 'business-ops@company.com'
+        from: 'alertmanager@company.com'
+        smarthost: 'smtp.gmail.com:587'
+        auth_username: '${SMTP_USERNAME}'
+        auth_password: '${SMTP_PASSWORD}'
+        headers:
+          Subject: '📊 Business Alert: {{ .GroupLabels.alertname }}'
+
+  - name: 'infrastructure'
+    slack_configs:
+      - channel: '#infrastructure'
+        title: '🏗️ Infrastructure Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+  - name: 'performance'
+    slack_configs:
+      - channel: '#performance'
+        title: '⏱️ Performance Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    email_configs:
+      - to: 'performance-team@company.com'
+        from: 'alertmanager@company.com'
+        smarthost: 'smtp.gmail.com:587'
+        auth_username: '${SMTP_USERNAME}'
+        auth_password: '${SMTP_PASSWORD}'
+
+  - name: 'resource-alerts'
+    slack_configs:
+      - channel: '#resource-alerts'
+        title: '💻 Resource Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+inhibit_rules:
+  # Don't send warning if critical exists for same service
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'service']
+
+  # Don't send warning for service down if infrastructure alert exists
+  - source_match:
+      alertname: 'ServiceDown'
+    target_match:
+      type: 'infrastructure'
+    equal: ['instance']
