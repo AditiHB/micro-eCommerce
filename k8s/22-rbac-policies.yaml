@@ -1,0 +1,337 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: customer-service-role
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["customer-service-secrets"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["customer-service-config"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: customer-service-rolebinding
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: customer-service-role
+subjects:
+- kind: ServiceAccount
+  name: customer-service-sa
+  namespace: ecommerce
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: customer-service-sa
+  namespace: ecommerce
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: order-service-role
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["order-service-secrets"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["order-service-config"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: order-service-rolebinding
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: order-service-role
+subjects:
+- kind: ServiceAccount
+  name: order-service-sa
+  namespace: ecommerce
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: order-service-sa
+  namespace: ecommerce
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: inventory-service-role
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["inventory-service-secrets"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["inventory-service-config"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: inventory-service-rolebinding
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: inventory-service-role
+subjects:
+- kind: ServiceAccount
+  name: inventory-service-sa
+  namespace: ecommerce
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: inventory-service-sa
+  namespace: ecommerce
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: payment-service-role
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["payment-service-secrets", "payment-encryption-keys"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["payment-service-config"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: payment-service-rolebinding
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: payment-service-role
+subjects:
+- kind: ServiceAccount
+  name: payment-service-sa
+  namespace: ecommerce
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payment-service-sa
+  namespace: ecommerce
+
+---
+# Cross-namespace Vault access for all services
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vault-access
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-access-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: vault-access
+subjects:
+- kind: ServiceAccount
+  name: customer-service-sa
+  namespace: ecommerce
+- kind: ServiceAccount
+  name: order-service-sa
+  namespace: ecommerce
+- kind: ServiceAccount
+  name: inventory-service-sa
+  namespace: ecommerce
+- kind: ServiceAccount
+  name: payment-service-sa
+  namespace: ecommerce
+
+---
+# Deny access to all secrets except assigned ones
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: restricted-secrets-access
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: []
+
+---
+# API Gateway - can access all service APIs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: api-gateway-role
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["api-gateway-secrets", "tls-certificates"]
+  verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: api-gateway-rolebinding
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: api-gateway-role
+subjects:
+- kind: ServiceAccount
+  name: api-gateway-sa
+  namespace: ecommerce
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-gateway-sa
+  namespace: ecommerce
+
+---
+# Pod Security Policy
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: restricted
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  seLinux:
+    rule: 'MustRunAs'
+    seLinuxOptions:
+      level: 's0:c123,c456'
+  supplementalGroups:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1000
+        max: 65535
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1000
+        max: 65535
+  readOnlyRootFilesystem: false
+
+---
+# Deny all pods that don't comply with security policy
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: psp:restricted
+rules:
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  verbs: ['use']
+  resourceNames:
+  - restricted
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: psp:restricted-all-serviceaccounts
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: psp:restricted
+subjects:
+- kind: Group
+  name: system:serviceaccounts
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Audit logging for secret access
+apiVersion: audit.k8s.io/v1
+kind: Policy
+rules:
+  # Log secret access
+  - level: RequestResponse
+    omitStages:
+    - RequestReceived
+    resources:
+    - group: ""
+      resources: ["secrets"]
+    namespaces: ["ecommerce", "vault"]
+
+  # Log authentication and authorization
+  - level: RequestResponse
+    omitStages:
+    - RequestReceived
+    userGroups: ["system:unauthenticated"]
+
+  # Log resource modifications
+  - level: RequestResponse
+    omitStages:
+    - RequestReceived
+    verbs: ["create", "update", "patch", "delete", "deleteCollection"]
+
+  # Default rule - log at basic level
+  - level: Metadata
+    omitStages:
+    - RequestReceived
