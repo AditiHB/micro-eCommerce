@@ -56,7 +56,7 @@ class OrderSagaE2ETest {
         OrderResponse created = orderService.createOrder(request);
         assertThat(created.getStatus()).isEqualTo(OrderStatus.PENDING);
 
-        PaymentProcessedEvent paymentEvent = new PaymentProcessedEvent(created.getId(), 100.0);
+        PaymentProcessedEvent paymentEvent = new PaymentProcessedEvent(1L, created.getId(), new java.math.BigDecimal("100.0"));
         orderEventListener.handlePaymentProcessed(paymentEvent, () -> {});
 
         Order completed = orderRepository.findById(created.getId()).orElseThrow();
@@ -146,9 +146,9 @@ class OrderSagaE2ETest {
         OrderResponse order3 = orderService.createOrder(CreateOrderRequest.builder()
             .customerId(3L).productId("PROD-003").quantity(7).build());
 
-        PaymentProcessedEvent event1 = new PaymentProcessedEvent(order1.getId(), 100.0);
-        PaymentFailedEvent event2 = new PaymentFailedEvent(order2.getId(), "Declined", "evt-2");
-        PaymentProcessedEvent event3 = new PaymentProcessedEvent(order3.getId(), 150.0);
+        PaymentProcessedEvent event1 = new PaymentProcessedEvent(1L, order1.getId(), new java.math.BigDecimal("100.0"));
+        PaymentFailedEvent event2 = new PaymentFailedEvent(order2.getId(), order2.getProductId(), order2.getQuantity(), "Declined");
+        PaymentProcessedEvent event3 = new PaymentProcessedEvent(1L, order3.getId(), new java.math.BigDecimal("150.0"));
 
         orderEventListener.handlePaymentProcessed(event1, () -> {});
         orderEventListener.handlePaymentFailed(event2, () -> {});
@@ -180,7 +180,7 @@ class OrderSagaE2ETest {
         assertThat(order.getProductId()).isEqualTo("PROD-001");
         assertThat(order.getQuantity()).isEqualTo(5);
 
-        PaymentProcessedEvent paymentEvent = new PaymentProcessedEvent(order.getId(), 50.0);
+        PaymentProcessedEvent paymentEvent = new PaymentProcessedEvent(1L, order.getId(), new java.math.BigDecimal("50.0"));
         orderEventListener.handlePaymentProcessed(paymentEvent, () -> {});
 
         Order completed = orderRepository.findById(order.getId()).orElseThrow();
@@ -225,7 +225,7 @@ class OrderSagaE2ETest {
 
         for (int i = 0; i < 5; i++) {
             if (i % 2 == 0) {
-                PaymentProcessedEvent event = new PaymentProcessedEvent(created.getId(), 100.0 + i);
+                PaymentProcessedEvent event = new PaymentProcessedEvent(1L, created.getId(), new java.math.BigDecimal(String.valueOf(100.0 + i)));
                 orderEventListener.handlePaymentProcessed(event, () -> {});
             } else {
                 PaymentFailedEvent event = new PaymentFailedEvent(created.getId(), "Retry " + i, "evt-" + i);
@@ -248,7 +248,7 @@ class OrderSagaE2ETest {
 
         OrderResponse created = orderService.createOrder(request);
 
-        PaymentProcessedEvent event = new PaymentProcessedEvent(created.getId(), 100.0);
+        PaymentProcessedEvent event = new PaymentProcessedEvent(1L, created.getId(), new java.math.BigDecimal("100.0"));
         orderEventListener.handlePaymentProcessed(event, () -> {});
         orderEventListener.handlePaymentProcessed(event, () -> {});
 

@@ -51,7 +51,7 @@ class OrderEventListenerKafkaTest {
     @Test
     @DisplayName("Should handle PaymentProcessedEvent and update order to COMPLETED")
     void testHandlePaymentProcessedEvent() {
-        PaymentProcessedEvent event = new PaymentProcessedEvent(testOrder.getId(), 100.0);
+        PaymentProcessedEvent event = new PaymentProcessedEvent(1L, testOrder.getId(), new java.math.BigDecimal("100.0"));
 
         orderEventListener.handlePaymentProcessed(event, () -> {});
 
@@ -62,7 +62,7 @@ class OrderEventListenerKafkaTest {
     @Test
     @DisplayName("Should handle InventoryFailedEvent and cancel order")
     void testHandleInventoryFailedEvent() {
-        InventoryFailedEvent event = new InventoryFailedEvent(testOrder.getId(), "Insufficient stock", "event-1");
+        InventoryFailedEvent event = new InventoryFailedEvent(testOrder.getId());
 
         orderEventListener.handleInventoryFailed(event, () -> {});
 
@@ -73,7 +73,7 @@ class OrderEventListenerKafkaTest {
     @Test
     @DisplayName("Should handle PaymentFailedEvent and cancel order")
     void testHandlePaymentFailedEvent() {
-        PaymentFailedEvent event = new PaymentFailedEvent(testOrder.getId(), "Insufficient funds", "event-2");
+        PaymentFailedEvent event = new PaymentFailedEvent(testOrder.getId(), testOrder.getProductId(), testOrder.getQuantity(), "Insufficient funds");
 
         orderEventListener.handlePaymentFailed(event, () -> {});
 
@@ -92,7 +92,7 @@ class OrderEventListenerKafkaTest {
             .build();
         cancelledOrder = orderRepository.save(cancelledOrder);
 
-        RefundCompletedEvent event = new RefundCompletedEvent(cancelledOrder.getId(), 100.0);
+        RefundCompletedEvent event = new RefundCompletedEvent(cancelledOrder.getId());
 
         orderEventListener.handleRefundCompleted(event, () -> {});
 
@@ -119,8 +119,8 @@ class OrderEventListenerKafkaTest {
             .build();
         order2 = orderRepository.save(order2);
 
-        PaymentProcessedEvent event1 = new PaymentProcessedEvent(order1.getId(), 100.0);
-        PaymentProcessedEvent event2 = new PaymentProcessedEvent(order2.getId(), 150.0);
+        PaymentProcessedEvent event1 = new PaymentProcessedEvent(1L, order1.getId(), new java.math.BigDecimal("100.0"));
+        PaymentProcessedEvent event2 = new PaymentProcessedEvent(1L, order2.getId(), new java.math.BigDecimal("150.0"));
 
         orderEventListener.handlePaymentProcessed(event1, () -> {});
         orderEventListener.handlePaymentProcessed(event2, () -> {});
@@ -138,7 +138,7 @@ class OrderEventListenerKafkaTest {
         testOrder.setStatus(OrderStatus.PENDING);
         orderRepository.save(testOrder);
 
-        InventoryFailedEvent event = new InventoryFailedEvent(testOrder.getId(), "Out of stock", "event-3");
+        InventoryFailedEvent event = new InventoryFailedEvent(testOrder.getId());
 
         orderEventListener.handleInventoryFailed(event, () -> {});
 
@@ -152,7 +152,7 @@ class OrderEventListenerKafkaTest {
         testOrder.setStatus(OrderStatus.PENDING);
         orderRepository.save(testOrder);
 
-        PaymentFailedEvent event = new PaymentFailedEvent(testOrder.getId(), "Payment declined", "event-4");
+        PaymentFailedEvent event = new PaymentFailedEvent(testOrder.getId(), testOrder.getProductId(), testOrder.getQuantity(), "Payment declined");
 
         orderEventListener.handlePaymentFailed(event, () -> {});
 

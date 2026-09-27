@@ -78,8 +78,8 @@ class OrderFlowE2ETest {
         OrderResponse created = orderService.createOrder(request);
         assertThat(created.getStatus()).isEqualTo(OrderStatus.PENDING);
 
-        OrderResponse confirmed = orderService.updateOrderStatus(created.getId(), OrderStatus.CONFIRMED);
-        assertThat(confirmed.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+        OrderResponse confirmed = orderService.updateOrderStatus(created.getId(), OrderStatus.INVENTORY_RESERVED);
+        assertThat(confirmed.getStatus()).isEqualTo(OrderStatus.INVENTORY_RESERVED);
 
         OrderResponse completed = orderService.updateOrderStatus(created.getId(), OrderStatus.COMPLETED);
         assertThat(completed.getStatus()).isEqualTo(OrderStatus.COMPLETED);
@@ -166,7 +166,7 @@ class OrderFlowE2ETest {
 
         OrderResponse created = orderService.createOrder(request);
 
-        orderService.updateOrderStatus(created.getId(), OrderStatus.CONFIRMED);
+        orderService.updateOrderStatus(created.getId(), OrderStatus.INVENTORY_RESERVED);
         orderService.updateOrderStatus(created.getId(), OrderStatus.COMPLETED);
 
         Order final_order = orderRepository.findById(created.getId()).orElseThrow();

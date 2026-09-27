@@ -82,13 +82,13 @@ class OrderRepositoryTest {
             .build();
         Order savedOrder = orderRepository.save(order);
 
-        savedOrder.setStatus(OrderStatus.CONFIRMED);
+        savedOrder.setStatus(OrderStatus.INVENTORY_RESERVED);
         orderRepository.save(savedOrder);
 
         Order updatedOrder = orderRepository.findById(savedOrder.getId()).orElse(null);
 
         assertThat(updatedOrder).isNotNull();
-        assertThat(updatedOrder.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+        assertThat(updatedOrder.getStatus()).isEqualTo(OrderStatus.INVENTORY_RESERVED);
     }
 
     @Test

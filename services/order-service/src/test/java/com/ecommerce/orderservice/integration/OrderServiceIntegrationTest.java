@@ -66,10 +66,10 @@ class OrderServiceIntegrationTest {
             .build();
         Order saved = orderRepository.save(order);
 
-        orderService.updateOrderStatus(saved.getId(), OrderStatus.CONFIRMED);
+        orderService.updateOrderStatus(saved.getId(), OrderStatus.INVENTORY_RESERVED);
 
         Order verified = orderRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getStatus()).isEqualTo(OrderStatus.CONFIRMED);
+        assertThat(verified.getStatus()).isEqualTo(OrderStatus.INVENTORY_RESERVED);
     }
 
     @Test
@@ -83,7 +83,7 @@ class OrderServiceIntegrationTest {
             .build();
         Order saved = orderRepository.save(order);
 
-        orderService.updateOrderStatus(saved.getId(), OrderStatus.CONFIRMED);
+        orderService.updateOrderStatus(saved.getId(), OrderStatus.INVENTORY_RESERVED);
         orderService.updateOrderStatus(saved.getId(), OrderStatus.COMPLETED);
 
         Order final_order = orderRepository.findById(saved.getId()).orElseThrow();
@@ -169,7 +169,7 @@ class OrderServiceIntegrationTest {
 
         Thread.sleep(100);
 
-        orderService.updateOrderStatus(saved.getId(), OrderStatus.CONFIRMED);
+        orderService.updateOrderStatus(saved.getId(), OrderStatus.INVENTORY_RESERVED);
 
         Order updated = orderRepository.findById(saved.getId()).orElseThrow();
         assertThat(updated.getUpdatedAt()).isAfter(originalUpdatedAt);
