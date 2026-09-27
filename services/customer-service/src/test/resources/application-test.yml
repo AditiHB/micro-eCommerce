@@ -25,3 +25,7 @@ logging:
   level:
     root: WARN
     com.ecommerce: INFO
+
+jwt:
+  secret: testSecretKeyForJWTTokenSigningPurposeOnlyForTesting1234567890
+  expiration: 3600000

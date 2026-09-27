@@ -28,6 +28,9 @@ public class ApiConstants {
     public static final String ERROR_CODE_EVENT_PUBLISHING = "EVENT_PUBLISHING_ERROR";
     public static final String ERROR_CODE_BUSINESS = "BUSINESS_ERROR";
     public static final String ERROR_CODE_INTERNAL = "INTERNAL_ERROR";
+    public static final String ERROR_CODE_UNAUTHORIZED = "UNAUTHORIZED";
+    public static final String ERROR_CODE_FORBIDDEN = "FORBIDDEN";
+    public static final String ERROR_CODE_AUTHENTICATION = "AUTHENTICATION_FAILED";
 
     // Pagination Defaults
     public static final int DEFAULT_PAGE_SIZE = 20;
