@@ -2,14 +2,17 @@ package com.ecommerce.common.events;
 
 import java.math.BigDecimal;
 
-public class PaymentProcessedEvent {
+public class PaymentProcessedEvent extends DomainEvent {
     private Long paymentId;
     private Long orderId;
     private BigDecimal amount;
 
-    public PaymentProcessedEvent() {}
+    public PaymentProcessedEvent() {
+        super();
+    }
 
     public PaymentProcessedEvent(Long paymentId, Long orderId, BigDecimal amount) {
+        super(String.valueOf(paymentId), "Payment");
         this.paymentId = paymentId;
         this.orderId = orderId;
         this.amount = amount;

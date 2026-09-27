@@ -5,8 +5,9 @@ import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.PaymentStatus;
 import com.ecommerce.common.events.PaymentProcessedEvent;
-import com.ecommerce.common.exception.EventPublishingException;
+import com.ecommerce.common.events.EventPublisher;
 import com.ecommerce.common.exception.ResourceNotFoundException;
+import com.ecommerce.common.eventsourcing.EventSourcingService;
 import com.ecommerce.paymentservice.Payment;
 import com.ecommerce.paymentservice.PaymentRepository;
 import com.ecommerce.paymentservice.dto.ProcessPaymentRequest;
@@ -19,10 +20,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.KafkaHeaders;
-import org.springframework.messaging.Message;
-import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,7 +32,8 @@ import java.util.List;
 public class PaymentService {
 
     private final PaymentRepository paymentRepository;
-    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final EventPublisher eventPublisher;
+    private final EventSourcingService eventSourcingService;
 
     private static final String KAFKA_TOPIC_PAYMENT_PROCESSED = "payment-processed";
     private static final String KAFKA_TOPIC_PAYMENT_FAILED = "payment-failed";
@@ -137,34 +135,16 @@ public class PaymentService {
      * Publishes payment processed event to Kafka.
      *
      * @param payment the processed payment
-     * @throws EventPublishingException if publishing fails
      */
     private void publishPaymentProcessedEvent(Payment payment) {
-        try {
-            PaymentProcessedEvent event = new PaymentProcessedEvent(
-                payment.getId(),
-                payment.getOrderId(),
-                payment.getAmount()
-            );
+        PaymentProcessedEvent event = new PaymentProcessedEvent(
+            payment.getId(),
+            payment.getOrderId(),
+            payment.getAmount()
+        );
 
-            Message<PaymentProcessedEvent> message = MessageBuilder
-                .withPayload(event)
-                .setHeader(KafkaHeaders.TOPIC, KAFKA_TOPIC_PAYMENT_PROCESSED)
-                .build();
-
-            kafkaTemplate.send(message)
-                .whenComplete((result, ex) -> {
-                    if (ex != null) {
-                        log.error("Failed to publish PaymentProcessedEvent for payment {}", payment.getId(), ex);
-                        throw new EventPublishingException("Failed to publish payment processed event", ex);
-                    } else {
-                        log.info("PaymentProcessedEvent published successfully for payment {}", payment.getId());
-                    }
-                });
-        } catch (Exception e) {
-            log.error("Error publishing PaymentProcessedEvent", e);
-            throw new EventPublishingException("Failed to publish payment processed event", e);
-        }
+        eventPublisher.publishEvent(event, KAFKA_TOPIC_PAYMENT_PROCESSED);
+        log.info("PaymentProcessedEvent published successfully for payment {}", payment.getId());
     }
 
     private PaymentResponse mapToResponse(Payment payment) {

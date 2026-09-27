@@ -1,0 +1,154 @@
+name: Build & Code Quality
+
+on:
+  push:
+    branches: [ main, develop, 'claude/**' ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        java-version: ['17']
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK ${{ matrix.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java-version }}
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run Maven clean
+        run: mvn clean -DskipTests=true -q
+
+      - name: Run unit tests
+        run: mvn test -q
+
+      - name: Run integration tests
+        run: mvn verify -DskipUnitTests=false -q
+
+      - name: Build project
+        run: mvn package -DskipTests=true -q
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            **/target/surefire-reports
+            **/target/failsafe-reports
+          retention-days: 30
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            services/*/target/*.jar
+            infrastructure/target/*.jar
+          retention-days: 7
+
+      - name: Publish test results
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Test Results
+          path: '**/target/*-reports/*.xml'
+          reporter: 'java-junit'
+          fail-on-error: true
+
+  code-quality:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: 17
+          distribution: 'temurin'
+          cache: maven
+
+      - name: SonarQube Scan
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            mvn clean verify sonar:sonar \
+              -Dsonar.projectKey=micro-ecommerce \
+              -Dsonar.sources=. \
+              -Dsonar.host.url=$SONAR_HOST_URL \
+              -Dsonar.login=$SONAR_TOKEN \
+              -DskipTests=false
+          else
+            echo "Skipping SonarQube - secrets not configured"
+          fi
+
+      - name: Check code format with Checkstyle
+        run: |
+          mvn checkstyle:check || true
+
+      - name: Generate code coverage report
+        run: mvn jacoco:report
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./target/site/jacoco/jacoco.xml
+          flags: unittests
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  notify-slack:
+    runs-on: ubuntu-latest
+    needs: [build, code-quality]
+    if: always()
+
+    steps:
+      - name: Notify Slack - Build Status
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {
+              "text": "Build Pipeline Update",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Build Status*\n${{ needs.build.result == 'success' && '✅ Build Passed' || '❌ Build Failed' }}\n*Code Quality*\n${{ needs.code-quality.result == 'success' && '✅ Quality Checks Passed' || '⚠️ Quality Issues' }}\nBranch: `${{ github.ref_name }}`\nCommit: `${{ github.sha }}`"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Details"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
