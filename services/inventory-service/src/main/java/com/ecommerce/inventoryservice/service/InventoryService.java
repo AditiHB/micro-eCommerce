@@ -1,5 +1,6 @@
 package com.ecommerce.inventoryservice.service;
 
+import com.ecommerce.common.config.CacheConfig;
 import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.exception.BusinessException;
@@ -10,6 +11,8 @@ import com.ecommerce.inventoryservice.dto.CreateInventoryRequest;
 import com.ecommerce.inventoryservice.dto.InventoryResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -33,6 +36,7 @@ public class InventoryService {
      * @param request the inventory creation request
      * @return the created inventory response
      */
+    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
     public InventoryResponse createInventory(CreateInventoryRequest request) {
         log.info("Creating inventory for product: {}", request.getProductId());
 
@@ -55,6 +59,7 @@ public class InventoryService {
      * @throws ResourceNotFoundException if inventory not found
      */
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.INVENTORY_CACHE, key = "#id")
     public InventoryResponse getInventory(Long id) {
         log.info("Fetching inventory with ID: {}", id);
 
@@ -73,6 +78,7 @@ public class InventoryService {
      * @return paged inventory responses
      */
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.INVENTORY_CACHE, key = "'all:' + #pageNumber + ':' + #pageSize + ':' + #sortBy")
     public PagedResponse<InventoryResponse> getAllInventory(int pageNumber, int pageSize, String sortBy) {
         log.info("Fetching inventory items - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
 
@@ -98,6 +104,7 @@ public class InventoryService {
      * @throws ResourceNotFoundException if inventory not found
      * @throws BusinessException if insufficient stock
      */
+    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
     public InventoryResponse reserveStock(Long id, Integer quantity) {
         log.info("Reserving {} units from inventory {}", quantity, id);
 
@@ -127,6 +134,7 @@ public class InventoryService {
      * @return the updated inventory response
      * @throws ResourceNotFoundException if inventory not found
      */
+    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
     public InventoryResponse releaseStock(Long id, Integer quantity) {
         log.info("Releasing {} units to inventory {}", quantity, id);
 
@@ -148,6 +156,7 @@ public class InventoryService {
      * @return the updated inventory response
      * @throws ResourceNotFoundException if inventory not found
      */
+    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
     public InventoryResponse updateInventory(Long id, Integer newQuantity) {
         log.info("Updating inventory {} to quantity {}", id, newQuantity);
 

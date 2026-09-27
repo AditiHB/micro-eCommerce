@@ -1,5 +1,6 @@
 package com.ecommerce.paymentservice.service;
 
+import com.ecommerce.common.config.CacheConfig;
 import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.PaymentStatus;
@@ -12,6 +13,8 @@ import com.ecommerce.paymentservice.dto.ProcessPaymentRequest;
 import com.ecommerce.paymentservice.dto.PaymentResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -43,6 +46,7 @@ public class PaymentService {
      * @param request the payment processing request
      * @return the processed payment response
      */
+    @CacheEvict(value = CacheConfig.PAYMENTS_CACHE, allEntries = true)
     public PaymentResponse processPayment(ProcessPaymentRequest request) {
         log.info("Processing payment for order: {}, amount: {}", request.getOrderId(), request.getAmount());
 
@@ -72,6 +76,7 @@ public class PaymentService {
      * @throws ResourceNotFoundException if payment not found
      */
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.PAYMENTS_CACHE, key = "#id")
     public PaymentResponse getPayment(Long id) {
         log.info("Fetching payment with ID: {}", id);
 
@@ -90,6 +95,7 @@ public class PaymentService {
      * @return paged payment responses
      */
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.PAYMENTS_CACHE, key = "'all:' + #pageNumber + ':' + #pageSize + ':' + #sortBy")
     public PagedResponse<PaymentResponse> getAllPayments(int pageNumber, int pageSize, String sortBy) {
         log.info("Fetching payments - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
 
@@ -113,6 +119,7 @@ public class PaymentService {
      * @return the refunded payment response
      * @throws ResourceNotFoundException if payment not found
      */
+    @CacheEvict(value = CacheConfig.PAYMENTS_CACHE, allEntries = true)
     public PaymentResponse refundPayment(Long id) {
         log.info("Processing refund for payment: {}", id);
 

@@ -1,5 +1,6 @@
 package com.ecommerce.orderservice.service;
 
+import com.ecommerce.common.config.CacheConfig;
 import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.OrderStatus;
@@ -12,6 +13,8 @@ import com.ecommerce.orderservice.dto.CreateOrderRequest;
 import com.ecommerce.orderservice.dto.OrderResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -43,6 +46,7 @@ public class OrderService {
      * @return the created order response
      * @throws EventPublishingException if event publishing fails
      */
+    @CacheEvict(value = CacheConfig.ORDERS_CACHE, allEntries = true)
     public OrderResponse createOrder(CreateOrderRequest request) {
         log.info("Creating order for customer: {}", request.getCustomerId());
 
@@ -69,6 +73,7 @@ public class OrderService {
      * @throws ResourceNotFoundException if order not found
      */
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.ORDERS_CACHE, key = "#id")
     public OrderResponse getOrder(Long id) {
         log.info("Fetching order with ID: {}", id);
 
@@ -87,6 +92,7 @@ public class OrderService {
      * @return paged order responses
      */
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.ORDERS_CACHE, key = "'all:' + #pageNumber + ':' + #pageSize + ':' + #sortBy")
     public PagedResponse<OrderResponse> getAllOrders(int pageNumber, int pageSize, String sortBy) {
         log.info("Fetching orders - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
 
@@ -111,6 +117,7 @@ public class OrderService {
      * @return the updated order response
      * @throws ResourceNotFoundException if order not found
      */
+    @CacheEvict(value = CacheConfig.ORDERS_CACHE, allEntries = true)
     public OrderResponse updateOrderStatus(Long id, OrderStatus status) {
         log.info("Updating order {} status to {}", id, status);
 
