@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: discovery-server-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+data:
+  application.yml: |
+    server:
+      port: {{ .Values.discoveryServer.port }}
+    spring:
+      application:
+        name: discovery-server
+    eureka:
+      instance:
+        hostname: discovery-server
+      server:
+        enableSelfPreservation: false
+        eviction-interval-timer-in-ms: 4000
+      client:
+        registerWithEureka: false
+        fetchRegistry: false
+        serviceUrl:
+          defaultZone: http://discovery-server:{{ .Values.discoveryServer.port }}/eureka/
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-server-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+data:
+  application.yml: |
+    server:
+      port: {{ .Values.configServer.port }}
+    spring:
+      application:
+        name: config-server
+      cloud:
+        config:
+          server:
+            git:
+              uri: file:///app/config-repo
+              default-label: main
+              search-paths: '/**'
+    eureka:
+      client:
+        service-url:
+          defaultZone: http://discovery-server:{{ .Values.discoveryServer.port }}/eureka/
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+data:
+  application.yml: |
+    server:
+      port: 8080
+    spring:
+      application:
+        name: api-gateway
+      cloud:
+        gateway:
+          routes:
+            - id: customer-service
+              uri: http://customer-service:{{ .Values.services.customer.port }}
+              predicates:
+                - Path=/api/customers/**
+            - id: order-service
+              uri: http://order-service:{{ .Values.services.order.port }}
+              predicates:
+                - Path=/api/orders/**
+            - id: inventory-service
+              uri: http://inventory-service:{{ .Values.services.inventory.port }}
+              predicates:
+                - Path=/api/inventory/**
+            - id: payment-service
+              uri: http://payment-service:{{ .Values.services.payment.port }}
+              predicates:
+                - Path=/api/payments/**
+    eureka:
+      client:
+        service-url:
+          defaultZone: http://discovery-server:{{ .Values.discoveryServer.port }}/eureka/
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info

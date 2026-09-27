@@ -1,0 +1,140 @@
+namespace: ecommerce
+
+replicaCount: 2
+
+image:
+  registry: docker.io
+  pullPolicy: IfNotPresent
+  tag: latest
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+nodeSelector: {}
+affinity: {}
+tolerations: []
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+
+# API Gateway configuration
+apiGateway:
+  enabled: true
+  replicaCount: 2
+  service:
+    type: LoadBalancer
+    port: 80
+    targetPort: 8080
+
+# Discovery Server configuration
+discoveryServer:
+  enabled: true
+  replicaCount: 1
+  port: 8761
+
+# Config Server configuration
+configServer:
+  enabled: true
+  replicaCount: 1
+  port: 8888
+
+# Services configuration
+services:
+  customer:
+    enabled: true
+    replicaCount: 2
+    port: 8081
+  order:
+    enabled: true
+    replicaCount: 2
+    port: 8082
+  inventory:
+    enabled: true
+    replicaCount: 2
+    port: 8083
+  payment:
+    enabled: true
+    replicaCount: 2
+    port: 8084
+
+# Infrastructure configuration
+infrastructure:
+  redis:
+    enabled: true
+    replicaCount: 1
+    image: redis:7-alpine
+    port: 6379
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    persistence:
+      enabled: true
+      size: 1Gi
+
+  h2Database:
+    enabled: true
+    replicaCount: 1
+    image: h2database/h2
+    port: 8082
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    persistence:
+      enabled: true
+      size: 2Gi
+
+# Secrets configuration
+secrets:
+  jwtSecret: "mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890"
+  dbUsername: "sa"
+  dbPassword: "password"
+  redisPassword: "redisPassword123"
+
+# ConfigMaps configuration
+configMaps:
+  logLevel: DEBUG
+  environment: kubernetes
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+  hosts:
+    - host: api.ecommerce.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Health checks configuration
+healthChecks:
+  liveness:
+    initialDelaySeconds: 60
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 45
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3

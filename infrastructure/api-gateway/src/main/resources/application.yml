@@ -1,15 +1,43 @@
 server:
   port: 8080
+  http2:
+    enabled: true
 
 spring:
   application:
     name: api-gateway
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 2000ms
+      jedis:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+          max-wait: -1ms
+
   cloud:
     gateway:
       discovery:
         locator:
           enabled: true
           lower-case-service-id: true
+      globalcors:
+        corsConfigurations:
+          '[/**]':
+            allowed-origins: "*"
+            allowed-methods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - PATCH
+              - OPTIONS
+            allowed-headers: "*"
+            allow-credentials: false
       routes:
         - id: order-service
           uri: lb://order-service
@@ -20,20 +48,118 @@ spring:
               args:
                 name: orderCircuitBreaker
                 fallbackUri: forward:/fallback/service
-        - id: inventory-service
-          uri: lb://inventory-service
-          predicates:
-            - Path=/api/inventory/**
-        - id: payment-service
-          uri: lb://payment-service
-          predicates:
-            - Path=/api/payments/**
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 100
+            - name: AuthenticationFilter
+            - StripPrefix=2
+
         - id: customer-service
           uri: lb://customer-service
           predicates:
             - Path=/api/customers/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: customerCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 150
+            - name: AuthenticationFilter
+            - StripPrefix=2
+
+        - id: inventory-service
+          uri: lb://inventory-service
+          predicates:
+            - Path=/api/inventory/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: inventoryCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 200
+            - name: AuthenticationFilter
+            - StripPrefix=2
+
+        - id: payment-service
+          uri: lb://payment-service
+          predicates:
+            - Path=/api/payments/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: paymentCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 50
+            - name: AuthenticationFilter
+            - StripPrefix=2
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        slowCallRateThreshold: 100
+        slowCallDurationThreshold: 2000ms
+        waitDurationInOpenState: 30000ms
+        permittedNumberOfCallsInHalfOpenState: 5
+    instances:
+      orderCircuitBreaker:
+        baseConfig: default
+      customerCircuitBreaker:
+        baseConfig: default
+      inventoryCircuitBreaker:
+        baseConfig: default
+      paymentCircuitBreaker:
+        baseConfig: default
+
+  timelimiter:
+    configs:
+      default:
+        cancelRunningFuture: true
+        timeoutDuration: 10000ms
+    instances:
+      orderCircuitBreaker:
+        baseConfig: default
+      customerCircuitBreaker:
+        baseConfig: default
+      inventoryCircuitBreaker:
+        baseConfig: default
+      paymentCircuitBreaker:
+        baseConfig: default
+
+jwt:
+  secret: mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890
+  expiration: 86400000
 
 eureka:
   client:
     service-url:
       defaultZone: http://localhost:8761/eureka/
+    healthcheck:
+      enabled: true
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${spring.application.instance_id:${random.value}}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,circuitbreakers,circuitbreaker-events
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ${spring.application.name}
+    export:
+      simple:
+        enabled: true
