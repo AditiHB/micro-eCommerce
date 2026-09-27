@@ -19,12 +19,19 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @RestController
 @RequestMapping(ApiConstants.API_PREFIX + ApiConstants.CUSTOMERS_ENDPOINT)
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "Customer Management", description = "APIs for managing customers")
 public class CustomerController {
+    
+    private static final Logger log = LoggerFactory.getLogger(CustomerController.class);
+    
+    private final CustomerRepository repository;
 
     private final CustomerService customerService;
 
@@ -65,6 +72,9 @@ public class CustomerController {
             @PathVariable Long id) {
         log.info("GET /api/customers/{} - Retrieving customer", id);
         return ResponseEntity.ok(customerService.getCustomer(id));
+    public List<Customer> getAll() {
+        log.info("Fetching all customers");
+        return repository.findAll();
     }
 
     /**
@@ -123,5 +133,8 @@ public class CustomerController {
         log.info("DELETE /api/customers/{} - Deleting customer", id);
         customerService.deleteCustomer(id);
         return ResponseEntity.noContent().build();
+    public Customer create(@RequestBody Customer customer) {
+        log.info("Creating a new customer: {}", customer.getName());
+        return repository.save(customer);
     }
 }
