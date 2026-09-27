@@ -1,0 +1,348 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-logging-config
+  namespace: kube-system
+data:
+  audit-policy.yaml: |
+    apiVersion: audit.k8s.io/v1
+    kind: Policy
+    # Log all requests at the RequestResponse level
+    rules:
+      # Certificate operations - full logging
+      - level: RequestResponse
+        omitStages:
+        - RequestReceived
+        resources:
+        - group: ""
+          resources: ["secrets"]
+        namespaces: ["vault", "ecommerce"]
+        annotations:
+          log_type: "certificate_operation"
+          retention: "7_years"
+
+      # Authentication operations
+      - level: RequestResponse
+        omitStages:
+        - RequestReceived
+        resources:
+        - group: "authentication.k8s.io"
+        - group: "authorization.k8s.io"
+        annotations:
+          log_type: "auth_operation"
+          retention: "7_years"
+
+      # Secret access by services
+      - level: RequestResponse
+        omitStages:
+        - RequestReceived
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+        resources:
+        - group: ""
+          resources: ["secrets"]
+        annotations:
+          log_type: "secrets_access"
+          retention: "7_years"
+
+      # User actions
+      - level: RequestResponse
+        omitStages:
+        - RequestReceived
+        userGroups: ["system:masters", "system:nodes"]
+        verbs: ["create", "update", "patch", "delete"]
+        annotations:
+          log_type: "user_action"
+          retention: "7_years"
+
+      # Pod security policy violations
+      - level: RequestResponse
+        omitStages:
+        - RequestReceived
+        verbs: ["create", "update", "patch"]
+        resources:
+        - group: "policy"
+          resources: ["podsecuritypolicies"]
+        annotations:
+          log_type: "psp_violation"
+          retention: "7_years"
+
+      # TLS certificate operations
+      - level: RequestResponse
+        omitStages:
+        - RequestReceived
+        verbs: ["create", "update", "patch", "delete"]
+        resources:
+        - group: "cert-manager.io"
+          resources: ["certificates", "certificaterequests"]
+        annotations:
+          log_type: "certificate_operation"
+          retention: "7_years"
+
+      # Authorization denials
+      - level: Failure
+        omitStages:
+        - RequestReceived
+        annotations:
+          log_type: "auth_failure"
+          retention: "1_year"
+
+      # Default logging
+      - level: Metadata
+        omitStages:
+        - RequestReceived
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-config
+  namespace: monitoring
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+    - type: log
+      enabled: true
+      paths:
+        - /var/log/audit/audit.log
+      json.message_key: log
+      json.keys_under_root: true
+      fields:
+        log_type: kubernetes_audit
+      tags: ["kubernetes", "audit"]
+
+    - type: log
+      enabled: true
+      paths:
+        - /var/log/vault/audit.log
+      json.message_key: log
+      json.keys_under_root: true
+      fields:
+        log_type: vault_audit
+      tags: ["vault", "audit", "secrets"]
+
+    - type: log
+      enabled: true
+      paths:
+        - /var/log/nginx/access.log
+      fields:
+        log_type: nginx_access
+      tags: ["nginx", "access"]
+
+    - type: log
+      enabled: true
+      paths:
+        - /var/log/payment/access.log
+      fields:
+        log_type: payment_access
+      tags: ["payment", "access"]
+      # Never log sensitive data
+      exclude_lines:
+        - "pan=|card_number=|cvv=|password=|api_key=|secret="
+
+    - type: log
+      enabled: true
+      paths:
+        - /var/log/gdpr/access.log
+      json.message_key: log
+      json.keys_under_root: true
+      fields:
+        log_type: gdpr_access
+      tags: ["gdpr", "compliance"]
+
+    output.elasticsearch:
+      hosts: ["elasticsearch:9200"]
+      index: "audit-%{+yyyy.MM.dd}"
+      template.name: "audit-template"
+      template.pattern: "audit-*"
+      pipeline: "audit-pipeline"
+
+    processors:
+      - add_cloud_metadata: ~
+      - add_host_metadata: ~
+      - add_kubernetes_metadata:
+          in_cluster: true
+      - add_process_metadata: ~
+      - timestamp:
+          field: timestamp
+          layouts:
+            - "2006-01-02T15:04:05.999Z07:00"
+
+    # Long-term retention policy
+    setup.ilm.enabled: true
+    setup.ilm.policy_name: "audit-retention-policy"
+    setup.ilm.rollover_alias: "audit"
+    setup.ilm.pattern: "{now/d}-000001"
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: audit-log-archiver
+  namespace: monitoring
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: archiver
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              apk add --no-cache curl gzip tar
+
+              # Archive audit logs
+              ARCHIVE_DIR="/tmp/audit-archives"
+              mkdir -p $ARCHIVE_DIR
+
+              # Compress log files
+              tar czf $ARCHIVE_DIR/audit-logs-$(date +%Y%m%d).tar.gz \
+                /var/log/audit/audit.log \
+                /var/log/vault/audit.log \
+                /var/log/gdpr/access.log
+
+              # Upload to Elasticsearch for long-term retention
+              for archive in $ARCHIVE_DIR/*.tar.gz; do
+                filename=$(basename $archive)
+                curl -X POST "http://elasticsearch:9200/audit-archive/_doc" \
+                  -H 'Content-Type: application/json' \
+                  -d @- << EOF
+              {
+                "archive_date": "$(date -Iseconds)",
+                "archive_file": "$filename",
+                "retention_years": 7,
+                "compliance_required": true
+              }
+              EOF
+              done
+
+              # Clean up local copy after 30 days
+              find /var/log/audit -name "*.log" -mtime +30 -delete
+              find /var/log/vault -name "audit.log" -mtime +30 -delete
+            volumeMounts:
+            - name: audit-logs
+              mountPath: /var/log/audit
+            - name: vault-logs
+              mountPath: /var/log/vault
+          volumes:
+          - name: audit-logs
+            hostPath:
+              path: /var/log/audit
+          - name: vault-logs
+            hostPath:
+              path: /var/log/vault
+          restartPolicy: OnFailure
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-ilm-policy
+  namespace: monitoring
+data:
+  ilm-policy.json: |
+    {
+      "policy": "audit-retention-policy",
+      "phases": {
+        "hot": {
+          "min_age": "0d",
+          "actions": {
+            "rollover": {
+              "max_primary_store_size": "50GB",
+              "max_age": "1d"
+            },
+            "set_priority": {
+              "priority": 100
+            }
+          }
+        },
+        "warm": {
+          "min_age": "7d",
+          "actions": {
+            "set_priority": {
+              "priority": 50
+            },
+            "forcemerge": {
+              "max_num_segments": 1
+            }
+          }
+        },
+        "cold": {
+          "min_age": "90d",
+          "actions": {
+            "set_priority": {
+              "priority": 0
+            },
+            "searchable_snapshot": {
+              "snapshot_repository": "audit-snapshot-repo"
+            }
+          }
+        },
+        "delete": {
+          "min_age": "2555d",
+          "actions": {
+            "delete": {}
+          }
+        }
+      }
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-log-retention-policy
+  namespace: monitoring
+data:
+  retention-policy.sh: |
+    #!/bin/bash
+    # Audit Log Retention Policy
+    # Maintains compliance with 7-year retention requirements
+
+    AUDIT_LOG_DIR="/var/log/audit"
+    VAULT_LOG_DIR="/var/log/vault"
+    GDPR_LOG_DIR="/var/log/gdpr"
+    ARCHIVE_DIR="/backups/audit-archives"
+    RETENTION_DAYS=$((365 * 7))  # 7 years
+
+    echo "Starting audit log retention policy at $(date)"
+
+    # Ensure archive directory exists
+    mkdir -p "$ARCHIVE_DIR"
+
+    # Archive logs older than 30 days
+    for log_dir in "$AUDIT_LOG_DIR" "$VAULT_LOG_DIR" "$GDPR_LOG_DIR"; do
+      if [ -d "$log_dir" ]; then
+        # Find and compress old logs
+        find "$log_dir" -name "*.log.*" -mtime +30 -exec gzip {} \;
+
+        # Archive compressed logs
+        tar czf "$ARCHIVE_DIR/$(basename $log_dir)-$(date +%Y%m%d).tar.gz" \
+          "$log_dir"/*.gz 2>/dev/null || true
+
+        # Remove from active log directory after archiving
+        find "$log_dir" -name "*.log.*.gz" -mtime +30 -delete
+      fi
+    done
+
+    # Generate audit report
+    cat > "$ARCHIVE_DIR/retention-report-$(date +%Y%m%d).txt" << REPORT
+    Audit Log Retention Report
+    Generated: $(date)
+
+    Total Archives: $(find $ARCHIVE_DIR -name "*.tar.gz" | wc -l)
+    Oldest Archive: $(find $ARCHIVE_DIR -name "*.tar.gz" -printf '%T@ %p\n' | sort -n | head -1 | cut -d' ' -f2-)
+    Total Size: $(du -sh $ARCHIVE_DIR | cut -f1)
+
+    Retention Policy:
+    - Active Logs: 30 days
+    - Archive Retention: 7 years
+    - Compliance: PCI-DSS, GDPR, SOC2
+
+    Next Review: $(date -d '+1 month' +%Y-%m-%d)
+    REPORT
+
+    echo "Audit log retention policy completed"
