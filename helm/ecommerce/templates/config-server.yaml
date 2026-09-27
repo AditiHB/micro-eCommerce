@@ -1,0 +1,70 @@
+{{- if .Values.configServer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-server
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+    app: config-server
+spec:
+  replicas: {{ .Values.configServer.replicaCount }}
+  selector:
+    matchLabels:
+      app: config-server
+  template:
+    metadata:
+      labels:
+        app: config-server
+    spec:
+      containers:
+      - name: config-server
+        image: "{{ .Values.image.registry }}/micro-ecommerce:config-server"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.configServer.port }}
+        env:
+        - name: SERVER_PORT
+          value: "{{ .Values.configServer.port }}"
+        resources:
+          {{- toYaml .Values.resources | nindent 12 }}
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: {{ .Values.configServer.port }}
+          initialDelaySeconds: {{ .Values.healthChecks.liveness.initialDelaySeconds }}
+          periodSeconds: {{ .Values.healthChecks.liveness.periodSeconds }}
+          timeoutSeconds: {{ .Values.healthChecks.liveness.timeoutSeconds }}
+          failureThreshold: {{ .Values.healthChecks.liveness.failureThreshold }}
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: {{ .Values.configServer.port }}
+          initialDelaySeconds: {{ .Values.healthChecks.readiness.initialDelaySeconds }}
+          periodSeconds: {{ .Values.healthChecks.readiness.periodSeconds }}
+          timeoutSeconds: {{ .Values.healthChecks.readiness.timeoutSeconds }}
+          failureThreshold: {{ .Values.healthChecks.readiness.failureThreshold }}
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+      volumes:
+      - name: config
+        configMap:
+          name: config-server-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: config-server
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "ecommerce.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: config-server
+  ports:
+  - port: {{ .Values.configServer.port }}
+    targetPort: {{ .Values.configServer.port }}
+    protocol: TCP
+{{- end }}

@@ -1,0 +1,390 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: discovery-server-config
+  namespace: ecommerce
+data:
+  application.yml: |
+    server:
+      port: 8761
+    spring:
+      application:
+        name: discovery-server
+    eureka:
+      instance:
+        hostname: discovery-server
+      server:
+        enableSelfPreservation: false
+        eviction-interval-timer-in-ms: 4000
+      client:
+        registerWithEureka: false
+        fetchRegistry: false
+        serviceUrl:
+          defaultZone: http://discovery-server:8761/eureka/
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+      endpoint:
+        health:
+          show-details: always
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: config-server-config
+  namespace: ecommerce
+data:
+  application.yml: |
+    server:
+      port: 8888
+    spring:
+      application:
+        name: config-server
+      cloud:
+        config:
+          server:
+            git:
+              uri: file:///app/config-repo
+              default-label: main
+              search-paths: '/**'
+      jpa:
+        database-platform: org.hibernate.dialect.H2Dialect
+    eureka:
+      client:
+        service-url:
+          defaultZone: http://discovery-server:8761/eureka/
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+      endpoint:
+        health:
+          show-details: always
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  namespace: ecommerce
+data:
+  application.yml: |
+    server:
+      port: 8080
+    spring:
+      application:
+        name: api-gateway
+      config:
+        import: "optional:configserver:http://config-server:8888/"
+      cloud:
+        gateway:
+          routes:
+            - id: customer-service
+              uri: http://customer-service:8081
+              predicates:
+                - Path=/api/customers/**
+            - id: order-service
+              uri: http://order-service:8082
+              predicates:
+                - Path=/api/orders/**
+            - id: inventory-service
+              uri: http://inventory-service:8083
+              predicates:
+                - Path=/api/inventory/**
+            - id: payment-service
+              uri: http://payment-service:8084
+              predicates:
+                - Path=/api/payments/**
+    eureka:
+      client:
+        service-url:
+          defaultZone: http://discovery-server:8761/eureka/
+    jwt:
+      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+      endpoint:
+        health:
+          show-details: always
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: customer-service-config
+  namespace: ecommerce
+data:
+  application.yml: |
+    server:
+      port: 8081
+    spring:
+      application:
+        name: customer-service
+      config:
+        import: "optional:configserver:http://config-server:8888/"
+      datasource:
+        url: jdbc:h2:mem:customer_db
+        driverClassName: org.h2.Driver
+        username: ${DB_USERNAME:sa}
+        password: ${DB_PASSWORD:password}
+      jpa:
+        database-platform: org.hibernate.dialect.H2Dialect
+        hibernate:
+          ddl-auto: update
+        show-sql: false
+      h2:
+        console:
+          enabled: false
+      redis:
+        host: redis
+        port: 6379
+        database: 0
+        timeout: 2000ms
+        password: ${REDIS_PASSWORD:}
+        lettuce:
+          pool:
+            max-active: 8
+            max-idle: 8
+            min-idle: 0
+      cache:
+        type: redis
+        redis:
+          time-to-live: 600000
+          key-prefix: "customer-service:"
+    eureka:
+      client:
+        service-url:
+          defaultZone: http://discovery-server:8761/eureka/
+    jwt:
+      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+      expiration: 86400000
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+      endpoint:
+        health:
+          show-details: always
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+      health:
+        livenessState:
+          enabled: true
+        readinessState:
+          enabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-service-config
+  namespace: ecommerce
+data:
+  application.yml: |
+    server:
+      port: 8082
+    spring:
+      application:
+        name: order-service
+      config:
+        import: "optional:configserver:http://config-server:8888/"
+      datasource:
+        url: jdbc:h2:mem:order_db
+        driverClassName: org.h2.Driver
+        username: ${DB_USERNAME:sa}
+        password: ${DB_PASSWORD:password}
+      jpa:
+        database-platform: org.hibernate.dialect.H2Dialect
+        hibernate:
+          ddl-auto: update
+        show-sql: false
+      h2:
+        console:
+          enabled: false
+      redis:
+        host: redis
+        port: 6379
+        database: 1
+        timeout: 2000ms
+        password: ${REDIS_PASSWORD:}
+        lettuce:
+          pool:
+            max-active: 8
+            max-idle: 8
+            min-idle: 0
+      cache:
+        type: redis
+        redis:
+          time-to-live: 600000
+          key-prefix: "order-service:"
+    eureka:
+      client:
+        service-url:
+          defaultZone: http://discovery-server:8761/eureka/
+    jwt:
+      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+      endpoint:
+        health:
+          show-details: always
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+      health:
+        livenessState:
+          enabled: true
+        readinessState:
+          enabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-service-config
+  namespace: ecommerce
+data:
+  application.yml: |
+    server:
+      port: 8083
+    spring:
+      application:
+        name: inventory-service
+      config:
+        import: "optional:configserver:http://config-server:8888/"
+      datasource:
+        url: jdbc:h2:mem:inventory_db
+        driverClassName: org.h2.Driver
+        username: ${DB_USERNAME:sa}
+        password: ${DB_PASSWORD:password}
+      jpa:
+        database-platform: org.hibernate.dialect.H2Dialect
+        hibernate:
+          ddl-auto: update
+        show-sql: false
+      h2:
+        console:
+          enabled: false
+      redis:
+        host: redis
+        port: 6379
+        database: 2
+        timeout: 2000ms
+        password: ${REDIS_PASSWORD:}
+        lettuce:
+          pool:
+            max-active: 8
+            max-idle: 8
+            min-idle: 0
+      cache:
+        type: redis
+        redis:
+          time-to-live: 600000
+          key-prefix: "inventory-service:"
+    eureka:
+      client:
+        service-url:
+          defaultZone: http://discovery-server:8761/eureka/
+    jwt:
+      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+      endpoint:
+        health:
+          show-details: always
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+      health:
+        livenessState:
+          enabled: true
+        readinessState:
+          enabled: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payment-service-config
+  namespace: ecommerce
+data:
+  application.yml: |
+    server:
+      port: 8084
+    spring:
+      application:
+        name: payment-service
+      config:
+        import: "optional:configserver:http://config-server:8888/"
+      datasource:
+        url: jdbc:h2:mem:payment_db
+        driverClassName: org.h2.Driver
+        username: ${DB_USERNAME:sa}
+        password: ${DB_PASSWORD:password}
+      jpa:
+        database-platform: org.hibernate.dialect.H2Dialect
+        hibernate:
+          ddl-auto: update
+        show-sql: false
+      h2:
+        console:
+          enabled: false
+      redis:
+        host: redis
+        port: 6379
+        database: 3
+        timeout: 2000ms
+        password: ${REDIS_PASSWORD:}
+        lettuce:
+          pool:
+            max-active: 8
+            max-idle: 8
+            min-idle: 0
+      cache:
+        type: redis
+        redis:
+          time-to-live: 600000
+          key-prefix: "payment-service:"
+    eureka:
+      client:
+        service-url:
+          defaultZone: http://discovery-server:8761/eureka/
+    jwt:
+      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,prometheus,info
+      endpoint:
+        health:
+          show-details: always
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+      health:
+        livenessState:
+          enabled: true
+        readinessState:
+          enabled: true
