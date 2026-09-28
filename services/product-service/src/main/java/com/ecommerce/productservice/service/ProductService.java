@@ -167,6 +167,13 @@ public class ProductService {
                 .build());
     }
 
+    /**
+     * Adjusts this catalog entry's own stock counter (REST-triggered only).
+     * NOTE: this is NOT wired into the order/inventory/payment Kafka saga -
+     * inventory-service keeps its own separate stock ledger (see
+     * InventoryService.reserveStock), keyed by a product code rather than
+     * this entity's id. The two are independent sources of truth today.
+     */
     @Transactional
     public void reserveInventory(Long productId, Integer quantityToReserve) {
         log.info("Reserving inventory for product: {}, quantity: {}", productId, quantityToReserve);

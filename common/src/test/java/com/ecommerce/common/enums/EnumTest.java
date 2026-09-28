@@ -48,8 +48,8 @@ class EnumTest {
     @Test
     @DisplayName("Should compare PaymentStatus values")
     void testPaymentStatusComparison() {
-        PaymentStatus status1 = PaymentStatus.COMPLETED;
-        PaymentStatus status2 = PaymentStatus.COMPLETED;
+        PaymentStatus status1 = PaymentStatus.PROCESSED;
+        PaymentStatus status2 = PaymentStatus.PROCESSED;
 
         assertThat(status1).isEqualTo(status2);
     }

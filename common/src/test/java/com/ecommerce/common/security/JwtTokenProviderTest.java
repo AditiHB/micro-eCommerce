@@ -33,7 +33,7 @@ class JwtTokenProviderTest {
 
     @BeforeEach
     void setUp() {
-        testSecret = "mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890";
+        testSecret = "mySecretKeyForJWTTokenSigningPurposeOnlyInUnitTests1234567890ABCDEFGHIJ";
         testExpiration = 86400000L;
         ReflectionTestUtils.setField(jwtTokenProvider, "jwtSecret", testSecret);
         ReflectionTestUtils.setField(jwtTokenProvider, "jwtExpirationMs", testExpiration);
@@ -96,8 +96,9 @@ class JwtTokenProviderTest {
     @Test
     @DisplayName("Should reject null token")
     void testValidateNullToken() {
-        assertThatThrownBy(() -> jwtTokenProvider.validateToken(null))
-            .isInstanceOf(Exception.class);
+        boolean isValid = jwtTokenProvider.validateToken(null);
+
+        assertThat(isValid).isFalse();
     }
 
     @Test
@@ -122,10 +123,14 @@ class JwtTokenProviderTest {
 
     @Test
     @DisplayName("Should generate different tokens at different times")
-    void testGenerateDifferentTokens() {
+    void testGenerateDifferentTokens() throws InterruptedException {
         when(authentication.getName()).thenReturn("testuser");
 
         String token1 = jwtTokenProvider.generateToken(authentication);
+        // JWT "iat"/"exp" claims only have second-level precision and there is no
+        // per-token nonce, so two tokens minted within the same second are byte-for-byte
+        // identical. Cross a second boundary so the claims - and thus the token - differ.
+        Thread.sleep(1000);
         String token2 = jwtTokenProvider.generateToken(authentication);
 
         assertThat(token1).isNotEqualTo(token2);

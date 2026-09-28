@@ -8,7 +8,7 @@ import org.springframework.cache.CacheManager;
 
 import static org.assertj.core.api.Assertions.*;
 
-@SpringBootTest
+@SpringBootTest(classes = CacheConfig.class)
 @DisplayName("CacheConfig Integration Tests")
 class CacheConfigTest {
 
