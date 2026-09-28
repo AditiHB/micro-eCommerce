@@ -52,7 +52,7 @@ class CustomerResponseTest {
     @Test
     @DisplayName("Should support all-args constructor")
     void testAllArgsConstructor() {
-        CustomerResponse response = new CustomerResponse(10L, "Bob Smith", "bob@example.com");
+        CustomerResponse response = new CustomerResponse(10L, "Bob Smith", "bob@example.com", null, null);
 
         assertThat(response.getId()).isEqualTo(10L);
         assertThat(response.getName()).isEqualTo("Bob Smith");

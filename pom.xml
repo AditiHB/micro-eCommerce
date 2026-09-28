@@ -218,6 +218,16 @@
                         </execution>
                     </executions>
                 </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <!-- Preserve method parameter names in bytecode so Spring MVC can
+                             resolve @PathVariable/@RequestParam names via reflection without
+                             requiring every parameter to be explicitly named. -->
+                        <parameters>true</parameters>
+                    </configuration>
+                </plugin>
             </plugins>
         </pluginManagement>
     </build>

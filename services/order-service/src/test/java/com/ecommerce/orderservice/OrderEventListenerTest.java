@@ -1,8 +1,11 @@
 package com.ecommerce.orderservice;
 
-import com.ecommerce.common.events.InventoryReservedEvent;
+import com.ecommerce.common.enums.OrderStatus;
 import com.ecommerce.common.events.InventoryFailedEvent;
 import com.ecommerce.common.events.OrderCancelledEvent;
+import com.ecommerce.common.events.PaymentFailedEvent;
+import com.ecommerce.common.events.PaymentProcessedEvent;
+import com.ecommerce.common.events.RefundCompletedEvent;
 import com.ecommerce.common.events.EventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.support.Acknowledgment;
 
+import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -36,24 +40,32 @@ class OrderEventListenerTest {
     @InjectMocks
     private OrderEventListener listener;
 
-    private InventoryReservedEvent inventoryReservedEvent;
+    private PaymentProcessedEvent paymentProcessedEvent;
     private InventoryFailedEvent inventoryFailedEvent;
+    private PaymentFailedEvent paymentFailedEvent;
+    private RefundCompletedEvent refundCompletedEvent;
     private Order order;
 
     @BeforeEach
     void setUp() {
-        String orderId = "order-123";
+        Long orderId = 123L;
         String eventId = UUID.randomUUID().toString();
 
-        inventoryReservedEvent = new InventoryReservedEvent(orderId, "PROD-001", 5);
-        inventoryReservedEvent.setEventId(eventId);
+        paymentProcessedEvent = new PaymentProcessedEvent(1L, orderId, BigDecimal.valueOf(99.99));
+        paymentProcessedEvent.setEventId(eventId);
 
         inventoryFailedEvent = new InventoryFailedEvent(orderId);
         inventoryFailedEvent.setEventId(eventId);
 
+        paymentFailedEvent = new PaymentFailedEvent(orderId);
+        paymentFailedEvent.setEventId(eventId);
+
+        refundCompletedEvent = new RefundCompletedEvent(orderId, 1L, BigDecimal.valueOf(99.99));
+        refundCompletedEvent.setEventId(eventId);
+
         order = Order.builder()
-            .id(1L)
-            .customerId("customer-123")
+            .id(123L)
+            .customerId(1L)
             .productId("PROD-001")
             .quantity(5)
             .status(OrderStatus.PENDING)
@@ -61,26 +73,26 @@ class OrderEventListenerTest {
     }
 
     @Test
-    @DisplayName("Should update order status when inventory is reserved")
-    void testHandleInventoryReservedSuccess() {
-        when(repository.findByOrderId("order-123")).thenReturn(Optional.of(order));
+    @DisplayName("Should update order status to COMPLETED when payment is processed")
+    void testHandlePaymentProcessedSuccess() {
+        when(repository.findById(123L)).thenReturn(Optional.of(order));
         when(repository.save(any())).thenReturn(order);
 
-        listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
+        listener.handlePaymentProcessed(paymentProcessedEvent, acknowledgment);
 
-        verify(repository).findByOrderId("order-123");
+        verify(repository).findById(123L);
         verify(repository).save(any(Order.class));
         verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should handle inventory reserved when order not found")
-    void testHandleInventoryReservedOrderNotFound() {
-        when(repository.findByOrderId("order-123")).thenReturn(Optional.empty());
+    @DisplayName("Should handle payment processed when order not found")
+    void testHandlePaymentProcessedOrderNotFound() {
+        when(repository.findById(123L)).thenReturn(Optional.empty());
 
-        listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
+        listener.handlePaymentProcessed(paymentProcessedEvent, acknowledgment);
 
-        verify(repository).findByOrderId("order-123");
+        verify(repository).findById(123L);
         verify(repository, never()).save(any());
         verify(acknowledgment).acknowledge();
     }
@@ -88,12 +100,12 @@ class OrderEventListenerTest {
     @Test
     @DisplayName("Should cancel order when inventory fails")
     void testHandleInventoryFailedSuccess() {
-        when(repository.findByOrderId("order-123")).thenReturn(Optional.of(order));
+        when(repository.findById(123L)).thenReturn(Optional.of(order));
         when(repository.save(any())).thenReturn(order);
 
         listener.handleInventoryFailed(inventoryFailedEvent, acknowledgment);
 
-        verify(repository).findByOrderId("order-123");
+        verify(repository).findById(123L);
         verify(repository).save(any(Order.class));
         verify(eventPublisher).publishEvent(any(OrderCancelledEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
@@ -102,32 +114,69 @@ class OrderEventListenerTest {
     @Test
     @DisplayName("Should handle inventory failed when order not found")
     void testHandleInventoryFailedOrderNotFound() {
-        when(repository.findByOrderId("order-123")).thenReturn(Optional.empty());
+        when(repository.findById(123L)).thenReturn(Optional.empty());
 
         listener.handleInventoryFailed(inventoryFailedEvent, acknowledgment);
 
-        verify(repository).findByOrderId("order-123");
+        verify(repository).findById(123L);
         verify(repository, never()).save(any());
         verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should handle exception during inventory reserved processing")
-    void testHandleInventoryReservedException() {
-        when(repository.findByOrderId("order-123")).thenThrow(new RuntimeException("Database error"));
+    @DisplayName("Should cancel order when payment fails")
+    void testHandlePaymentFailedSuccess() {
+        when(repository.findById(123L)).thenReturn(Optional.of(order));
+        when(repository.save(any())).thenReturn(order);
 
-        listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
+        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
+        verify(repository).findById(123L);
+        verify(repository).save(any(Order.class));
+        verify(eventPublisher).publishEvent(any(OrderCancelledEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
+    }
+
+    @Test
+    @DisplayName("Should handle payment failed when order not found")
+    void testHandlePaymentFailedOrderNotFound() {
+        when(repository.findById(123L)).thenReturn(Optional.empty());
+
+        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
+
+        verify(repository).findById(123L);
+        verify(repository, never()).save(any());
+        verify(acknowledgment).acknowledge();
+    }
+
+    @Test
+    @DisplayName("Should log completion when refund is completed")
+    void testHandleRefundCompletedSuccess() {
+        when(repository.findById(123L)).thenReturn(Optional.of(order));
+
+        listener.handleRefundCompleted(refundCompletedEvent, acknowledgment);
+
+        verify(repository).findById(123L);
+        verify(acknowledgment).acknowledge();
+    }
+
+    @Test
+    @DisplayName("Should handle exception during payment processed handling")
+    void testHandlePaymentProcessedException() {
+        when(repository.findById(123L)).thenThrow(new RuntimeException("Database error"));
+
+        listener.handlePaymentProcessed(paymentProcessedEvent, acknowledgment);
+
+        verify(acknowledgment, never()).acknowledge();
     }
 
     @Test
     @DisplayName("Should handle exception during inventory failed processing")
     void testHandleInventoryFailedException() {
-        when(repository.findByOrderId("order-123")).thenThrow(new RuntimeException("Database error"));
+        when(repository.findById(123L)).thenThrow(new RuntimeException("Database error"));
 
         listener.handleInventoryFailed(inventoryFailedEvent, acknowledgment);
 
-        verify(acknowledgment).acknowledge();
+        verify(acknowledgment, never()).acknowledge();
     }
 }

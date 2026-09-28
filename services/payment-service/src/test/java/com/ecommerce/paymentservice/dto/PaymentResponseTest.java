@@ -5,6 +5,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -16,13 +17,13 @@ class PaymentResponseTest {
     void testValidResponse() {
         PaymentResponse response = PaymentResponse.builder()
             .id(1L)
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(99.99))
             .status(PaymentStatus.PROCESSED)
             .build();
 
         assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getOrderId()).isEqualTo("order-123");
+        assertThat(response.getOrderId()).isEqualTo(123L);
         assertThat(response.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(99.99));
         assertThat(response.getStatus()).isEqualTo(PaymentStatus.PROCESSED);
     }
@@ -31,9 +32,9 @@ class PaymentResponseTest {
     @DisplayName("Should update order ID via setter")
     void testSetOrderId() {
         PaymentResponse response = new PaymentResponse();
-        response.setOrderId("order-456");
+        response.setOrderId(456L);
 
-        assertThat(response.getOrderId()).isEqualTo("order-456");
+        assertThat(response.getOrderId()).isEqualTo(456L);
     }
 
     @Test
@@ -66,12 +67,15 @@ class PaymentResponseTest {
     @Test
     @DisplayName("Should support all-args constructor")
     void testAllArgsConstructor() {
-        PaymentResponse response = new PaymentResponse(10L, "order-789", BigDecimal.valueOf(199.99), PaymentStatus.PROCESSING);
+        LocalDateTime now = LocalDateTime.now();
+        PaymentResponse response = new PaymentResponse(10L, 789L, BigDecimal.valueOf(199.99), PaymentStatus.PROCESSING, now, now);
 
         assertThat(response.getId()).isEqualTo(10L);
-        assertThat(response.getOrderId()).isEqualTo("order-789");
+        assertThat(response.getOrderId()).isEqualTo(789L);
         assertThat(response.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(199.99));
         assertThat(response.getStatus()).isEqualTo(PaymentStatus.PROCESSING);
+        assertThat(response.getCreatedAt()).isEqualTo(now);
+        assertThat(response.getUpdatedAt()).isEqualTo(now);
     }
 
     @Test
@@ -90,7 +94,7 @@ class PaymentResponseTest {
     void testZeroAmount() {
         PaymentResponse response = PaymentResponse.builder()
             .id(1L)
-            .orderId("order-zero")
+            .orderId(0L)
             .amount(BigDecimal.ZERO)
             .status(PaymentStatus.PROCESSED)
             .build();

@@ -4,6 +4,8 @@ import com.ecommerce.common.enums.OrderStatus;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDateTime;
+
 import static org.assertj.core.api.Assertions.*;
 
 @DisplayName("OrderResponse DTO Tests")
@@ -14,14 +16,14 @@ class OrderResponseTest {
     void testValidResponse() {
         OrderResponse response = OrderResponse.builder()
             .id(1L)
-            .customerId("customer-123")
+            .customerId(123L)
             .productId("PROD-001")
             .quantity(5)
             .status(OrderStatus.PENDING)
             .build();
 
         assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getCustomerId()).isEqualTo("customer-123");
+        assertThat(response.getCustomerId()).isEqualTo(123L);
         assertThat(response.getProductId()).isEqualTo("PROD-001");
         assertThat(response.getQuantity()).isEqualTo(5);
         assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING);
@@ -31,9 +33,9 @@ class OrderResponseTest {
     @DisplayName("Should update customer ID via setter")
     void testSetCustomerId() {
         OrderResponse response = new OrderResponse();
-        response.setCustomerId("customer-456");
+        response.setCustomerId(456L);
 
-        assertThat(response.getCustomerId()).isEqualTo("customer-456");
+        assertThat(response.getCustomerId()).isEqualTo(456L);
     }
 
     @Test
@@ -75,13 +77,16 @@ class OrderResponseTest {
     @Test
     @DisplayName("Should support all-args constructor")
     void testAllArgsConstructor() {
-        OrderResponse response = new OrderResponse(10L, "customer-789", "PROD-003", 15, OrderStatus.COMPLETED);
+        LocalDateTime now = LocalDateTime.now();
+        OrderResponse response = new OrderResponse(10L, 789L, "PROD-003", 15, OrderStatus.COMPLETED, now, now);
 
         assertThat(response.getId()).isEqualTo(10L);
-        assertThat(response.getCustomerId()).isEqualTo("customer-789");
+        assertThat(response.getCustomerId()).isEqualTo(789L);
         assertThat(response.getProductId()).isEqualTo("PROD-003");
         assertThat(response.getQuantity()).isEqualTo(15);
         assertThat(response.getStatus()).isEqualTo(OrderStatus.COMPLETED);
+        assertThat(response.getCreatedAt()).isEqualTo(now);
+        assertThat(response.getUpdatedAt()).isEqualTo(now);
     }
 
     @Test
@@ -92,7 +97,7 @@ class OrderResponseTest {
         assertThat(response.getId()).isNull();
         assertThat(response.getCustomerId()).isNull();
         assertThat(response.getProductId()).isNull();
-        assertThat(response.getQuantity()).isEqualTo(0);
+        assertThat(response.getQuantity()).isNull();
         assertThat(response.getStatus()).isNull();
     }
 }

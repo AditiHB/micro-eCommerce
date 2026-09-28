@@ -12,12 +12,12 @@ class CreateOrderRequestTest {
     @DisplayName("Should create request with valid data")
     void testValidRequest() {
         CreateOrderRequest request = CreateOrderRequest.builder()
-            .customerId("customer-123")
+            .customerId(123L)
             .productId("PROD-001")
             .quantity(5)
             .build();
 
-        assertThat(request.getCustomerId()).isEqualTo("customer-123");
+        assertThat(request.getCustomerId()).isEqualTo(123L);
         assertThat(request.getProductId()).isEqualTo("PROD-001");
         assertThat(request.getQuantity()).isEqualTo(5);
     }
@@ -26,9 +26,9 @@ class CreateOrderRequestTest {
     @DisplayName("Should update customer ID via setter")
     void testSetCustomerId() {
         CreateOrderRequest request = new CreateOrderRequest();
-        request.setCustomerId("customer-456");
+        request.setCustomerId(456L);
 
-        assertThat(request.getCustomerId()).isEqualTo("customer-456");
+        assertThat(request.getCustomerId()).isEqualTo(456L);
     }
 
     @Test
@@ -52,9 +52,9 @@ class CreateOrderRequestTest {
     @Test
     @DisplayName("Should support all-args constructor")
     void testAllArgsConstructor() {
-        CreateOrderRequest request = new CreateOrderRequest("customer-789", "PROD-003", 15);
+        CreateOrderRequest request = new CreateOrderRequest(789L, "PROD-003", 15);
 
-        assertThat(request.getCustomerId()).isEqualTo("customer-789");
+        assertThat(request.getCustomerId()).isEqualTo(789L);
         assertThat(request.getProductId()).isEqualTo("PROD-003");
         assertThat(request.getQuantity()).isEqualTo(15);
     }
@@ -66,14 +66,14 @@ class CreateOrderRequestTest {
 
         assertThat(request.getCustomerId()).isNull();
         assertThat(request.getProductId()).isNull();
-        assertThat(request.getQuantity()).isEqualTo(0);
+        assertThat(request.getQuantity()).isNull();
     }
 
     @Test
     @DisplayName("Should handle single quantity")
     void testSingleQuantity() {
         CreateOrderRequest request = CreateOrderRequest.builder()
-            .customerId("customer-999")
+            .customerId(999L)
             .productId("PROD-999")
             .quantity(1)
             .build();

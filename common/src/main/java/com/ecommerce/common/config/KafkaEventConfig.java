@@ -39,6 +39,9 @@ public class KafkaEventConfig {
     @Value("${kafka.event.dlq-suffix:-dlq}")
     private String dlqSuffix;
 
+    @Value("${kafka.listener.auto-startup:true}")
+    private boolean listenerAutoStartup;
+
     @Bean
     public KafkaAdmin kafkaAdmin() {
         Map<String, Object> configs = new HashMap<>();
@@ -87,6 +90,7 @@ public class KafkaEventConfig {
         factory.setConsumerFactory(consumerFactory());
         factory.setConcurrency(3);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
+        factory.setAutoStartup(listenerAutoStartup);
         return factory;
     }
 
@@ -97,6 +101,7 @@ public class KafkaEventConfig {
         factory.setConsumerFactory(consumerFactory());
         factory.setConcurrency(1);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
+        factory.setAutoStartup(listenerAutoStartup);
         return factory;
     }
 

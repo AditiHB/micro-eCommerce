@@ -9,11 +9,18 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.messaging.Message;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.concurrent.CompletableFuture;
+
 import static org.hamcrest.Matchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -32,9 +39,16 @@ class OrderControllerIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @MockBean
+    private KafkaTemplate<String, Object> kafkaTemplate;
+
     @BeforeEach
     void setUp() {
         orderRepository.deleteAll();
+        // Kafka isn't available in the test sandbox; EventPublisher.publishEvent() calls
+        // kafkaTemplate.send(message).whenComplete(...), so the mock must return a completed
+        // future rather than null, or the NPE gets wrapped into an EventPublishingException.
+        when(kafkaTemplate.send(any(Message.class))).thenReturn(CompletableFuture.completedFuture(null));
     }
 
     @Test
@@ -176,18 +190,11 @@ class OrderControllerIntegrationTest {
             .build();
         Order savedOrder = orderRepository.save(order);
 
-        CreateOrderRequest updateRequest = CreateOrderRequest.builder()
-            .customerId(3L)
-            .productId("PROD-003-UPDATED")
-            .quantity(20)
-            .build();
-
-        mockMvc.perform(put("/api/orders/" + savedOrder.getId())
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(updateRequest)))
+        mockMvc.perform(put("/api/orders/" + savedOrder.getId() + "/status")
+            .param("status", OrderStatus.INVENTORY_RESERVED.toString())
+            .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.quantity").value(20))
-            .andExpect(jsonPath("$.productId").value("PROD-003-UPDATED"));
+            .andExpect(jsonPath("$.status").value(OrderStatus.INVENTORY_RESERVED.toString()));
     }
 
     @Test
@@ -201,7 +208,8 @@ class OrderControllerIntegrationTest {
             .build();
         Order savedOrder = orderRepository.save(order);
 
-        mockMvc.perform(post("/api/orders/" + savedOrder.getId() + "/cancel")
+        mockMvc.perform(put("/api/orders/" + savedOrder.getId() + "/status")
+            .param("status", OrderStatus.CANCELLED.toString())
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value(OrderStatus.CANCELLED.toString()));

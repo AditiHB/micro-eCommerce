@@ -10,6 +10,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import com.ecommerce.common.service.UserService;
 import org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureTestEntityManager;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
@@ -23,6 +25,12 @@ import static org.assertj.core.api.Assertions.*;
 @ActiveProfiles("test")
 @DisplayName("Customer Service Integration Tests")
 class CustomerServiceIntegrationTest {
+
+    // AuthController (in this service's own package) depends on UserService, which lives in
+    // the common auth subsystem that is deliberately left out of the component scan (see
+    // CommonIntegrationConfig). Mocked here purely so the application context can start.
+    @MockBean
+    private UserService userService;
 
     @Autowired
     private CustomerService customerService;
@@ -187,6 +195,7 @@ class CustomerServiceIntegrationTest {
             .build();
 
         customerService.updateCustomer(saved.getId(), updateRequest);
+        customerRepository.flush();
 
         Customer updated = customerRepository.findById(saved.getId()).orElseThrow();
         assertThat(updated.getUpdatedAt()).isAfter(originalUpdatedAt);

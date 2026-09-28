@@ -14,14 +14,14 @@ class OrderEntityTest {
     void testOrderCreation() {
         Order order = Order.builder()
             .id(1L)
-            .customerId("customer-123")
+            .customerId(123L)
             .productId("product-456")
             .quantity(5)
             .status(OrderStatus.PENDING)
             .build();
 
         assertThat(order.getId()).isEqualTo(1L);
-        assertThat(order.getCustomerId()).isEqualTo("customer-123");
+        assertThat(order.getCustomerId()).isEqualTo(123L);
         assertThat(order.getProductId()).isEqualTo("product-456");
         assertThat(order.getQuantity()).isEqualTo(5);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.PENDING);

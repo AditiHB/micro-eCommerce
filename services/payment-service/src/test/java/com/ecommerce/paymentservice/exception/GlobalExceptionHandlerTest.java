@@ -28,6 +28,7 @@ class GlobalExceptionHandlerTest {
     @BeforeEach
     void setUp() {
         webRequest = mock(WebRequest.class);
+        when(webRequest.getDescription(false)).thenReturn("uri=/api/test");
     }
 
     @Test
@@ -35,7 +36,7 @@ class GlobalExceptionHandlerTest {
     void testHandleResourceNotFoundException() {
         ResourceNotFoundException exception = new ResourceNotFoundException("Payment", 1L);
 
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleResourceNotFoundException(exception, webRequest);
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleResourceNotFound(exception, webRequest);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         assertThat(response.getBody()).isNotNull();
@@ -47,7 +48,7 @@ class GlobalExceptionHandlerTest {
     void testHandleValidationException() {
         ValidationException exception = new ValidationException("Invalid payment data");
 
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleValidationException(exception, webRequest);
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleBusinessException(exception, webRequest);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isNotNull();
@@ -59,7 +60,7 @@ class GlobalExceptionHandlerTest {
     void testHandleGeneralException() {
         Exception exception = new RuntimeException("Internal error");
 
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleGlobalException(exception, webRequest);
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleGenericException(exception, webRequest);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
         assertThat(response.getBody()).isNotNull();
@@ -70,7 +71,7 @@ class GlobalExceptionHandlerTest {
     void testErrorResponseIncludesStatusCode() {
         ValidationException exception = new ValidationException("Invalid amount");
 
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleValidationException(exception, webRequest);
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleBusinessException(exception, webRequest);
 
         assertThat(response.getBody().getStatus()).isEqualTo(HttpStatus.BAD_REQUEST.value());
     }

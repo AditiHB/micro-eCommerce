@@ -10,6 +10,8 @@ import com.ecommerce.productservice.service.ProductService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
@@ -33,9 +35,13 @@ import static org.hamcrest.Matchers.*;
 @TestPropertySource(properties = {
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.kafka.bootstrap-servers=localhost:9092",
-        "spring.liquibase.enabled=false"
+        "spring.liquibase.enabled=false",
+        "kafka.listener.auto-startup=false"
 })
 class ProductServiceIntegrationTest {
+    @MockBean
+    private KafkaTemplate<String, Object> kafkaTemplate;
+
     @Autowired
     private MockMvc mockMvc;
 

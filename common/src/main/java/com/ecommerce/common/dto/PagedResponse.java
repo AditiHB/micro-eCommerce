@@ -1,5 +1,6 @@
 package com.ecommerce.common.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.*;
 
 import java.util.List;
@@ -15,7 +16,9 @@ public class PagedResponse<T> {
     private int pageSize;
     private long totalElements;
     private int totalPages;
+    @JsonProperty("isLast")
     private boolean isLast;
+    @JsonProperty("isFirst")
     private boolean isFirst;
 
     public static <T> PagedResponse<T> of(List<T> content, int pageNumber, int pageSize,

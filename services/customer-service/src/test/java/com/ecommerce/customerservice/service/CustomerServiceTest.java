@@ -57,7 +57,7 @@ class CustomerServiceTest {
             .email("john@example.com")
             .build();
 
-        when(applicationMetrics.recordCustomerCreationTime()).thenReturn(Timer.start());
+        lenient().when(applicationMetrics.recordCustomerCreationTime()).thenReturn(Timer.start());
     }
 
     @Test

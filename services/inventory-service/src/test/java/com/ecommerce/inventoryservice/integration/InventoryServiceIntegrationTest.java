@@ -234,6 +234,7 @@ class InventoryServiceIntegrationTest {
         Thread.sleep(100);
 
         inventoryService.reserveStock(saved.getId(), 10);
+        inventoryRepository.flush();
 
         Inventory updated = inventoryRepository.findById(saved.getId()).orElseThrow();
         assertThat(updated.getUpdatedAt()).isAfter(originalUpdatedAt);

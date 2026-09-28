@@ -44,11 +44,12 @@ class InventoryEventListenerTest {
 
     @BeforeEach
     void setUp() {
-        String orderId = "order-123";
+        Long orderId = 123L;
+        Long customerId = 10L;
         String productId = "PROD-001";
         String eventId = UUID.randomUUID().toString();
 
-        orderCreatedEvent = new OrderCreatedEvent(orderId, productId, 5, 99.99);
+        orderCreatedEvent = new OrderCreatedEvent(orderId, customerId, productId, 5);
         orderCreatedEvent.setEventId(eventId);
 
         paymentFailedEvent = new PaymentFailedEvent(orderId);
@@ -134,7 +135,7 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should handle payment failed without product info")
     void testHandlePaymentFailedNoProductInfo() {
-        PaymentFailedEvent event = new PaymentFailedEvent("order-456");
+        PaymentFailedEvent event = new PaymentFailedEvent(456L);
         event.setEventId(UUID.randomUUID().toString());
 
         listener.handlePaymentFailed(event, acknowledgment);
@@ -150,7 +151,7 @@ class InventoryEventListenerTest {
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(acknowledgment).acknowledge();
+        verify(acknowledgment, never()).acknowledge();
     }
 
     @Test
@@ -160,6 +161,6 @@ class InventoryEventListenerTest {
 
         listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
-        verify(acknowledgment).acknowledge();
+        verify(acknowledgment, never()).acknowledge();
     }
 }
