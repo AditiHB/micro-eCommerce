@@ -1,0 +1,240 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-audit-config
+  namespace: vault
+data:
+  audit-setup.sh: |
+    #!/bin/bash
+    # Vault Audit Logging Configuration for Secrets Access
+
+    VAULT_ADDR=${VAULT_ADDR:-"http://localhost:8200"}
+    ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-"elasticsearch:9200"}
+
+    echo "Configuring Vault audit logging..."
+
+    # Enable file audit logging
+    vault audit enable file file_path=/vault/logs/audit.log
+
+    # Enable syslog audit logging
+    vault audit enable syslog tag="vault" facility="LOCAL7"
+
+    # Enable socket audit logging to send to Elasticsearch
+    vault audit enable socket address=$ELASTICSEARCH_HOST:9200 socket_type=tcp
+
+    # Configure audit logging policy
+    cat > /tmp/audit-policy.hcl <<'EOF'
+    path "secret/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    path "auth/*" {
+      capabilities = ["read"]
+    }
+    path "sys/audit*" {
+      capabilities = ["read"]
+    }
+    EOF
+
+    vault write sys/audit/config force_no_cache=true
+
+    echo "Vault audit logging configured"
+    echo "Audit logs location: /vault/logs/audit.log"
+    echo "Elasticsearch destination: $ELASTICSEARCH_HOST"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-audit-policy
+  namespace: vault
+data:
+  audit-policy.hcl: |
+    # Vault Audit Policy for Secrets Access Logging
+
+    # Log all auth operations
+    path "auth/*" {
+      capabilities = ["read", "list"]
+    }
+
+    # Log all secret operations
+    path "secret/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+
+    # Log transit key operations
+    path "transit/*" {
+      capabilities = ["create", "read", "update", "delete"]
+    }
+
+    # Log database credential operations
+    path "database/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+
+    # Log PKI certificate operations
+    path "pki/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+
+    # Restrict sensitive operations
+    path "sys/audit*" {
+      capabilities = ["read", "sudo"]
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-secrets-mappings
+  namespace: vault
+data:
+  secrets-audit-mappings.json: |
+    {
+      "mappings": {
+        "properties": {
+          "timestamp": {"type": "date"},
+          "operation": {"type": "keyword"},
+          "path": {"type": "keyword"},
+          "auth": {
+            "properties": {
+              "client_token": {"type": "keyword"},
+              "accessor": {"type": "keyword"},
+              "display_name": {"type": "keyword"},
+              "username": {"type": "keyword"},
+              "ttl": {"type": "long"}
+            }
+          },
+          "request": {
+            "properties": {
+              "id": {"type": "keyword"},
+              "client_token": {"type": "keyword"},
+              "client_token_accessor": {"type": "keyword"},
+              "operation": {"type": "keyword"},
+              "path": {"type": "keyword"},
+              "remote_address": {"type": "ip"},
+              "user_agent": {"type": "text"},
+              "data": {"type": "object", "enabled": false}
+            }
+          },
+          "response": {
+            "properties": {
+              "auth": {"type": "object"},
+              "secret": {"type": "object"},
+              "data": {"type": "object", "enabled": false},
+              "error": {"type": "text"}
+            }
+          },
+          "error": {"type": "text"},
+          "type": {"type": "keyword"}
+        }
+      }
+    }
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-audit-log-archiver
+  namespace: vault
+spec:
+  schedule: "0 2 * * *"  # Archive daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: archiver
+            image: alpine:latest
+            command:
+            - /bin/sh
+            - -c
+            - |
+              apk add --no-cache curl gzip tar
+              # Archive old audit logs
+              cd /vault/logs
+              tar czf audit-logs-$(date +%Y%m%d).tar.gz audit.log
+              # Upload to Elasticsearch for long-term retention
+              curl -X POST "elasticsearch:9200/vault-audit-archive/_doc" \
+                -H 'Content-Type: application/json' \
+                -d @- << PAYLOAD
+              {
+                "archive_date": "$(date -Iseconds)",
+                "file": "audit-logs-$(date +%Y%m%d).tar.gz",
+                "retention_years": 7
+              }
+              PAYLOAD
+            volumeMounts:
+            - name: vault-logs
+              mountPath: /vault/logs
+          volumes:
+          - name: vault-logs
+            hostPath:
+              path: /var/log/vault
+          restartPolicy: OnFailure
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault-audit-elasticsearch
+  namespace: vault
+  labels:
+    app: elasticsearch
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+  - name: rest
+    port: 9200
+    targetPort: 9200
+  - name: node-comm
+    port: 9300
+    targetPort: 9300
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-secrets-audit-dashboard
+  namespace: vault
+data:
+  secrets-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "Secrets Access Audit Dashboard",
+        "description": "Real-time monitoring of secret access, failed attempts, and anomalies",
+        "panels": [
+          {
+            "title": "Secrets Accessed - Last 24h",
+            "visualization": "pie",
+            "query": "type:request AND path:secret/*"
+          },
+          {
+            "title": "Who Accessed What Secret",
+            "visualization": "table",
+            "query": "timestamp:[now-24h TO now] | stats count() by auth.display_name, request.path"
+          },
+          {
+            "title": "Failed Access Attempts",
+            "visualization": "timeseries",
+            "query": "type:response AND error:* | stats count() as failed_attempts by timestamp"
+          },
+          {
+            "title": "Secrets Accessed Outside Business Hours",
+            "visualization": "table",
+            "query": "timestamp:[now-7d TO now] AND (timestamp.hour:<8 OR timestamp.hour:>20) | stats count() by auth.display_name, request.path"
+          },
+          {
+            "title": "Suspicious Access Patterns",
+            "visualization": "anomaly",
+            "query": "type:request | stats count() as access_count by remote_address, auth.display_name | where access_count > threshold"
+          },
+          {
+            "title": "Secret Operations Timeline",
+            "visualization": "timeseries",
+            "query": "type:request AND (operation:create OR operation:update OR operation:delete) | stats count() by operation, timestamp"
+          }
+        ]
+      }
+    }

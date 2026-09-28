@@ -36,3 +36,21 @@ Dockerfile
 
 # Maven
 target/
+
+# Environment Variables (NEVER commit real secrets)
+.env
+.env.local
+.env.*.local
+
+# Secret rotation logs
+infrastructure/scripts/*.log
+infrastructure/scripts/*.audit.json
+
+# Environment Variables (NEVER commit real secrets)
+.env
+.env.local
+.env.*.local
+
+# Secret rotation logs
+infrastructure/scripts/*.log
+infrastructure/scripts/*.audit.json

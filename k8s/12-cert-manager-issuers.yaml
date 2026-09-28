@@ -1,0 +1,81 @@
+---
+# Self-signed ClusterIssuer for CA certificate
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+  namespace: cert-manager
+  labels:
+    app: cert-manager
+spec:
+  selfSigned: {}
+
+---
+# CA Issuer certificate (created from self-signed issuer)
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ca-certificate
+  namespace: cert-manager
+spec:
+  secretName: ca-key-pair
+  commonName: micro-ecommerce-ca
+  duration: 87600h  # 10 years
+  renewBefore: 720h  # 30 days
+  isCA: true
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+
+---
+# CA Issuer - used to sign service certificates
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: ca-issuer
+  namespace: cert-manager
+  labels:
+    app: cert-manager
+spec:
+  ca:
+    secretName: ca-key-pair
+
+---
+# Let's Encrypt Staging Issuer (for testing without rate limits)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+  namespace: cert-manager
+  labels:
+    app: cert-manager
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: admin@micro-ecommerce.local
+    privateKeySecretRef:
+      name: letsencrypt-staging-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+
+---
+# Let's Encrypt Production Issuer (for production use)
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  namespace: cert-manager
+  labels:
+    app: cert-manager
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@micro-ecommerce.local
+    privateKeySecretRef:
+      name: letsencrypt-prod-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx

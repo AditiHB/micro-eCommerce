@@ -13,10 +13,10 @@ spring:
     locations: classpath:db/migration
     outOfOrder: false
   datasource:
-    url: jdbc:h2:mem:customer_db
-    driverClassName: org.h2.Driver
-    username: sa
-    password: password
+    url: ${DB_URL:jdbc:h2:mem:customer_db}
+    driverClassName: ${DB_DRIVER:org.h2.Driver}
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:password}
   jpa:
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
@@ -29,8 +29,8 @@ spring:
     enabled: true
     change-log: classpath:db/changelog/db.changelog-master.xml
   redis:
-    host: localhost
-    port: 6379
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
     database: 0
     timeout: 2000ms
     lettuce:
@@ -38,7 +38,7 @@ spring:
         max-active: 8
         max-idle: 8
         min-idle: 0
-    password: null
+    password: ${REDIS_PASSWORD:}
   cache:
     type: redis
     redis:
@@ -51,7 +51,7 @@ eureka:
       defaultZone: http://localhost:8761/eureka/
 
 jwt:
-  secret: mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890
+  secret: ${JWT_SECRET:changeme-use-strong-key-in-production}
   expiration: 86400000
 
 management:

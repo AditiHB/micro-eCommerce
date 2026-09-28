@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: certificate-alert-rules
+  namespace: monitoring
+data:
+  certificate-alerts.yaml: |
+    groups:
+    - name: certificate_expiration
+      interval: 1m
+      rules:
+      # Alert 30 days before expiration
+      - alert: CertificateExpiresIn30Days
+        expr: (ssl_certificate_not_after - time()) / 86400 < 30
+        for: 1h
+        labels:
+          severity: warning
+          component: certificate
+        annotations:
+          summary: "Certificate expires in 30 days"
+          description: "Certificate {{ $labels.common_name }} at {{ $labels.path }} will expire in {{ $value | humanize }} days"
+          runbook_url: "https://docs.example.com/certificate-renewal"
+
+      # Alert 7 days before expiration
+      - alert: CertificateExpiresIn7Days
+        expr: (ssl_certificate_not_after - time()) / 86400 < 7
+        for: 1h
+        labels:
+          severity: critical
+          component: certificate
+        annotations:
+          summary: "Certificate expires in 7 days - immediate action required"
+          description: "Certificate {{ $labels.common_name }} at {{ $labels.path }} will expire in {{ $value | humanize }} days. Immediate renewal required."
+          runbook_url: "https://docs.example.com/certificate-renewal-urgent"
+
+      # Alert 1 day before expiration
+      - alert: CertificateExpiresIn1Day
+        expr: (ssl_certificate_not_after - time()) / 86400 < 1
+        for: 15m
+        labels:
+          severity: critical
+          component: certificate
+        annotations:
+          summary: "CRITICAL: Certificate expires in 24 hours"
+          description: "Certificate {{ $labels.common_name }} at {{ $labels.path }} expires in {{ $value | humanize }} hours. CRITICAL: Immediate replacement required."
+          runbook_url: "https://docs.example.com/certificate-emergency"
+
+      # Alert if certificate has expired
+      - alert: CertificateExpired
+        expr: ssl_certificate_not_after < time()
+        for: 1m
+        labels:
+          severity: critical
+          component: certificate
+        annotations:
+          summary: "CRITICAL: Certificate has expired"
+          description: "Certificate {{ $labels.common_name }} at {{ $labels.path }} HAS EXPIRED. This requires immediate action."
+          runbook_url: "https://docs.example.com/certificate-expired"
+
+    - name: tls_security
+      interval: 5m
+      rules:
+      # Alert if weak TLS version in use
+      - alert: WeakTLSVersion
+        expr: tls_version_info{version!="1.3",version!="1.2"} > 0
+        for: 5m
+        labels:
+          severity: critical
+          component: tls
+        annotations:
+          summary: "Weak TLS version detected in use"
+          description: "Service {{ $labels.service }} is using TLS {{ $labels.version }}, which is weaker than TLS 1.2"
+          runbook_url: "https://docs.example.com/tls-upgrade"
+
+      # Alert if weak cipher suite in use
+      - alert: WeakCipherSuite
+        expr: cipher_suite_strength{strength!="strong"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: tls
+        annotations:
+          summary: "Weak cipher suite detected"
+          description: "Service {{ $labels.service }} is using cipher suite {{ $labels.cipher }} with strength {{ $labels.strength }}"
+          runbook_url: "https://docs.example.com/cipher-upgrade"
+
+      # Alert on certificate validation failures
+      - alert: CertificateValidationFailure
+        expr: increase(certificate_validation_failures_total[5m]) > 0
+        labels:
+          severity: critical
+          component: certificate
+        annotations:
+          summary: "Certificate validation failures detected"
+          description: "Service {{ $labels.service }} had {{ $value }} certificate validation failures in the last 5 minutes"
+          runbook_url: "https://docs.example.com/cert-validation-fix"
+
+      # Alert on high TLS handshake latency
+      - alert: HighTLSHandshakeLatency
+        expr: histogram_quantile(0.99, rate(tls_handshake_duration_seconds_bucket[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: tls
+        annotations:
+          summary: "High TLS handshake latency detected"
+          description: "Service {{ $labels.service }} has 99th percentile TLS handshake latency of {{ $value | humanizeDuration }}"
+          runbook_url: "https://docs.example.com/tls-performance"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-alert-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    rule_files:
+    - '/etc/prometheus/rules/certificate-alerts.yaml'
+
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets:
+          - alertmanager:9093
+
+    scrape_configs:
+    - job_name: 'certificate-exporter'
+      static_configs:
+      - targets: ['certificate-exporter:9090']
+      relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+    - job_name: 'tls-metrics'
+      static_configs:
+      - targets: ['localhost:8443']
+      scheme: https
+      tls_config:
+        insecure_skip_verify: false
+      metrics_path: '/metrics'
