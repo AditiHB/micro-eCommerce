@@ -106,7 +106,7 @@ data:
         service-url:
           defaultZone: http://discovery-server:8761/eureka/
     jwt:
-      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+      secret: "${JWT_SECRET}"
     management:
       endpoints:
         web:
@@ -168,7 +168,7 @@ data:
         service-url:
           defaultZone: http://discovery-server:8761/eureka/
     jwt:
-      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+      secret: "${JWT_SECRET}"
       expiration: 86400000
     management:
       endpoints:
@@ -236,7 +236,7 @@ data:
         service-url:
           defaultZone: http://discovery-server:8761/eureka/
     jwt:
-      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+      secret: "${JWT_SECRET}"
     management:
       endpoints:
         web:
@@ -303,7 +303,7 @@ data:
         service-url:
           defaultZone: http://discovery-server:8761/eureka/
     jwt:
-      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+      secret: "${JWT_SECRET}"
     management:
       endpoints:
         web:
@@ -370,7 +370,7 @@ data:
         service-url:
           defaultZone: http://discovery-server:8761/eureka/
     jwt:
-      secret: "${JWT_SECRET:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}"
+      secret: "${JWT_SECRET}"
     management:
       endpoints:
         web:

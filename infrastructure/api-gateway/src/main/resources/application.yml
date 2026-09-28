@@ -136,7 +136,7 @@ resilience4j:
         baseConfig: default
 
 jwt:
-  secret: mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890
+  secret: ${JWT_SECRET}
   expiration: 86400000
 
 eureka:
