@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM maven:3.8-openjdk-17 as builder
+FROM maven:3.9.9-eclipse-temurin-17 as builder
 
 WORKDIR /build
 
@@ -11,7 +11,7 @@ COPY infrastructure/discovery-server ./infrastructure/discovery-server/
 RUN mvn clean package -DskipTests -pl infrastructure/discovery-server -am
 
 # Stage 2: Runtime
-FROM openjdk:17-jre-slim
+FROM eclipse-temurin:17-jre-jammy
 
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
