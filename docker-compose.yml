@@ -61,6 +61,12 @@ services:
     environment:
       - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+      # Local-dev-only default so this compose file boots without extra setup.
+      # Override with a real secret via `JWT_SECRET=... docker compose up`, or
+      # export it in your shell before running. Never used as a fallback in
+      # docker-compose-production.yml / docker-compose-secrets.yml, which
+      # require JWT_SECRET to be supplied and fail loudly if it isn't.
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
 
   customer-service:
     build:
@@ -75,6 +81,8 @@ services:
     environment:
       - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+      # See api-gateway's JWT_SECRET comment above - same local-dev-only default.
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
 
   inventory-service:
     build:
