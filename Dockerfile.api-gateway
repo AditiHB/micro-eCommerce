@@ -6,6 +6,7 @@ WORKDIR /build
 COPY pom.xml .
 COPY common ./common
 COPY infrastructure/pom.xml ./infrastructure/
+COPY services/pom.xml ./services/
 COPY infrastructure/api-gateway ./infrastructure/api-gateway/
 
 RUN mvn clean package -DskipTests -pl infrastructure/api-gateway -am
