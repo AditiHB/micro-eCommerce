@@ -6,6 +6,10 @@ WORKDIR /build
 COPY pom.xml .
 COPY common ./common
 COPY services/pom.xml ./services/
+COPY services/customer-service/pom.xml ./services/customer-service/
+COPY services/inventory-service/pom.xml ./services/inventory-service/
+COPY services/order-service/pom.xml ./services/order-service/
+COPY services/product-service/pom.xml ./services/product-service/
 COPY services/payment-service ./services/payment-service/
 COPY infrastructure/pom.xml ./infrastructure/
 

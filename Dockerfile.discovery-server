@@ -7,6 +7,8 @@ COPY pom.xml .
 COPY common ./common
 COPY infrastructure/pom.xml ./infrastructure/
 COPY services/pom.xml ./services/
+COPY infrastructure/config-server/pom.xml ./infrastructure/config-server/
+COPY infrastructure/api-gateway/pom.xml ./infrastructure/api-gateway/
 COPY infrastructure/discovery-server ./infrastructure/discovery-server/
 
 RUN mvn clean package -DskipTests -pl infrastructure/discovery-server -am
