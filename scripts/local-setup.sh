@@ -191,21 +191,24 @@ check_health() {
     print_header "Checking Service Health..."
     print_line
 
-    # Define services and their health check URLs
-    declare -A services=(
-        ["API Gateway"]="http://localhost:8080/actuator/health"
-        ["Customer Service"]="http://localhost:8081/actuator/health"
-        ["Order Service"]="http://localhost:8083/actuator/health"
-        ["Payment Service"]="http://localhost:8084/actuator/health"
-        ["Prometheus"]="http://localhost:9090/-/healthy"
-        ["Grafana"]="http://localhost:3000/api/health"
-        ["Elasticsearch"]="http://localhost:9200/_cluster/health"
-        ["Kibana"]="http://localhost:5601/api/status"
+    # Define services and their health check URLs.
+    # Plain indexed array of "Name|URL" pairs instead of an associative array
+    # (declare -A / bash 4+) so this also works under macOS's default bash 3.2.
+    services=(
+        "API Gateway|http://localhost:8080/actuator/health"
+        "Customer Service|http://localhost:8081/actuator/health"
+        "Order Service|http://localhost:8083/actuator/health"
+        "Payment Service|http://localhost:8084/actuator/health"
+        "Prometheus|http://localhost:9090/-/healthy"
+        "Grafana|http://localhost:3000/api/health"
+        "Elasticsearch|http://localhost:9200/_cluster/health"
+        "Kibana|http://localhost:5601/api/status"
     )
 
     # Check each service
-    for service in "${!services[@]}"; do
-        url="${services[$service]}"
+    for entry in "${services[@]}"; do
+        service="${entry%%|*}"
+        url="${entry#*|}"
 
         if curl -s -f "$url" &>/dev/null; then
             print_success "$service is UP"
