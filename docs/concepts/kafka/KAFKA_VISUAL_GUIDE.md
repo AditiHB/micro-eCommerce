@@ -283,7 +283,7 @@ Day 3
 └─ 12:00 → Delivery Service reads Message 1 ✅
            (Still there! 2.5 days old)
 
-Day 5
+Day 7
 ├─ 00:00 → Message 1 expires 🗑️
 │          (Configured retention: 7 days default)
 └─ 12:00 → Inventory Service tries to read Message 1 ❌
@@ -296,7 +296,113 @@ This is good because:
 ```
 
 ---
+In **Apache Kafka**, the default message retention period is:
 
+### Kafka default retention
+
+**`log.retention.hours = 168` hours = 7 days**
+
+So, by default, Kafka retains messages for **7 days**.
+
+But an important interview point is:
+
+> **Kafka does NOT delete a message immediately when it reaches exactly 7 days.**
+
+Kafka deletes data based on **log segments**, not individual messages.
+
+### When does a message actually expire?
+
+Suppose:
+
+```text
+Message produced: Jan 1, 10:00 AM
+Retention: 7 days
+```
+
+Conceptually, the message becomes eligible for deletion around:
+
+```text
+Jan 8, 10:00 AM
+```
+
+But Kafka may keep it longer because the message belongs to a **log segment**. Kafka deletes **whole segments**, not individual messages.
+
+So the actual deletion could be:
+
+```text
+Jan 8  → eligible
+Jan 8+ → segment becomes eligible and Kafka deletes it
+```
+
+### Important Kafka settings
+
+| Property | Default | Purpose |
+|---|---:|---|
+| `log.retention.hours` | **168 hours** | Retention based on time |
+| `log.retention.bytes` | **-1** | No size-based limit by default |
+| `log.segment.ms` | **7 days** | Maximum time before rolling a segment |
+| `log.retention.check.interval.ms` | **5 minutes** | How often Kafka checks for expired segments |
+
+### Very important interview question
+
+**Q: If Kafka retention is 7 days, can a consumer consume a message after 7 days?**
+
+**Yes, potentially.**
+
+If the segment containing that message has **not yet been deleted**, the consumer can still read it.
+
+Conversely, once Kafka deletes the segment, the message is permanently unavailable from that Kafka topic.
+
+### Example
+
+```text
+Topic: orders
+
+Segment 0
+├── Message A
+├── Message B
+└── Message C
+
+Segment 1
+├── Message D
+└── Message E
+```
+
+If `Message A` is 7+ days old, Kafka doesn't remove just `Message A`.
+
+Instead, Kafka waits until the **segment containing A** becomes eligible and then deletes the **entire segment**:
+
+```text
+Segment 0 → DELETE
+    ↓
+A, B, C all removed
+```
+
+### One more important point
+
+Kafka retention is **independent of whether the message was consumed**.
+
+Even if:
+
+```text
+Consumer has NOT consumed message
+```
+
+Kafka can still delete it after the retention conditions are met.
+
+And:
+
+```text
+Consumer HAS consumed message
+```
+
+does **not** cause Kafka to delete it immediately.
+s
+The **consumer offset does not control normal time-based deletion**.
+
+**Interview-ready answer:**
+
+> "Kafka's default retention is 7 days, configured through `log.retention.hours=168`. However, Kafka doesn't delete individual messages exactly after 7 days. Messages are stored in log segments, and Kafka deletes entire segments once they become eligible for retention cleanup. Therefore, a message may remain available somewhat longer than the configured retention period. Retention is also independent of whether consumers have consumed the message."
 ## Failure Scenarios (Why Kafka is Reliable)
 
 ```
