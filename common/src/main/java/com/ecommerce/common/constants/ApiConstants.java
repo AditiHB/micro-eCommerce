@@ -8,6 +8,7 @@ public class ApiConstants {
     public static final String ORDERS_ENDPOINT = "/orders";
     public static final String INVENTORY_ENDPOINT = "/inventory";
     public static final String PAYMENTS_ENDPOINT = "/payments";
+    public static final String NOTIFICATIONS_ENDPOINT = "/notifications";
 
     // Kafka Topics
     public static final String KAFKA_TOPIC_ORDER_CREATED = "order-created";
@@ -15,11 +16,13 @@ public class ApiConstants {
     public static final String KAFKA_TOPIC_INVENTORY_FAILED = "inventory-failed";
     public static final String KAFKA_TOPIC_PAYMENT_PROCESSED = "payment-processed";
     public static final String KAFKA_TOPIC_PAYMENT_FAILED = "payment-failed";
+    public static final String KAFKA_TOPIC_NOTIFICATION_SENT = "notification-sent";
 
     // Kafka Consumer Groups
     public static final String KAFKA_GROUP_ORDER = "order-group";
     public static final String KAFKA_GROUP_INVENTORY = "inventory-group";
     public static final String KAFKA_GROUP_PAYMENT = "payment-group";
+    public static final String KAFKA_GROUP_NOTIFICATION = "notification-group";
 
     // Error Codes
     public static final String ERROR_CODE_NOT_FOUND = "RESOURCE_NOT_FOUND";

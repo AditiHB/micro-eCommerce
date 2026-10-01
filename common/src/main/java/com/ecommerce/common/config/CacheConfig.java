@@ -15,6 +15,7 @@ public class CacheConfig {
     public static final String INVENTORY_CACHE = "inventory";
     public static final String PAYMENTS_CACHE = "payments";
     public static final String USERS_CACHE = "users";
+    public static final String NOTIFICATIONS_CACHE = "notifications";
 
     @Bean
     public CacheManager cacheManager() {
@@ -23,7 +24,8 @@ public class CacheConfig {
                 ORDERS_CACHE,
                 INVENTORY_CACHE,
                 PAYMENTS_CACHE,
-                USERS_CACHE
+                USERS_CACHE,
+                NOTIFICATIONS_CACHE
         );
     }
 }

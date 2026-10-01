@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: notification-service-test
+  datasource:
+    url: jdbc:h2:mem:notification_testdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+  h2:
+    console:
+      enabled: true
+  flyway:
+    enabled: false
+  liquibase:
+    enabled: false
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+  cloud:
+    config:
+      enabled: false
+    discovery:
+      enabled: false
+
+eureka:
+  client:
+    enabled: false
+
+notification:
+  channel: log
+
+services:
+  customer:
+    url: http://localhost:8081
+  order:
+    url: http://localhost:8083
+
+server:
+  port: 0
+
+logging:
+  level:
+    root: WARN
+    com.ecommerce: INFO
