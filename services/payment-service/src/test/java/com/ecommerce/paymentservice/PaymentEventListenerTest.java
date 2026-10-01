@@ -1,8 +1,10 @@
 package com.ecommerce.paymentservice;
 
+import com.ecommerce.common.enums.PaymentStatus;
+import com.ecommerce.common.events.InventoryReservedEvent;
+import com.ecommerce.common.events.OrderCancelledEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
-import com.ecommerce.common.events.RefundInitiatedEvent;
 import com.ecommerce.common.events.RefundCompletedEvent;
 import com.ecommerce.common.events.EventPublisher;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +22,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,16 +41,20 @@ class PaymentEventListenerTest {
     @InjectMocks
     private PaymentEventListener listener;
 
-    private RefundInitiatedEvent refundInitiatedEvent;
+    private InventoryReservedEvent inventoryReservedEvent;
+    private OrderCancelledEvent orderCancelledEvent;
     private Payment payment;
 
     @BeforeEach
     void setUp() {
-        String orderId = "order-123";
+        Long orderId = 123L;
         String eventId = UUID.randomUUID().toString();
 
-        refundInitiatedEvent = new RefundInitiatedEvent(orderId);
-        refundInitiatedEvent.setEventId(eventId);
+        inventoryReservedEvent = new InventoryReservedEvent(orderId, "PROD-001", 5);
+        inventoryReservedEvent.setEventId(eventId);
+
+        orderCancelledEvent = new OrderCancelledEvent(orderId, "Customer requested cancellation");
+        orderCancelledEvent.setEventId(eventId);
 
         payment = Payment.builder()
             .id(1L)
@@ -58,52 +65,75 @@ class PaymentEventListenerTest {
     }
 
     @Test
-    @DisplayName("Should handle refund initiation successfully")
-    void testHandleRefundInitiatedSuccess() {
-        when(repository.findByOrderId("order-123")).thenReturn(Optional.of(payment));
-        when(repository.save(any())).thenReturn(payment);
+    @DisplayName("Should process payment when inventory is reserved")
+    void testHandleInventoryReservedSuccess() {
+        when(repository.save(any(Payment.class))).thenReturn(payment);
 
-        listener.handleRefundInitiated(refundInitiatedEvent, acknowledgment);
+        listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
 
-        verify(repository).findByOrderId("order-123");
         verify(repository).save(any(Payment.class));
-        verify(eventPublisher).publishEvent(any(RefundCompletedEvent.class), anyString(), anyString(), anyString());
+        verify(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), eq("payment-processed"), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should handle refund when payment not found")
-    void testHandleRefundInitiatedPaymentNotFound() {
-        when(repository.findByOrderId("order-123")).thenReturn(Optional.empty());
+    @DisplayName("Should publish payment failed event and not ack when processing throws")
+    void testHandleInventoryReservedException() {
+        when(repository.save(any(Payment.class))).thenThrow(new RuntimeException("Database error"));
 
-        listener.handleRefundInitiated(refundInitiatedEvent, acknowledgment);
+        listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
 
-        verify(repository).findByOrderId("order-123");
+        verify(eventPublisher).publishEvent(any(PaymentFailedEvent.class), eq("payment-failed"), anyString(), anyString());
+        verify(acknowledgment, never()).acknowledge();
+    }
+
+    @Test
+    @DisplayName("Should refund payment when order is cancelled")
+    void testHandleOrderCancelledSuccess() {
+        when(repository.findByOrderId(123L)).thenReturn(Optional.of(payment));
+        when(repository.save(any(Payment.class))).thenReturn(payment);
+
+        listener.handleOrderCancelled(orderCancelledEvent, acknowledgment);
+
+        verify(repository).findByOrderId(123L);
+        verify(repository).save(any(Payment.class));
+        verify(eventPublisher).publishEvent(any(RefundCompletedEvent.class), eq("refund-completed"), anyString(), anyString());
+        verify(acknowledgment).acknowledge();
+    }
+
+    @Test
+    @DisplayName("Should handle order cancelled when payment not found")
+    void testHandleOrderCancelledPaymentNotFound() {
+        when(repository.findByOrderId(123L)).thenReturn(Optional.empty());
+
+        listener.handleOrderCancelled(orderCancelledEvent, acknowledgment);
+
+        verify(repository).findByOrderId(123L);
         verify(repository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any(), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should handle exception during refund processing")
-    void testHandleRefundInitiatedException() {
-        when(repository.findByOrderId("order-123")).thenThrow(new RuntimeException("Database error"));
+    @DisplayName("Should not refund when payment is not in PROCESSED state")
+    void testHandleOrderCancelledPaymentNotProcessed() {
+        payment.setStatus(PaymentStatus.PROCESSING);
+        when(repository.findByOrderId(123L)).thenReturn(Optional.of(payment));
 
-        listener.handleRefundInitiated(refundInitiatedEvent, acknowledgment);
+        listener.handleOrderCancelled(orderCancelledEvent, acknowledgment);
 
+        verify(repository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should process partial refund correctly")
-    void testHandleRefundInitiatedPartialRefund() {
-        payment.setAmount(BigDecimal.valueOf(50.00));
-        when(repository.findByOrderId("order-123")).thenReturn(Optional.of(payment));
-        when(repository.save(any())).thenReturn(payment);
+    @DisplayName("Should handle exception during order cancelled processing")
+    void testHandleOrderCancelledException() {
+        when(repository.findByOrderId(123L)).thenThrow(new RuntimeException("Database error"));
 
-        listener.handleRefundInitiated(refundInitiatedEvent, acknowledgment);
+        listener.handleOrderCancelled(orderCancelledEvent, acknowledgment);
 
-        verify(repository).save(any(Payment.class));
-        verify(acknowledgment).acknowledge();
+        verify(acknowledgment, never()).acknowledge();
     }
 }

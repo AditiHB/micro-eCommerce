@@ -10,7 +10,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.KafkaHeaders;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.messaging.Message;
 
 import java.util.concurrent.CompletableFuture;
@@ -38,18 +38,16 @@ class EventPublisherTest {
     void setUp() {
         testEvent = new OrderCreatedEvent();
         testEvent.setEventId("event-123");
-        testEvent.setEventType("OrderCreated");
         testEvent.setAggregateId("order-456");
         testEvent.setAggregateType("Order");
-        testEvent.setOrderId("order-456");
-        testEvent.setCustomerId("customer-789");
-        testEvent.setTotalAmount(99.99);
+        testEvent.setOrderId(456L);
+        testEvent.setCustomerId(789L);
     }
 
     @Test
     @DisplayName("Should publish event successfully")
     void testPublishEventSuccess() {
-        CompletableFuture<Object> future = CompletableFuture.completedFuture(null);
+        CompletableFuture<SendResult<String, Object>> future = CompletableFuture.completedFuture(null);
         when(kafkaTemplate.send(any(Message.class)))
             .thenReturn(future);
         doNothing().when(eventSourcingService).storeEvent(any(DomainEvent.class), anyString(), anyString());
@@ -63,7 +61,7 @@ class EventPublisherTest {
     @Test
     @DisplayName("Should publish event with provided correlation ID")
     void testPublishEventWithCorrelationId() {
-        CompletableFuture<Object> future = CompletableFuture.completedFuture(null);
+        CompletableFuture<SendResult<String, Object>> future = CompletableFuture.completedFuture(null);
         when(kafkaTemplate.send(any(Message.class)))
             .thenReturn(future);
         doNothing().when(eventSourcingService).storeEvent(any(DomainEvent.class), anyString(), anyString());
@@ -77,7 +75,7 @@ class EventPublisherTest {
     @Test
     @DisplayName("Should publish event synchronously")
     void testPublishEventSyncSuccess() throws Exception {
-        CompletableFuture<Object> future = CompletableFuture.completedFuture(null);
+        CompletableFuture<SendResult<String, Object>> future = CompletableFuture.completedFuture(null);
         when(kafkaTemplate.send(any(Message.class)))
             .thenReturn(future);
         doNothing().when(eventSourcingService).storeEvent(any(DomainEvent.class), anyString(), anyString());
@@ -89,16 +87,20 @@ class EventPublisherTest {
     }
 
     @Test
-    @DisplayName("Should throw exception when Kafka send fails")
+    @DisplayName("Should not propagate an async Kafka send failure (it is only logged)")
     void testPublishEventKafkaFailure() {
-        CompletableFuture<Object> failedFuture = new CompletableFuture<>();
+        CompletableFuture<SendResult<String, Object>> failedFuture = new CompletableFuture<>();
         failedFuture.completeExceptionally(new RuntimeException("Kafka error"));
         when(kafkaTemplate.send(any(Message.class)))
             .thenReturn(failedFuture);
         doNothing().when(eventSourcingService).storeEvent(any(DomainEvent.class), anyString(), anyString());
 
-        assertThatThrownBy(() -> eventPublisher.publishEvent(testEvent, "order-events"))
-            .isInstanceOf(EventPublishingException.class);
+        // publishEvent() is fire-and-forget: a failure surfacing later on the returned
+        // CompletableFuture is logged (see the whenComplete callback) but not rethrown here.
+        assertThatCode(() -> eventPublisher.publishEvent(testEvent, "order-events"))
+            .doesNotThrowAnyException();
+
+        verify(kafkaTemplate, times(1)).send(any(Message.class));
     }
 
     @Test
@@ -114,7 +116,7 @@ class EventPublisherTest {
     @Test
     @DisplayName("Should generate correlation ID when not provided")
     void testPublishEventGeneratesCorrelationId() {
-        CompletableFuture<Object> future = CompletableFuture.completedFuture(null);
+        CompletableFuture<SendResult<String, Object>> future = CompletableFuture.completedFuture(null);
         when(kafkaTemplate.send(any(Message.class)))
             .thenReturn(future);
         doNothing().when(eventSourcingService).storeEvent(any(DomainEvent.class), anyString(), anyString());
@@ -131,19 +133,17 @@ class EventPublisherTest {
     @Test
     @DisplayName("Should publish multiple events")
     void testPublishMultipleEvents() {
-        CompletableFuture<Object> future = CompletableFuture.completedFuture(null);
+        CompletableFuture<SendResult<String, Object>> future = CompletableFuture.completedFuture(null);
         when(kafkaTemplate.send(any(Message.class)))
             .thenReturn(future);
         doNothing().when(eventSourcingService).storeEvent(any(DomainEvent.class), anyString(), anyString());
 
         OrderCreatedEvent event1 = new OrderCreatedEvent();
         event1.setEventId("event-1");
-        event1.setEventType("OrderCreated");
         event1.setAggregateId("order-1");
 
         OrderCancelledEvent event2 = new OrderCancelledEvent();
         event2.setEventId("event-2");
-        event2.setEventType("OrderCancelled");
         event2.setAggregateId("order-1");
 
         eventPublisher.publishEvent(event1, "order-events");
@@ -163,7 +163,7 @@ class EventPublisherTest {
     @Test
     @DisplayName("Should handle null topic gracefully")
     void testPublishEventWithNullTopic() {
-        CompletableFuture<Object> future = CompletableFuture.completedFuture(null);
+        CompletableFuture<SendResult<String, Object>> future = CompletableFuture.completedFuture(null);
         when(kafkaTemplate.send(any(Message.class)))
             .thenReturn(future);
         doNothing().when(eventSourcingService).storeEvent(any(DomainEvent.class), anyString(), anyString());
@@ -176,7 +176,7 @@ class EventPublisherTest {
     @Test
     @DisplayName("Should set correct headers when publishing event")
     void testPublishEventHeaders() {
-        CompletableFuture<Object> future = CompletableFuture.completedFuture(null);
+        CompletableFuture<SendResult<String, Object>> future = CompletableFuture.completedFuture(null);
         when(kafkaTemplate.send(any(Message.class)))
             .thenReturn(future);
         doNothing().when(eventSourcingService).storeEvent(any(DomainEvent.class), anyString(), anyString());

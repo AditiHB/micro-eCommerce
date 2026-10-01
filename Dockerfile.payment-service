@@ -1,18 +1,25 @@
 # Stage 1: Build
-FROM maven:3.8-openjdk-17 as builder
+FROM maven:3.9.9-eclipse-temurin-17 as builder
 
 WORKDIR /build
 
 COPY pom.xml .
 COPY common ./common
-COPY services/pom.xml ./services/
-COPY services/payment-service ./services/payment-service/
 COPY infrastructure/pom.xml ./infrastructure/
+COPY services/pom.xml ./services/
+COPY infrastructure/config-server/pom.xml ./infrastructure/config-server/
+COPY infrastructure/discovery-server/pom.xml ./infrastructure/discovery-server/
+COPY infrastructure/api-gateway/pom.xml ./infrastructure/api-gateway/
+COPY services/customer-service/pom.xml ./services/customer-service/
+COPY services/inventory-service/pom.xml ./services/inventory-service/
+COPY services/order-service/pom.xml ./services/order-service/
+COPY services/product-service/pom.xml ./services/product-service/
+COPY services/payment-service ./services/payment-service/
 
 RUN mvn clean package -DskipTests -pl services/payment-service -am
 
 # Stage 2: Runtime
-FROM openjdk:17-jre-slim
+FROM eclipse-temurin:17-jre-jammy
 
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 

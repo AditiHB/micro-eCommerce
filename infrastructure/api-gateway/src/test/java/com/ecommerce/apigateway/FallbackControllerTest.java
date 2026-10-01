@@ -25,7 +25,7 @@ class FallbackControllerTest {
     @Test
     @DisplayName("Should return fallback response")
     void testFallbackResponse() {
-        ResponseEntity<?> response = fallbackController.fallback();
+        ResponseEntity<?> response = fallbackController.serviceFallback();
 
         assertThat(response).isNotNull();
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
@@ -34,7 +34,7 @@ class FallbackControllerTest {
     @Test
     @DisplayName("Should handle circuit breaker open scenario")
     void testCircuitBreakerOpen() {
-        ResponseEntity<?> response = fallbackController.fallback();
+        ResponseEntity<?> response = fallbackController.serviceFallback();
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
     }
@@ -42,7 +42,7 @@ class FallbackControllerTest {
     @Test
     @DisplayName("Should return error message in fallback")
     void testFallbackErrorMessage() {
-        ResponseEntity<?> response = fallbackController.fallback();
+        ResponseEntity<?> response = fallbackController.serviceFallback();
 
         assertThat(response.getBody()).isNotNull();
     }
@@ -50,7 +50,7 @@ class FallbackControllerTest {
     @Test
     @DisplayName("Should indicate service unavailable")
     void testServiceUnavailable() {
-        ResponseEntity<?> response = fallbackController.fallback();
+        ResponseEntity<?> response = fallbackController.serviceFallback();
 
         assertThat(response.getStatusCode().is5xxServerError()).isTrue();
     }

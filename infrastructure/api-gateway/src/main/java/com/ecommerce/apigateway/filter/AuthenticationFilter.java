@@ -19,7 +19,7 @@ import java.util.List;
 @Slf4j
 public class AuthenticationFilter extends AbstractGatewayFilterFactory<AuthenticationFilter.Config> {
 
-    @Value("${jwt.secret:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}")
+    @Value("${jwt.secret}")
     private String jwtSecret;
 
     private static final List<String> PUBLIC_PATHS = Arrays.asList(

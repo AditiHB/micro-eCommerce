@@ -29,10 +29,10 @@ class EventSourcingExceptionTest {
     }
 
     @Test
-    @DisplayName("Should create exception with cause only")
+    @DisplayName("Should preserve the cause when wrapping another exception")
     void testExceptionWithCause() {
         Throwable cause = new RuntimeException("Database error");
-        EventSourcingException exception = new EventSourcingException(cause);
+        EventSourcingException exception = new EventSourcingException(cause.getMessage(), cause);
 
         assertThat(exception.getCause()).isEqualTo(cause);
     }

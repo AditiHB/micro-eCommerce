@@ -58,7 +58,8 @@ services:
 
   config-server:
     build:
-      context: ./infrastructure/config-server
+      context: .
+      dockerfile: Dockerfile.config-server
     container_name: config-server
     ports:
       - "8888:8888"
@@ -73,7 +74,8 @@ services:
 
   discovery-server:
     build:
-      context: ./infrastructure/discovery-server
+      context: .
+      dockerfile: Dockerfile.discovery-server
     container_name: discovery-server
     ports:
       - "8761:8761"
@@ -89,7 +91,8 @@ services:
 
   api-gateway:
     build:
-      context: ./infrastructure/api-gateway
+      context: .
+      dockerfile: Dockerfile.api-gateway
     container_name: api-gateway
     ports:
       - "8080:8080"
@@ -110,7 +113,8 @@ services:
 
   customer-service:
     build:
-      context: ./services/customer-service
+      context: .
+      dockerfile: Dockerfile.customer-service
     container_name: customer-service
     ports:
       - "8081:8081"
@@ -129,7 +133,8 @@ services:
 
   inventory-service:
     build:
-      context: ./services/inventory-service
+      context: .
+      dockerfile: Dockerfile.inventory-service
     expose:
       - "8082"
     depends_on:
@@ -149,7 +154,8 @@ services:
 
   order-service:
     build:
-      context: ./services/order-service
+      context: .
+      dockerfile: Dockerfile.order-service
     container_name: order-service
     ports:
       - "8083:8083"
@@ -170,7 +176,8 @@ services:
 
   payment-service:
     build:
-      context: ./services/payment-service
+      context: .
+      dockerfile: Dockerfile.payment-service
     container_name: payment-service
     ports:
       - "8084:8084"

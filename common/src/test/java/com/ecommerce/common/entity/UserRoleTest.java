@@ -9,12 +9,12 @@ import static org.assertj.core.api.Assertions.*;
 class UserRoleTest {
 
     @Test
-    @DisplayName("Should have CUSTOMER role")
-    void testCustomerRole() {
-        UserRole role = UserRole.CUSTOMER;
+    @DisplayName("Should have USER role")
+    void testUserRole() {
+        UserRole role = UserRole.USER;
 
-        assertThat(role).isEqualTo(UserRole.CUSTOMER);
-        assertThat(role.name()).isEqualTo("CUSTOMER");
+        assertThat(role).isEqualTo(UserRole.USER);
+        assertThat(role.name()).isEqualTo("USER");
     }
 
     @Test
@@ -27,28 +27,27 @@ class UserRoleTest {
     }
 
     @Test
-    @DisplayName("Should have VENDOR role")
-    void testVendorRole() {
-        UserRole role = UserRole.VENDOR;
+    @DisplayName("Should have MANAGER role")
+    void testManagerRole() {
+        UserRole role = UserRole.MANAGER;
 
-        assertThat(role).isEqualTo(UserRole.VENDOR);
-        assertThat(role.name()).isEqualTo("VENDOR");
+        assertThat(role).isEqualTo(UserRole.MANAGER);
+        assertThat(role.name()).isEqualTo("MANAGER");
     }
 
     @Test
-    @DisplayName("Should have SUPPORT role")
-    void testSupportRole() {
-        UserRole role = UserRole.SUPPORT;
+    @DisplayName("Should have exactly the expected set of roles")
+    void testAllRolesPresent() {
+        UserRole[] roles = UserRole.values();
 
-        assertThat(role).isEqualTo(UserRole.SUPPORT);
-        assertThat(role.name()).isEqualTo("SUPPORT");
+        assertThat(roles).containsExactlyInAnyOrder(UserRole.USER, UserRole.ADMIN, UserRole.MANAGER);
     }
 
     @Test
     @DisplayName("Should support role comparison")
     void testRoleComparison() {
-        UserRole role1 = UserRole.CUSTOMER;
-        UserRole role2 = UserRole.CUSTOMER;
+        UserRole role1 = UserRole.USER;
+        UserRole role2 = UserRole.USER;
         UserRole role3 = UserRole.ADMIN;
 
         assertThat(role1).isEqualTo(role2);
@@ -67,8 +66,8 @@ class UserRoleTest {
     @Test
     @DisplayName("Should convert string to role")
     void testStringToRole() {
-        UserRole role = UserRole.valueOf("CUSTOMER");
+        UserRole role = UserRole.valueOf("USER");
 
-        assertThat(role).isEqualTo(UserRole.CUSTOMER);
+        assertThat(role).isEqualTo(UserRole.USER);
     }
 }

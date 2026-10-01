@@ -45,7 +45,7 @@ public class EventPublisher {
                 .setHeader("aggregateType", event.getAggregateType())
                 .setHeader("correlationId", actualCorrelationId)
                 .setHeader("causationId", actualCausationId)
-                .setHeader("timestamp", System.currentTimeMillis())
+                .setHeader("eventTimestamp", System.currentTimeMillis())
                 .build();
 
             kafkaTemplate.send(message)
@@ -87,7 +87,7 @@ public class EventPublisher {
                 .setHeader("aggregateType", event.getAggregateType())
                 .setHeader("correlationId", actualCorrelationId)
                 .setHeader("causationId", actualCausationId)
-                .setHeader("timestamp", System.currentTimeMillis())
+                .setHeader("eventTimestamp", System.currentTimeMillis())
                 .build();
 
             kafkaTemplate.send(message).get();

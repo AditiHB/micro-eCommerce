@@ -13,10 +13,18 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureTestEntityManager;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.messaging.Message;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.temporal.ChronoUnit;
+import java.util.concurrent.CompletableFuture;
+
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @AutoConfigureTestEntityManager
@@ -31,9 +39,16 @@ class OrderServiceIntegrationTest {
     @Autowired
     private OrderRepository orderRepository;
 
+    @MockBean
+    private KafkaTemplate<String, Object> kafkaTemplate;
+
     @BeforeEach
     void setUp() {
         orderRepository.deleteAll();
+        // Kafka isn't available in the test sandbox; EventPublisher.publishEvent() calls
+        // kafkaTemplate.send(message).whenComplete(...), so the mock must return a completed
+        // future rather than null, or the NPE gets wrapped into an EventPublishingException.
+        when(kafkaTemplate.send(any(Message.class))).thenReturn(CompletableFuture.completedFuture(null));
     }
 
     @Test
@@ -152,7 +167,10 @@ class OrderServiceIntegrationTest {
 
         assertThat(response.getCreatedAt()).isNotNull();
         assertThat(response.getUpdatedAt()).isNotNull();
-        assertThat(response.getCreatedAt()).isEqualTo(response.getUpdatedAt());
+        // createdAt/updatedAt are independently stamped by Hibernate at insert time, so they can
+        // differ by a few microseconds even though they represent "the same moment" for this test's
+        // purposes; assert near-equality rather than exact equality to avoid flakiness.
+        assertThat(response.getCreatedAt()).isCloseTo(response.getUpdatedAt(), within(1, ChronoUnit.SECONDS));
     }
 
     @Test
@@ -170,6 +188,7 @@ class OrderServiceIntegrationTest {
         Thread.sleep(100);
 
         orderService.updateOrderStatus(saved.getId(), OrderStatus.INVENTORY_RESERVED);
+        orderRepository.flush();
 
         Order updated = orderRepository.findById(saved.getId()).orElseThrow();
         assertThat(updated.getUpdatedAt()).isAfter(originalUpdatedAt);

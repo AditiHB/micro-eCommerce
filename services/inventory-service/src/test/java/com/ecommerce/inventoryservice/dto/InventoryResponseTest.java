@@ -52,7 +52,7 @@ class InventoryResponseTest {
     @Test
     @DisplayName("Should support all-args constructor")
     void testAllArgsConstructor() {
-        InventoryResponse response = new InventoryResponse(10L, "PROD-003", 200);
+        InventoryResponse response = new InventoryResponse(10L, "PROD-003", 200, null, null);
 
         assertThat(response.getId()).isEqualTo(10L);
         assertThat(response.getProductId()).isEqualTo("PROD-003");
@@ -66,7 +66,7 @@ class InventoryResponseTest {
 
         assertThat(response.getId()).isNull();
         assertThat(response.getProductId()).isNull();
-        assertThat(response.getQuantity()).isEqualTo(0);
+        assertThat(response.getQuantity()).isNull();
     }
 
     @Test

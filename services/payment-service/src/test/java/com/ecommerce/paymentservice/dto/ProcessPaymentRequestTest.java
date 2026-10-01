@@ -14,11 +14,11 @@ class ProcessPaymentRequestTest {
     @DisplayName("Should create request with valid data")
     void testValidRequest() {
         ProcessPaymentRequest request = ProcessPaymentRequest.builder()
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(99.99))
             .build();
 
-        assertThat(request.getOrderId()).isEqualTo("order-123");
+        assertThat(request.getOrderId()).isEqualTo(123L);
         assertThat(request.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(99.99));
     }
 
@@ -26,9 +26,9 @@ class ProcessPaymentRequestTest {
     @DisplayName("Should update order ID via setter")
     void testSetOrderId() {
         ProcessPaymentRequest request = new ProcessPaymentRequest();
-        request.setOrderId("order-456");
+        request.setOrderId(456L);
 
-        assertThat(request.getOrderId()).isEqualTo("order-456");
+        assertThat(request.getOrderId()).isEqualTo(456L);
     }
 
     @Test
@@ -43,9 +43,9 @@ class ProcessPaymentRequestTest {
     @Test
     @DisplayName("Should support all-args constructor")
     void testAllArgsConstructor() {
-        ProcessPaymentRequest request = new ProcessPaymentRequest("order-789", BigDecimal.valueOf(199.99));
+        ProcessPaymentRequest request = new ProcessPaymentRequest(789L, BigDecimal.valueOf(199.99));
 
-        assertThat(request.getOrderId()).isEqualTo("order-789");
+        assertThat(request.getOrderId()).isEqualTo(789L);
         assertThat(request.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(199.99));
     }
 
@@ -62,7 +62,7 @@ class ProcessPaymentRequestTest {
     @DisplayName("Should handle zero amount")
     void testZeroAmount() {
         ProcessPaymentRequest request = ProcessPaymentRequest.builder()
-            .orderId("order-zero")
+            .orderId(0L)
             .amount(BigDecimal.ZERO)
             .build();
 
@@ -73,7 +73,7 @@ class ProcessPaymentRequestTest {
     @DisplayName("Should handle large amount")
     void testLargeAmount() {
         ProcessPaymentRequest request = ProcessPaymentRequest.builder()
-            .orderId("order-large")
+            .orderId(999L)
             .amount(BigDecimal.valueOf(9999999.99))
             .build();
 

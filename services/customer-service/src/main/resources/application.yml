@@ -10,7 +10,7 @@ spring:
     enabled: true
     baselineOnMigrate: true
     validateOnMigrate: true
-    locations: classpath:db/migration
+    locations: classpath:db/migration/{vendor}
     outOfOrder: false
   datasource:
     url: ${DB_URL:jdbc:h2:mem:customer_db}
@@ -26,7 +26,7 @@ spring:
     console:
       enabled: true
   liquibase:
-    enabled: true
+    enabled: false
     change-log: classpath:db/changelog/db.changelog-master.xml
   redis:
     host: ${REDIS_HOST:localhost}
@@ -51,7 +51,7 @@ eureka:
       defaultZone: http://localhost:8761/eureka/
 
 jwt:
-  secret: ${JWT_SECRET:changeme-use-strong-key-in-production}
+  secret: ${JWT_SECRET:this-is-a-default-secret-key-that-is-at-least-32-bytes-long-for-local-dev}
   expiration: 86400000
 
 management:

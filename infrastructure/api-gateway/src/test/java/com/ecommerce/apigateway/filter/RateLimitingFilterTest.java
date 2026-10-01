@@ -54,7 +54,7 @@ class RateLimitingFilterTest {
             return null;
         });
 
-        verify(redisTemplate).opsForValue();
+        verify(redisTemplate, times(2)).opsForValue();
     }
 
     @Test
@@ -82,7 +82,7 @@ class RateLimitingFilterTest {
         GatewayFilter gatewayFilter = filter.apply(config);
         gatewayFilter.filter(exchange, chain -> null);
 
-        verify(redisTemplate).opsForValue();
+        verify(redisTemplate, times(2)).opsForValue();
         verify(valueOps).increment(anyString());
     }
 

@@ -39,6 +39,24 @@ public class KafkaEventConfig {
     @Value("${kafka.event.dlq-suffix:-dlq}")
     private String dlqSuffix;
 
+    @Value("${kafka.listener.auto-startup:true}")
+    private boolean listenerAutoStartup;
+
+    // Fail fast instead of blocking the calling request thread: KafkaProducer.send() performs
+    // synchronous metadata lookup before returning its Future, and blocks the caller for up to
+    // max.block.ms if the broker is unreachable (default 60s). EventPublisher.publishEvent() is
+    // called synchronously from request-handling code (e.g. OrderService.createOrder()), so a low
+    // max.block.ms/request.timeout.ms means a Kafka outage surfaces as a quick EventPublishingException
+    // (handled by the caller's own circuit breaker/retry) rather than a ~60s-per-request hang.
+    @Value("${kafka.producer.max-block-ms:3000}")
+    private int producerMaxBlockMs;
+
+    @Value("${kafka.producer.request-timeout-ms:5000}")
+    private int producerRequestTimeoutMs;
+
+    @Value("${kafka.producer.delivery-timeout-ms:15000}")
+    private int producerDeliveryTimeoutMs;
+
     @Bean
     public KafkaAdmin kafkaAdmin() {
         Map<String, Object> configs = new HashMap<>();
@@ -55,6 +73,9 @@ public class KafkaEventConfig {
         configProps.put(ProducerConfig.ACKS_CONFIG, "all");
         configProps.put(ProducerConfig.RETRIES_CONFIG, 3);
         configProps.put(ProducerConfig.RETRY_BACKOFF_MS_CONFIG, 1000);
+        configProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, producerMaxBlockMs);
+        configProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, producerRequestTimeoutMs);
+        configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, producerDeliveryTimeoutMs);
         configProps.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
         return new DefaultKafkaProducerFactory<>(configProps);
     }
@@ -87,6 +108,7 @@ public class KafkaEventConfig {
         factory.setConsumerFactory(consumerFactory());
         factory.setConcurrency(3);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
+        factory.setAutoStartup(listenerAutoStartup);
         return factory;
     }
 
@@ -97,6 +119,7 @@ public class KafkaEventConfig {
         factory.setConsumerFactory(consumerFactory());
         factory.setConcurrency(1);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
+        factory.setAutoStartup(listenerAutoStartup);
         return factory;
     }
 

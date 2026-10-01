@@ -53,7 +53,7 @@ class CreateInventoryRequestTest {
         CreateInventoryRequest request = new CreateInventoryRequest();
 
         assertThat(request.getProductId()).isNull();
-        assertThat(request.getQuantity()).isEqualTo(0);
+        assertThat(request.getQuantity()).isNull();
     }
 
     @Test

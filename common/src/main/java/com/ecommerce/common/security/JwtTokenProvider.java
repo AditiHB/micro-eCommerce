@@ -15,7 +15,7 @@ import java.util.Date;
 @Component
 @Slf4j
 public class JwtTokenProvider {
-    @Value("${jwt.secret:mySecretKeyForJWTTokenSigningPurposeOnly12345678901234567890}")
+    @Value("${jwt.secret}")
     private String jwtSecret;
 
     @Value("${jwt.expiration:86400000}")

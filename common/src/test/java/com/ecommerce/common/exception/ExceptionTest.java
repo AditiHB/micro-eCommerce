@@ -35,12 +35,11 @@ class ExceptionTest {
     @DisplayName("Should create ValidationException")
     void testValidationException() {
         String message = "Validation failed";
-        String code = "VALIDATION_ERROR";
 
-        ValidationException exception = new ValidationException(message, code);
+        ValidationException exception = new ValidationException(message);
 
         assertThat(exception.getMessage()).isEqualTo(message);
-        assertThat(exception.getErrorCode()).isEqualTo(code);
+        assertThat(exception.getErrorCode()).isEqualTo("VALIDATION_ERROR");
     }
 
     @Test

@@ -16,13 +16,13 @@ class PaymentEntityTest {
     void testPaymentCreation() {
         Payment payment = Payment.builder()
             .id(1L)
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(99.99))
             .status(PaymentStatus.PROCESSING)
             .build();
 
         assertThat(payment.getId()).isEqualTo(1L);
-        assertThat(payment.getOrderId()).isEqualTo("order-123");
+        assertThat(payment.getOrderId()).isEqualTo(123L);
         assertThat(payment.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(99.99));
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PROCESSING);
     }

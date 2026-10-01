@@ -1,6 +1,8 @@
 spring:
   application:
     name: customer-service-test
+  liquibase:
+    enabled: false
   datasource:
     url: jdbc:h2:mem:testdb
     driver-class-name: org.h2.Driver
@@ -29,3 +31,7 @@ logging:
 jwt:
   secret: testSecretKeyForJWTTokenSigningPurposeOnlyForTesting1234567890
   expiration: 3600000
+
+kafka:
+  listener:
+    auto-startup: false

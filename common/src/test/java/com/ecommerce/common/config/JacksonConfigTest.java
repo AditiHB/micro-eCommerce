@@ -8,7 +8,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import static org.assertj.core.api.Assertions.*;
 
-@SpringBootTest
+@SpringBootTest(classes = JacksonConfig.class)
 @DisplayName("JacksonConfig Integration Tests")
 class JacksonConfigTest {
 

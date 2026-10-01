@@ -55,7 +55,7 @@ class PaymentServiceTest {
     void setUp() {
         testPayment = Payment.builder()
             .id(1L)
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(99.99))
             .status(PaymentStatus.PROCESSED)
             .createdAt(LocalDateTime.now())
@@ -63,7 +63,7 @@ class PaymentServiceTest {
             .build();
 
         processRequest = ProcessPaymentRequest.builder()
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(99.99))
             .build();
     }
@@ -73,7 +73,7 @@ class PaymentServiceTest {
     void testProcessPaymentSuccess() {
         Payment processingPayment = Payment.builder()
             .id(1L)
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(99.99))
             .status(PaymentStatus.PROCESSING)
             .build();
@@ -87,7 +87,7 @@ class PaymentServiceTest {
 
         assertThat(response).isNotNull();
         assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getOrderId()).isEqualTo("order-123");
+        assertThat(response.getOrderId()).isEqualTo(123L);
         assertThat(response.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(99.99));
         assertThat(response.getStatus()).isEqualTo(PaymentStatus.PROCESSED);
         verify(paymentRepository, times(2)).save(any(Payment.class));
@@ -103,7 +103,7 @@ class PaymentServiceTest {
 
         assertThat(response).isNotNull();
         assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getOrderId()).isEqualTo("order-123");
+        assertThat(response.getOrderId()).isEqualTo(123L);
         verify(paymentRepository, times(1)).findById(1L);
     }
 
@@ -136,7 +136,7 @@ class PaymentServiceTest {
     void testRefundPaymentSuccess() {
         Payment refundedPayment = Payment.builder()
             .id(1L)
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(99.99))
             .status(PaymentStatus.REFUNDED)
             .build();
@@ -164,7 +164,7 @@ class PaymentServiceTest {
     void testMultiplePaymentStatusTransitions() {
         Payment payment = Payment.builder()
             .id(1L)
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(99.99))
             .status(PaymentStatus.PROCESSING)
             .build();
@@ -189,7 +189,7 @@ class PaymentServiceTest {
 
         paymentService.getAllPayments(0, 1000, "id");
 
-        verify(paymentRepository, times(1)).findAll(argThat(pageable ->
+        verify(paymentRepository, times(1)).findAll(argThat((Pageable pageable) ->
             pageable.getPageSize() <= ApiConstants.MAX_PAGE_SIZE
         ));
     }
@@ -231,7 +231,7 @@ class PaymentServiceTest {
     @DisplayName("Should handle small payment amounts")
     void testProcessSmallPayment() {
         ProcessPaymentRequest smallRequest = ProcessPaymentRequest.builder()
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(0.01))
             .build();
 
@@ -255,7 +255,7 @@ class PaymentServiceTest {
     @DisplayName("Should handle large payment amounts")
     void testProcessLargePayment() {
         ProcessPaymentRequest largeRequest = ProcessPaymentRequest.builder()
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(999999.99))
             .build();
 
@@ -279,7 +279,7 @@ class PaymentServiceTest {
     @DisplayName("Should handle zero payment amount")
     void testProcessZeroPayment() {
         ProcessPaymentRequest zeroRequest = ProcessPaymentRequest.builder()
-            .orderId("order-123")
+            .orderId(123L)
             .amount(BigDecimal.valueOf(0.00))
             .build();
 

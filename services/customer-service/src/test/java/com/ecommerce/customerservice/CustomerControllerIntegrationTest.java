@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import com.ecommerce.common.service.UserService;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
@@ -22,6 +24,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @ActiveProfiles("test")
 @DisplayName("Customer Controller Integration Tests")
 class CustomerControllerIntegrationTest {
+
+    // AuthController (in this service's own package) depends on UserService, which lives in
+    // the common auth subsystem that is deliberately left out of the component scan (see
+    // CommonIntegrationConfig). Mocked here purely so the application context can start.
+    @MockBean
+    private UserService userService;
 
     @Autowired
     private MockMvc mockMvc;
