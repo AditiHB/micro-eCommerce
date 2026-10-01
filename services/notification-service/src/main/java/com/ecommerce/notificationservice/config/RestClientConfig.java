@@ -8,7 +8,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestTemplate;
 
-import javax.net.ssl.SSLContext;
 import java.time.Duration;
 
 /**
@@ -28,7 +27,7 @@ public class RestClientConfig {
     public RestTemplate customerServiceRestTemplate(RestTemplateBuilder builder) {
         log.info("Initializing mTLS RestTemplate for Customer Service");
         return builder
-            .requestFactory(() -> createSslHttpRequestFactory("customer-service"))
+            .setSslBundle(sslBundles.getBundle("mTLS"))
             .setConnectTimeout(Duration.ofSeconds(10))
             .setReadTimeout(Duration.ofSeconds(30))
             .build();
@@ -38,37 +37,9 @@ public class RestClientConfig {
     public RestTemplate orderServiceRestTemplate(RestTemplateBuilder builder) {
         log.info("Initializing mTLS RestTemplate for Order Service");
         return builder
-            .requestFactory(() -> createSslHttpRequestFactory("order-service"))
+            .setSslBundle(sslBundles.getBundle("mTLS"))
             .setConnectTimeout(Duration.ofSeconds(10))
             .setReadTimeout(Duration.ofSeconds(30))
             .build();
-    }
-
-    private org.springframework.http.client.HttpComponentsClientHttpRequestFactory
-            createSslHttpRequestFactory(String serviceName) {
-        try {
-            var factory = new org.springframework.http.client.HttpComponentsClientHttpRequestFactory();
-
-            var sslBundle = sslBundles.getBundle("mTLS");
-            SSLContext sslContext = sslBundle.createSslContext();
-
-            var httpClient = org.apache.http.impl.client.HttpClients.custom()
-                .setSSLContext(sslContext)
-                .setSSLHostnameVerifier(org.apache.http.conn.ssl.NoopHostnameVerifier.INSTANCE)
-                .build();
-
-            factory.setHttpClient(httpClient);
-            factory.setConnectTimeout((int) Duration.ofSeconds(10).toMillis());
-            factory.setReadTimeout((int) Duration.ofSeconds(30).toMillis());
-
-            log.info("mTLS RestTemplate created for service: {}", serviceName);
-            return factory;
-        } catch (Exception e) {
-            log.warn("Failed to create mTLS RestTemplate for {}, falling back to default", serviceName, e);
-            var factory = new org.springframework.http.client.HttpComponentsClientHttpRequestFactory();
-            factory.setConnectTimeout((int) Duration.ofSeconds(10).toMillis());
-            factory.setReadTimeout((int) Duration.ofSeconds(30).toMillis());
-            return factory;
-        }
     }
 }

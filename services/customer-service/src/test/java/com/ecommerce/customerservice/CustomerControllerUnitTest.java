@@ -36,6 +36,12 @@ class CustomerControllerUnitTest {
     @MockBean
     private CustomerService customerService;
 
+    @MockBean
+    private com.ecommerce.common.security.JwtTokenProvider jwtTokenProvider;
+
+    @MockBean
+    private com.ecommerce.common.security.CustomUserDetailsService customUserDetailsService;
+
     @Autowired
     private ObjectMapper objectMapper;
 
