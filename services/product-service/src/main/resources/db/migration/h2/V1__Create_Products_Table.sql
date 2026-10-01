@@ -11,12 +11,7 @@ CREATE TABLE IF NOT EXISTS products (
     category VARCHAR(100) NOT NULL,
     quantity_available INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    INDEX idx_sku (sku),
-    INDEX idx_category (category),
-    INDEX idx_created_at (created_at)
-);
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
 
 CREATE TABLE IF NOT EXISTS product_categories (
     id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -25,3 +20,8 @@ CREATE TABLE IF NOT EXISTS product_categories (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+
+CREATE INDEX idx_sku ON products(sku);
+CREATE INDEX idx_category ON products(category);
+CREATE INDEX idx_created_at ON products(created_at);

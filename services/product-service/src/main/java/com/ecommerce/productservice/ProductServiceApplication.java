@@ -10,7 +10,16 @@ import org.springframework.boot.actuate.autoconfigure.security.servlet.Managemen
 import org.springframework.kafka.annotation.EnableKafka;
 
 @SpringBootApplication(
-    scanBasePackages = {"com.ecommerce.productservice", "com.ecommerce.common.events", "com.ecommerce.common.eventsourcing", "com.ecommerce.common.metrics", "com.ecommerce.common.logging"},
+    scanBasePackages = {
+        "com.ecommerce.productservice", 
+        "com.ecommerce.common.events", 
+        "com.ecommerce.common.eventsourcing", 
+        "com.ecommerce.common.metrics", 
+        "com.ecommerce.common.logging",
+        "com.ecommerce.common.service",
+        "com.ecommerce.common.security",
+        "com.ecommerce.common.exception"
+    },
     exclude = {SecurityAutoConfiguration.class, SecurityFilterAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class, ManagementWebSecurityAutoConfiguration.class}
 )
 @EnableDiscoveryClient

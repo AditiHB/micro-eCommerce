@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS customers (
     name VARCHAR(100) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    INDEX idx_email (email),
-    INDEX idx_created_at (created_at)
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_email ON customers(email);
+CREATE INDEX idx_created_at ON customers(created_at);

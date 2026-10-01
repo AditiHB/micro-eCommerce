@@ -1,0 +1,2 @@
+-- Customer Service - H2 Sample Data
+-- Idempotent inserts using;

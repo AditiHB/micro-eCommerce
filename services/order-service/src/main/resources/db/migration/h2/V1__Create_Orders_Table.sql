@@ -10,10 +10,10 @@ CREATE TABLE IF NOT EXISTS orders (
     quantity INT NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
 
-    INDEX idx_customer_id (customer_id),
-    INDEX idx_product_id (product_id),
-    INDEX idx_status (status),
-    INDEX idx_created_at (created_at)
-);
+
+CREATE INDEX idx_customer_id ON orders(customer_id);
+CREATE INDEX idx_product_id ON orders(product_id);
+CREATE INDEX idx_status ON orders(status);
+CREATE INDEX idx_created_at ON orders(created_at);

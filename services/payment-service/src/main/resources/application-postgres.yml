@@ -23,7 +23,7 @@ spring:
         order_updates: true
     show-sql: false
   liquibase:
-    enabled: true
+    enabled: false
     change-log: classpath:db/changelog/db.changelog-master.xml
     contexts: prod
 

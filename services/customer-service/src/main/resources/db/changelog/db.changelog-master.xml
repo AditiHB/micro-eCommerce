@@ -2,7 +2,7 @@
 <databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
-                   http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.25.xsd">
+                   http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
     <changeSet id="001-initial-customers-schema" author="claude">
         <createTable tableName="customers" remarks="Customers table">
@@ -67,6 +67,85 @@
         <createIndex indexName="idx_audit_logs_created_at" tableName="audit_logs">
             <column name="created_at"/>
         </createIndex>
+    </changeSet>
+
+    <changeSet id="005-event-store-table" author="claude">
+        <createTable tableName="event_store" remarks="Event Store table">
+            <column name="id" type="BIGINT" autoIncrement="true" remarks="Unique identifier">
+                <constraints primaryKey="true" primaryKeyName="pk_event_store"/>
+            </column>
+            <column name="event_id" type="VARCHAR(100)" remarks="Event ID">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uk_event_store_event_id"/>
+            </column>
+            <column name="aggregate_id" type="VARCHAR(50)" remarks="Aggregate ID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="aggregate_type" type="VARCHAR(50)" remarks="Aggregate Type">
+                <constraints nullable="false"/>
+            </column>
+            <column name="event_type" type="VARCHAR(100)" remarks="Event Type">
+                <constraints nullable="false"/>
+            </column>
+            <column name="event_data" type="VARCHAR(1000000)" remarks="Event Data">
+                <constraints nullable="false"/>
+            </column>
+            <column name="version" type="INT" remarks="Version">
+                <constraints nullable="false"/>
+            </column>
+            <column name="occurred_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="stored_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="metadata" type="VARCHAR(255)"/>
+            <column name="correlation_id" type="VARCHAR(1000000)"/>
+            <column name="causation_id" type="VARCHAR(1000000)"/>
+        </createTable>
+    </changeSet>
+
+    <changeSet id="006-event-store-indexes" author="claude">
+        <createIndex indexName="idx_aggregate_id" tableName="event_store">
+            <column name="aggregate_id"/>
+        </createIndex>
+        <createIndex indexName="idx_aggregate_type" tableName="event_store">
+            <column name="aggregate_type"/>
+        </createIndex>
+        <createIndex indexName="idx_event_type" tableName="event_store">
+            <column name="event_type"/>
+        </createIndex>
+        <createIndex indexName="idx_occurred_at" tableName="event_store">
+            <column name="occurred_at"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="007-users-table" author="claude">
+        <createTable tableName="users" remarks="Users table">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_users"/>
+            </column>
+            <column name="username" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uk_users_username"/>
+            </column>
+            <column name="email" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="uk_users_email"/>
+            </column>
+            <column name="password" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="role" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="enabled" type="BOOLEAN" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
     </changeSet>
 
 </databaseChangeLog>

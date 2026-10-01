@@ -6,8 +6,8 @@ CREATE TABLE IF NOT EXISTS inventory (
     product_id VARCHAR(50) NOT NULL UNIQUE,
     quantity INT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
 
-    INDEX idx_product_id (product_id),
-    INDEX idx_created_at (created_at)
-);
+
+CREATE INDEX idx_product_id ON inventory(product_id);
+CREATE INDEX idx_created_at ON inventory(created_at);

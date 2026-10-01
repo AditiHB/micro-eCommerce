@@ -9,7 +9,16 @@ import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServic
 import org.springframework.boot.actuate.autoconfigure.security.servlet.ManagementWebSecurityAutoConfiguration;
 
 @SpringBootApplication(
-    scanBasePackages = {"com.ecommerce.paymentservice", "com.ecommerce.common.events", "com.ecommerce.common.eventsourcing", "com.ecommerce.common.metrics", "com.ecommerce.common.logging"},
+    scanBasePackages = {
+        "com.ecommerce.paymentservice", 
+        "com.ecommerce.common.events", 
+        "com.ecommerce.common.eventsourcing", 
+        "com.ecommerce.common.metrics", 
+        "com.ecommerce.common.logging",
+        "com.ecommerce.common.service",
+        "com.ecommerce.common.security",
+        "com.ecommerce.common.exception"
+    },
     exclude = {SecurityAutoConfiguration.class, SecurityFilterAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class, ManagementWebSecurityAutoConfiguration.class}
 )
 @EnableDiscoveryClient

@@ -9,9 +9,9 @@ CREATE TABLE IF NOT EXISTS payments (
     amount DECIMAL(10, 2) NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP);
 
-    INDEX idx_order_id (order_id),
-    INDEX idx_status (status),
-    INDEX idx_created_at (created_at)
-);
+
+CREATE INDEX idx_order_id ON payments(order_id);
+CREATE INDEX idx_status ON payments(status);
+CREATE INDEX idx_created_at ON payments(created_at);

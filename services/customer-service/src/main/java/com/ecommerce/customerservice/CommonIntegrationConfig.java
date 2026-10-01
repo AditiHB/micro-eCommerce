@@ -20,8 +20,8 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
  * that a web-layer-only test slice never provides.
  */
 @Configuration
-@EnableJpaRepositories(basePackages = {"com.ecommerce.customerservice", "com.ecommerce.common.eventsourcing"})
-@EntityScan(basePackages = {"com.ecommerce.customerservice", "com.ecommerce.common.eventsourcing"})
+@EnableJpaRepositories(basePackages = {"com.ecommerce.customerservice", "com.ecommerce.common.eventsourcing", "com.ecommerce.common.repository"})
+@EntityScan(basePackages = {"com.ecommerce.customerservice", "com.ecommerce.common.eventsourcing", "com.ecommerce.common.entity"})
 @Import({CacheConfig.class, JacksonConfig.class, KafkaEventConfig.class})
 public class CommonIntegrationConfig {
 }
