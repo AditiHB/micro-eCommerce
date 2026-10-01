@@ -180,6 +180,24 @@ Sends message to Kafka:
    - Who reads: Order Service, Inventory
 ```
 
+### Dead Letter Queue (DLQ) Topics ⚠️
+```
+✉️ payment.dlq
+   - When: Payment fails after retries
+   - Who reads: Admin/Monitoring System
+   - Why: Needs human investigation
+   
+✉️ order.dlq
+   - When: Order can't be processed
+   - Who reads: Admin/Monitoring System
+   - Why: Something is seriously wrong
+   
+✉️ inventory.dlq
+   - When: Inventory update fails
+   - Who reads: Admin/Monitoring System
+   - Why: Stock issue needs attention
+```
+
 ---
 
 ## Real Timeline: Customer Orders Pizza 🍕
@@ -385,6 +403,45 @@ Second time: Charge card again? (Wait...)
          ✓ Idempotency prevents double-charging!
          ✓ Payment Service checks "Have I seen this?"
          ✓ If yes, skip. If no, process.
+```
+
+### Scenario 4: Message Can't Be Processed (Dead Letter Queue) ⚠️
+```
+Payment Service gets message with INVALID credit card
+         ↓
+Tries to charge: FAIL ❌
+         ↓
+Retries 3 times: FAIL FAIL FAIL ❌❌❌
+         ↓
+Sends message to DEAD LETTER QUEUE topic
+         ↓
+Special topic: "payment.dlq" (Dead Letter Queue)
+         ↓
+Admin sees broken message in DLQ
+         ↓
+Investigates and fixes the issue manually
+         ↓
+Message can be reprocessed when ready
+         ✓ Order doesn't disappear!
+         ✓ Humans can investigate!
+```
+
+**Real-world example:**
+```
+Order: "Pizza for $15"
+Credit card: "4111-INVALID"
+
+Payment Service tries:
+  Try 1: "Invalid card!" → FAIL
+  Try 2: "Invalid card!" → FAIL
+  Try 3: "Invalid card!" → FAIL
+  
+Message → payment.dlq (Dead Letter Queue)
+
+Admin sees it in monitoring dashboard
+Admin emails customer: "Please update your card"
+Customer updates card
+Admin replays message: SUCCESS! ✅
 ```
 
 ---

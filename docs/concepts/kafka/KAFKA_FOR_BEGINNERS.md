@@ -147,7 +147,7 @@ In the **micro-eCommerce** system:
 
 ---
 
-## The Three Questions
+## The Four Questions
 
 ### Q1: What if someone reads it wrong?
 **A:** Don't worry! They can read it again. The message stays in Kafka!
@@ -174,6 +174,33 @@ Second read: "Wait, this already happened!" ✅
 ```
 Message sits in Kafka 💤
 When service wakes up and reads it, it processes it ✅
+```
+
+### Q4: What if a service CAN'T process a message (even after retries)?
+**A:** It goes to a **Dead Letter Queue (DLQ)** - a special holding area for "broken" messages!
+
+```
+Normal flow:
+Message → Service tries to process → SUCCESS ✅
+
+Problem flow:
+Message → Service tries (FAIL) 
+       → Retry 1 (FAIL)
+       → Retry 2 (FAIL)
+       → Retry 3 (FAIL)
+       → Send to DLQ ⚠️ (Humans investigate!)
+```
+
+**Real example:** An order has invalid payment info
+```
+Payment Service receives: "Process payment, card = INVALID"
+Try 1: "This card is invalid!" FAIL ❌
+Try 2: "Still invalid!" FAIL ❌
+Try 3: "Give up, send to DLQ"
+       ↓
+DLQ topic: "suspicious-orders"
+       ↓
+Admin sees it and fixes manually
 ```
 
 ---
@@ -203,6 +230,7 @@ When service wakes up and reads it, it processes it ✅
 | **Consumer Group** | Group of readers | Friends reading together |
 | **Broker** | Kafka server | The mailbox location |
 | **Cluster** | Multiple brokers | Multiple mailbox locations |
+| **Dead Letter Queue (DLQ)** | Topic for failed messages | The "problem messages" folder |
 
 ---
 

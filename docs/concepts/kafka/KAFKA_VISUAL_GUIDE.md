@@ -567,6 +567,105 @@ Multiple copies on other brokers = Fault tolerant ✅
 
 ---
 
+## Dead Letter Queue (DLQ) 🚫
+
+```
+WHAT HAPPENS WHEN A MESSAGE CAN'T BE PROCESSED?
+════════════════════════════════════════════════
+
+Normal Flow:
+┌────────────────────────────────────────────────┐
+│ Message: "Process payment for $100"            │
+│          ↓                                      │
+│ Service: "I'll handle this" ✅                  │
+│          ↓                                      │
+│ Result: "Payment processed!" SUCCESS! ✨       │
+└────────────────────────────────────────────────┘
+
+Failure Flow (DLQ):
+┌────────────────────────────────────────────────┐
+│ Message: "Process payment for INVALID CARD"    │
+│          ↓                                      │
+│ Service: "Let me try..." ❌                     │
+│ Try 1: "Invalid card!" FAIL                    │
+│ Try 2: "Still invalid!" FAIL                   │
+│ Try 3: "Give up!" FAIL                         │
+│          ↓                                      │
+│ System: "Send to Dead Letter Queue" ⚠️         │
+│          ↓                                      │
+│ Special Topic: "payment.dlq"                   │
+│ (Dead Letter Queue for broken messages)        │
+│          ↓                                      │
+│ Admin: "I'll investigate this manually" 🔍     │
+└────────────────────────────────────────────────┘
+
+DLQ Flow in Detail:
+┌──────────────┐
+│ Kafka Topic  │
+└──────┬───────┘
+       ↓
+┌─────────────────────────┐
+│ Consumer tries to       │
+│ process message         │
+└─────────┬───────────────┘
+          ↓
+    ┌─────────────┐
+    │ Success? ✅ │
+    │    YES      │ Mark as done
+    └─────────────┘
+    
+    ┌─────────────┐
+    │ Success? ❌ │
+    │    NO       │ Retry
+    └─────┬───────┘
+          ↓
+    ┌──────────────────┐
+    │ Retries > Limit? │
+    │ (e.g., 3 tries)  │
+    └──────┬───────────┘
+           ↓ YES
+    ┌────────────────┐
+    │ Dead Letter    │
+    │ Queue Topic    │ ⚠️ Human review needed
+    │ (e.g., *.dlq)  │
+    └────────────────┘
+           ↓
+    🔍 Admin/Monitoring
+    📧 Alert sent to team
+    🔧 Manual investigation
+    ♻️ Replay when fixed
+
+
+EXAMPLE: Payment Service with DLQ
+═════════════════════════════════════
+
+Regular Orders:
+├─ Order #1 (Card: 4111-1111-1111-1111) ✅ SUCCESS
+├─ Order #2 (Card: 4222-2222-2222-2222) ✅ SUCCESS
+└─ Order #3 (Card: 4333-3333-3333-3333) ✅ SUCCESS
+   ↓ All messages processed normally
+
+Invalid Orders → DLQ:
+├─ Order #4 (Card: EXPIRED) ❌ → payment.dlq
+├─ Order #5 (Card: INVALID) ❌ → payment.dlq
+└─ Order #6 (Card: NO-MATCH) ❌ → payment.dlq
+   ↓
+   Admin sees these in DLQ dashboard
+   Admin contacts customers to update payment info
+   When fixed, replay message for retry
+
+
+WHY DLQ MATTERS
+════════════════════
+✅ Messages don't disappear forever
+✅ Admins get alerts for investigation
+✅ Can be replayed when issue is fixed
+✅ Audit trail of what went wrong
+✅ No silent failures
+```
+
+---
+
 ## When to Use What
 
 ```
