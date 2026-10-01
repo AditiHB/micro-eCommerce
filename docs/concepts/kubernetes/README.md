@@ -46,6 +46,33 @@ Includes:
 
 ---
 
+### 🦸 I want to master Kubernetes (Zero to Hero)
+**→ Read this:** [`KUBERNETES_ZERO_TO_HERO.md`](./KUBERNETES_ZERO_TO_HERO.md)
+
+Complete comprehensive guide including:
+- All beginner fundamentals
+- Ingress & external access
+- StatefulSets for stateful applications
+- DaemonSets for running on every node
+- Jobs & CronJobs for scheduled tasks
+- Namespace isolation & organization
+- Persistent Volumes & PersistentVolumeClaims
+- RBAC - Role-based access control
+- Network Policies - traffic isolation
+- Resource requests & limits
+- Taints & Tolerations
+- Init containers
+- Horizontal Pod Autoscaler (HPA)
+- Pod Disruption Budgets
+- Monitoring & observability
+- Production checklist
+- Real-world scenarios
+- Common mistakes to avoid
+
+**Time:** 40-60 minutes
+
+---
+
 ## 🗺️ Recommended Learning Path
 
 ### Path 1: Complete Beginner (Recommended)
@@ -72,6 +99,15 @@ Includes:
 ```
 **Total: 50 minutes** 🎨
 
+### Path 4: Zero to Hero (Complete Mastery)
+```
+1. KUBERNETES_FOR_BEGINNERS.md (20 min)
+2. KUBERNETES_VISUAL_GUIDE.md (20 min)
+3. KUBERNETES_IN_THIS_PROJECT.md (20 min)
+4. KUBERNETES_ZERO_TO_HERO.md (50 min) ← All advanced concepts!
+```
+**Total: 110 minutes** 🦸
+
 ---
 
 ## 📚 Document Overview
@@ -79,8 +115,9 @@ Includes:
 | Document | Best For | Time |
 |----------|----------|------|
 | **KUBERNETES_FOR_BEGINNERS.md** | First introduction | 15-20 min |
-| **KUBERNETES_IN_THIS_PROJECT.md** | Understanding our system | 20-25 min |
 | **KUBERNETES_VISUAL_GUIDE.md** | Visual learners | 20-25 min |
+| **KUBERNETES_IN_THIS_PROJECT.md** | Understanding our system | 20-25 min |
+| **KUBERNETES_ZERO_TO_HERO.md** | Complete mastery | 40-60 min |
 
 ---
 

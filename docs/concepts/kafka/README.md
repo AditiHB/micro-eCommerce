@@ -44,6 +44,25 @@ Includes:
 
 ---
 
+### 🦸 I want to master Kafka (Zero to Hero)
+**→ Read this:** [`KAFKA_ZERO_TO_HERO.md`](./KAFKA_ZERO_TO_HERO.md)
+
+Complete comprehensive guide including:
+- All beginner fundamentals
+- Consumer lag & monitoring
+- Delivery semantics (exactly-once vs at-least-once)
+- Configuration & retention policies
+- Replication & fault tolerance
+- Message ordering guarantees
+- Transactions
+- Production checklist
+- Real-world scenarios
+- Common mistakes to avoid
+
+**Time:** 30-45 minutes
+
+---
+
 ## 🗺️ Recommended Learning Path
 
 ### Path 1: Complete Beginner (Recommended)
@@ -70,6 +89,15 @@ Includes:
 ```
 **Total: 40 minutes** 🎨
 
+### Path 4: Zero to Hero (Complete Mastery)
+```
+1. KAFKA_FOR_BEGINNERS.md (15 min)
+2. KAFKA_VISUAL_GUIDE.md (15 min)
+3. KAFKA_IN_THIS_PROJECT.md (15 min)
+4. KAFKA_ZERO_TO_HERO.md (40 min) ← All advanced concepts!
+```
+**Total: 85 minutes** 🦸
+
 ---
 
 ## 📚 Document Overview
@@ -77,8 +105,9 @@ Includes:
 | Document | Best For | Time |
 |----------|----------|------|
 | **KAFKA_FOR_BEGINNERS.md** | First introduction | 10-15 min |
-| **KAFKA_IN_THIS_PROJECT.md** | Understanding our system | 15-20 min |
 | **KAFKA_VISUAL_GUIDE.md** | Visual learners | 15-20 min |
+| **KAFKA_IN_THIS_PROJECT.md** | Understanding our system | 15-20 min |
+| **KAFKA_ZERO_TO_HERO.md** | Complete mastery | 30-45 min |
 
 ---
 
