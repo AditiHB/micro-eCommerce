@@ -9,6 +9,7 @@ import com.ecommerce.inventoryservice.dto.InventoryResponse;
 import com.ecommerce.inventoryservice.service.InventoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureTestEntityManager;
@@ -22,6 +23,7 @@ import static org.assertj.core.api.Assertions.*;
 @AutoConfigureTestEntityManager
 @Transactional
 @ActiveProfiles("test")
+@Tag("integration")
 @DisplayName("Inventory Service Integration Tests")
 class InventoryServiceIntegrationTest {
 

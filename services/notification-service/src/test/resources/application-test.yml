@@ -13,16 +13,20 @@ spring:
     show-sql: false
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
   h2:
     console:
-      enabled: true
+      enabled: false
   flyway:
     enabled: false
   liquibase:
     enabled: false
   kafka:
+    admin:
+      auto-create: false
     bootstrap-servers: localhost:9092
+    listener:
+      auto-startup: false
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -31,6 +35,10 @@ spring:
       enabled: false
     discovery:
       enabled: false
+
+kafka:
+  listener:
+    auto-startup: false
 
 eureka:
   client:
@@ -51,4 +59,8 @@ server:
 logging:
   level:
     root: WARN
-    com.ecommerce: INFO
+    com.ecommerce: WARN
+
+jwt:
+  secret: testSecretKeyForJWTTokenSigningPurposeOnlyForTesting1234567890
+  expiration: 3600000

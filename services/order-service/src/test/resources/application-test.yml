@@ -3,6 +3,11 @@ spring:
     name: order-service-test
   liquibase:
     enabled: false
+  cloud:
+    config:
+      enabled: false
+    discovery:
+      enabled: false
   datasource:
     url: jdbc:h2:mem:testdb
     driver-class-name: org.h2.Driver
@@ -15,15 +20,23 @@ spring:
     show-sql: false
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
   h2:
     console:
-      enabled: true
+      enabled: false
   kafka:
+    admin:
+      auto-create: false
     bootstrap-servers: localhost:9092
+    listener:
+      auto-startup: false
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+kafka:
+  listener:
+    auto-startup: false
 
 server:
   port: 8082
@@ -31,8 +44,12 @@ server:
 logging:
   level:
     root: WARN
-    com.ecommerce: INFO
+    com.ecommerce: WARN
 
-kafka:
-  listener:
-    auto-startup: false
+jwt:
+  secret: testSecretKeyForJWTTokenSigningPurposeOnlyForTesting1234567890
+  expiration: 3600000
+
+eureka:
+  client:
+    enabled: false
