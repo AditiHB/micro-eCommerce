@@ -31,7 +31,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(ProductController.class)
-@Import(TestSecurityConfig.class)
+@AutoConfigureMockMvc(addFilters = false)
 class ProductControllerTest {
     @Autowired
     private MockMvc mockMvc;
@@ -41,6 +41,12 @@ class ProductControllerTest {
 
     @MockBean
     private ProductService productService;
+
+    @MockBean
+    private com.ecommerce.common.security.JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    @MockBean
+    private com.ecommerce.common.security.CustomUserDetailsService customUserDetailsService;
 
     private ProductDTO testProductDTO;
     private CreateProductRequest createRequest;

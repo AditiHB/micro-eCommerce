@@ -37,7 +37,7 @@ class CustomerControllerUnitTest {
     private CustomerService customerService;
 
     @MockBean
-    private com.ecommerce.common.security.JwtTokenProvider jwtTokenProvider;
+    private com.ecommerce.common.security.JwtAuthenticationFilter jwtAuthenticationFilter;
 
     @MockBean
     private com.ecommerce.common.security.CustomUserDetailsService customUserDetailsService;

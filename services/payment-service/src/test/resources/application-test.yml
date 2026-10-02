@@ -36,3 +36,8 @@ logging:
 kafka:
   listener:
     auto-startup: false
+
+
+jwt:
+  secret: testSecretKeyForJWTTokenSigningPurposeOnlyForTesting1234567890
+  expiration: 3600000
