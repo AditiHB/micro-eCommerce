@@ -30,6 +30,12 @@
         <postgresql.version>42.7.3</postgresql.version>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
+        <maven-compiler-plugin.version>3.12.1</maven-compiler-plugin.version>
+        <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
+        <maven-failsafe-plugin.version>3.2.5</maven-failsafe-plugin.version>
+        <skipTests>false</skipTests>
+        <skipUnitTests>${skipTests}</skipUnitTests>
+        <skipITs>${skipTests}</skipITs>
     </properties>
 
     <dependencyManagement>
@@ -202,6 +208,17 @@
             <artifactId>h2</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- JUnit Platform Suite support -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-suite-engine</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-suite-api</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
     <build>
         <pluginManagement>
@@ -221,6 +238,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${maven-compiler-plugin.version}</version>
                     <configuration>
                         <!-- Preserve method parameter names in bytecode so Spring MVC can
                              resolve @PathVariable/@RequestParam names via reflection without
@@ -228,8 +246,96 @@
                         <parameters>true</parameters>
                     </configuration>
                 </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${maven-surefire-plugin.version}</version>
+                    <configuration>
+                        <skipTests>${skipUnitTests}</skipTests>
+                        <argLine>-XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Xmx1024m</argLine>
+                        <reuseForks>true</reuseForks>
+                        <systemPropertyVariables>
+                            <spring.profiles.active>test</spring.profiles.active>
+                            <spring.cloud.config.enabled>false</spring.cloud.config.enabled>
+                            <spring.cloud.discovery.enabled>false</spring.cloud.discovery.enabled>
+                            <eureka.client.enabled>false</eureka.client.enabled>
+                            <spring.flyway.enabled>false</spring.flyway.enabled>
+                            <spring.liquibase.enabled>false</spring.liquibase.enabled>
+                        </systemPropertyVariables>
+                        <!-- Exclude integration tests from fast unit test suite -->
+                        <excludes>
+                            <exclude>**/*IntegrationTest.java</exclude>
+                            <exclude>**/*ApplicationTests.java</exclude>
+                            <exclude>**/*IT.java</exclude>
+                            <exclude>**/integration/**</exclude>
+                        </excludes>
+                        <excludedGroups>integration</excludedGroups>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <version>${maven-failsafe-plugin.version}</version>
+                    <configuration>
+                        <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                        <skipITs>${skipITs}</skipITs>
+                        <argLine>-XX:+TieredCompilation -XX:TieredStopAtLevel=1 -Xmx1024m</argLine>
+                        <reuseForks>true</reuseForks>
+                        <systemPropertyVariables>
+                            <spring.profiles.active>test</spring.profiles.active>
+                            <spring.cloud.config.enabled>false</spring.cloud.config.enabled>
+                            <spring.cloud.discovery.enabled>false</spring.cloud.discovery.enabled>
+                            <eureka.client.enabled>false</eureka.client.enabled>
+                            <spring.flyway.enabled>false</spring.flyway.enabled>
+                            <spring.liquibase.enabled>false</spring.liquibase.enabled>
+                        </systemPropertyVariables>
+                        <!-- Include integration tests for failsafe verify phase -->
+                        <includes>
+                            <include>**/*IntegrationTest.java</include>
+                            <include>**/*ApplicationTests.java</include>
+                            <include>**/*IT.java</include>
+                            <include>**/integration/**</include>
+                        </includes>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>integration-test</goal>
+                                <goal>verify</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
             </plugins>
         </pluginManagement>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
+        </plugins>
     </build>
+
+    <profiles>
+        <!-- Profile to run only integration tests -->
+        <profile>
+            <id>integration-test</id>
+            <properties>
+                <skipUnitTests>true</skipUnitTests>
+                <skipITs>false</skipITs>
+            </properties>
+        </profile>
+        <profile>
+            <id>integration-tests</id>
+            <properties>
+                <skipUnitTests>true</skipUnitTests>
+                <skipITs>false</skipITs>
+            </properties>
+        </profile>
+    </profiles>
 
 </project>

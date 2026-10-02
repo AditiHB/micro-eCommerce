@@ -17,12 +17,14 @@ import java.util.Optional;
  * Notification Service knows who to notify and at what address.
  */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class CustomerClient {
 
-    @Qualifier("customerServiceRestTemplate")
     private final RestTemplate restTemplate;
+
+    public CustomerClient(@Qualifier("customerServiceRestTemplate") RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
 
     @Value("${services.customer.url:http://localhost:8081}")
     private String customerServiceUrl;

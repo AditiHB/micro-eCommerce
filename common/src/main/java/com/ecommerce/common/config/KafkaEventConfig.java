@@ -39,7 +39,7 @@ public class KafkaEventConfig {
     @Value("${kafka.event.dlq-suffix:-dlq}")
     private String dlqSuffix;
 
-    @Value("${kafka.listener.auto-startup:true}")
+    @Value("${spring.kafka.listener.auto-startup:${kafka.listener.auto-startup:true}}")
     private boolean listenerAutoStartup;
 
     // Fail fast instead of blocking the calling request thread: KafkaProducer.send() performs
@@ -57,11 +57,16 @@ public class KafkaEventConfig {
     @Value("${kafka.producer.delivery-timeout-ms:15000}")
     private int producerDeliveryTimeoutMs;
 
+    @Value("${spring.kafka.admin.auto-create:true}")
+    private boolean adminAutoCreate;
+
     @Bean
     public KafkaAdmin kafkaAdmin() {
         Map<String, Object> configs = new HashMap<>();
         configs.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        return new KafkaAdmin(configs);
+        KafkaAdmin admin = new KafkaAdmin(configs);
+        admin.setAutoCreate(adminAutoCreate);
+        return admin;
     }
 
     @Bean

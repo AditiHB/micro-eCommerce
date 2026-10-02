@@ -130,7 +130,8 @@ class JwtTokenProviderTest {
         // JWT "iat"/"exp" claims only have second-level precision and there is no
         // per-token nonce, so two tokens minted within the same second are byte-for-byte
         // identical. Cross a second boundary so the claims - and thus the token - differ.
-        Thread.sleep(1000);
+        long sleepMs = 1005 - (System.currentTimeMillis() % 1000);
+        Thread.sleep(sleepMs);
         String token2 = jwtTokenProvider.generateToken(authentication);
 
         assertThat(token1).isNotEqualTo(token2);

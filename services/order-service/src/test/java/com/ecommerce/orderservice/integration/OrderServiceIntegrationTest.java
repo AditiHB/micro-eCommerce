@@ -9,6 +9,7 @@ import com.ecommerce.orderservice.dto.OrderResponse;
 import com.ecommerce.orderservice.service.OrderService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureTestEntityManager;
@@ -30,6 +31,7 @@ import static org.mockito.Mockito.when;
 @AutoConfigureTestEntityManager
 @Transactional
 @ActiveProfiles("test")
+@Tag("integration")
 @DisplayName("Order Service Integration Tests")
 class OrderServiceIntegrationTest {
 

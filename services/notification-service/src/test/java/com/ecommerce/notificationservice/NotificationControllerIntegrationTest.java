@@ -4,6 +4,7 @@ import com.ecommerce.common.enums.NotificationStatus;
 import com.ecommerce.common.enums.NotificationType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -18,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
+@Tag("integration")
 @DisplayName("Notification Controller Integration Tests")
 class NotificationControllerIntegrationTest {
 

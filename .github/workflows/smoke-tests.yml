@@ -23,8 +23,8 @@ jobs:
   determine-environment:
     runs-on: ubuntu-latest
     outputs:
-      target-env: ${{ steps.set-env.outputs.target-env }}
-      api-url: ${{ steps.set-env.outputs.api-url }}
+      target-env: ${{ steps['set-env'].outputs['target-env'] }}
+      api-url: ${{ steps['set-env'].outputs['api-url'] }}
 
     steps:
       - name: Determine target environment
@@ -56,25 +56,25 @@ jobs:
       - name: Check Customer Service Health
         run: |
           curl -f -s --retry 5 --retry-delay 10 \
-            "${{ needs.determine-environment.outputs.api-url }}/customers/actuator/health" \
+            "${{ needs['determine-environment'].outputs['api-url'] }}/customers/actuator/health" \
             || exit 1
 
       - name: Check Inventory Service Health
         run: |
           curl -f -s --retry 5 --retry-delay 10 \
-            "${{ needs.determine-environment.outputs.api-url }}/inventory/actuator/health" \
+            "${{ needs['determine-environment'].outputs['api-url'] }}/inventory/actuator/health" \
             || exit 1
 
       - name: Check Order Service Health
         run: |
           curl -f -s --retry 5 --retry-delay 10 \
-            "${{ needs.determine-environment.outputs.api-url }}/orders/actuator/health" \
+            "${{ needs['determine-environment'].outputs['api-url'] }}/orders/actuator/health" \
             || exit 1
 
       - name: Check Payment Service Health
         run: |
           curl -f -s --retry 5 --retry-delay 10 \
-            "${{ needs.determine-environment.outputs.api-url }}/payments/actuator/health" \
+            "${{ needs['determine-environment'].outputs['api-url'] }}/payments/actuator/health" \
             || exit 1
 
   api-smoke-tests:
@@ -113,9 +113,9 @@ jobs:
                       "method": "GET",
                       "header": [],
                       "url": {
-                        "raw": "${{ needs.determine-environment.outputs.api-url }}/customers/api/customers",
+                        "raw": "${{ needs['determine-environment'].outputs['api-url'] }}/customers/api/customers",
                         "protocol": "https",
-                        "host": ["${{ needs.determine-environment.outputs.api-url }}", "customers", "api", "customers"]
+                        "host": ["${{ needs['determine-environment'].outputs['api-url'] }}", "customers", "api", "customers"]
                       }
                     }
                   }
@@ -130,9 +130,9 @@ jobs:
                       "method": "GET",
                       "header": [],
                       "url": {
-                        "raw": "${{ needs.determine-environment.outputs.api-url }}/inventory/api/products",
+                        "raw": "${{ needs['determine-environment'].outputs['api-url'] }}/inventory/api/products",
                         "protocol": "https",
-                        "host": ["${{ needs.determine-environment.outputs.api-url }}", "inventory", "api", "products"]
+                        "host": ["${{ needs['determine-environment'].outputs['api-url'] }}", "inventory", "api", "products"]
                       }
                     }
                   }
@@ -147,9 +147,9 @@ jobs:
                       "method": "GET",
                       "header": [],
                       "url": {
-                        "raw": "${{ needs.determine-environment.outputs.api-url }}/orders/api/orders",
+                        "raw": "${{ needs['determine-environment'].outputs['api-url'] }}/orders/api/orders",
                         "protocol": "https",
-                        "host": ["${{ needs.determine-environment.outputs.api-url }}", "orders", "api", "orders"]
+                        "host": ["${{ needs['determine-environment'].outputs['api-url'] }}", "orders", "api", "orders"]
                       }
                     }
                   }
@@ -164,9 +164,9 @@ jobs:
                       "method": "GET",
                       "header": [],
                       "url": {
-                        "raw": "${{ needs.determine-environment.outputs.api-url }}/payments/actuator/health",
+                        "raw": "${{ needs['determine-environment'].outputs['api-url'] }}/payments/actuator/health",
                         "protocol": "https",
-                        "host": ["${{ needs.determine-environment.outputs.api-url }}", "payments", "actuator", "health"]
+                        "host": ["${{ needs['determine-environment'].outputs['api-url'] }}", "payments", "actuator", "health"]
                       }
                     }
                   }
@@ -204,9 +204,9 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Run integration tests against ${{ needs.determine-environment.outputs.target-env }}
+      - name: Run integration tests against ${{ needs['determine-environment'].outputs['target-env'] }}
         env:
-          API_URL: ${{ needs.determine-environment.outputs.api-url }}
+          API_URL: ${{ needs['determine-environment'].outputs['api-url'] }}
         run: |
           mvn verify \
             -DskipUnitTests=true \
@@ -254,7 +254,7 @@ jobs:
         run: |
           # Simple curl-based performance test
           for i in {1..10}; do
-            time curl -s "${{ needs.determine-environment.outputs.api-url }}/customers/actuator/health" > /dev/null
+            time curl -s "${{ needs['determine-environment'].outputs['api-url'] }}/customers/actuator/health" > /dev/null
           done
 
   security-validation:
@@ -266,21 +266,23 @@ jobs:
 
       - name: Check HTTPS enforced
         run: |
-          curl -I -L "${{ needs.determine-environment.outputs.api-url }}" 2>&1 | grep -i "strict-transport-security" || echo "Warning: HSTS not found"
+          curl -I -L "${{ needs['determine-environment'].outputs['api-url'] }}" 2>&1 | grep -i "strict-transport-security" || echo "Warning: HSTS not found"
 
       - name: Check security headers
         run: |
-          curl -I "${{ needs.determine-environment.outputs.api-url }}/customers/actuator/health" | grep -i "x-content-type-options\|x-frame-options" || echo "Warning: Some security headers missing"
+          curl -I "${{ needs['determine-environment'].outputs['api-url'] }}/customers/actuator/health" | grep -i "x-content-type-options\|x-frame-options" || echo "Warning: Some security headers missing"
 
       - name: Verify API authentication
         run: |
           # Test that endpoints require authentication
-          curl -s -w "\n%{http_code}\n" "${{ needs.determine-environment.outputs.api-url }}/customers/api/customers" | tail -1 | grep -E "401|403" || echo "Warning: Check authentication enforcement"
+          curl -s -w "\n%{http_code}\n" "${{ needs['determine-environment'].outputs['api-url'] }}/customers/api/customers" | tail -1 | grep -E "401|403" || echo "Warning: Check authentication enforcement"
 
   report-results:
     if: always()
     needs: [determine-environment, health-check, api-smoke-tests, integration-validation, performance-baseline, security-validation]
     runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
       - name: Download all test results
@@ -289,17 +291,18 @@ jobs:
       - name: Generate summary report
         run: |
           echo "# Smoke Test Report" > /tmp/report.md
-          echo "Environment: ${{ needs.determine-environment.outputs.target-env }}" >> /tmp/report.md
+          echo "Environment: ${{ needs['determine-environment'].outputs['target-env'] }}" >> /tmp/report.md
           echo "Date: $(date)" >> /tmp/report.md
           echo "" >> /tmp/report.md
           echo "## Test Results Summary" >> /tmp/report.md
-          echo "- Health Checks: ${{ needs.health-check.result }}" >> /tmp/report.md
-          echo "- API Smoke Tests: ${{ needs.api-smoke-tests.result }}" >> /tmp/report.md
-          echo "- Integration Validation: ${{ needs.integration-validation.result }}" >> /tmp/report.md
-          echo "- Performance Baseline: ${{ needs.performance-baseline.result }}" >> /tmp/report.md
-          echo "- Security Validation: ${{ needs.security-validation.result }}" >> /tmp/report.md
+          echo "- Health Checks: ${{ needs['health-check'].result }}" >> /tmp/report.md
+          echo "- API Smoke Tests: ${{ needs['api-smoke-tests'].result }}" >> /tmp/report.md
+          echo "- Integration Validation: ${{ needs['integration-validation'].result }}" >> /tmp/report.md
+          echo "- Performance Baseline: ${{ needs['performance-baseline'].result }}" >> /tmp/report.md
+          echo "- Security Validation: ${{ needs['security-validation'].result }}" >> /tmp/report.md
 
       - name: Notify Slack - Smoke Test Results
+        if: env.SLACK_WEBHOOK_URL != ''
         uses: slackapi/slack-github-action@v1.26.0
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -311,9 +314,8 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Post-Deployment Smoke Tests*\nEnvironment: `${{ needs.determine-environment.outputs.target-env }}`\n*Health Checks*: ${{ needs.health-check.result == 'success' && '✅' || '❌' }}\n*API Tests*: ${{ needs.api-smoke-tests.result == 'success' && '✅' || '❌' }}\n*Integration*: ${{ needs.integration-validation.result == 'success' && '✅' || '❌' }}\n*Security*: ${{ needs.security-validation.result == 'success' && '✅' || '❌' }}"
+                    "text": "*Post-Deployment Smoke Tests*\nEnvironment: `${{ needs['determine-environment'].outputs['target-env'] }}`\n*Health Checks*: ${{ needs['health-check'].result == 'success' && '✅' || '❌' }}\n*API Tests*: ${{ needs['api-smoke-tests'].result == 'success' && '✅' || '❌' }}\n*Integration*: ${{ needs['integration-validation'].result == 'success' && '✅' || '❌' }}\n*Security*: ${{ needs['security-validation'].result == 'success' && '✅' || '❌' }}"
                   }
                 }
               ]
             }
-        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}

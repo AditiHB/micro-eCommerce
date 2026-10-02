@@ -152,9 +152,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [dependency-check, maven-audit, sca-snyk, secret-scanning, codeql]
     if: always()
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
       - name: Notify Slack - Security Scan Status
+        if: env.SLACK_WEBHOOK_URL != ''
         uses: slackapi/slack-github-action@v1.26.0
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -166,7 +169,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Security Scans Completed*\n*Dependency Check*: ${{ needs.dependency-check.result == 'success' && '✅' || '⚠️' }}\n*Maven Audit*: ${{ needs.maven-audit.result == 'success' && '✅' || '⚠️' }}\n*Snyk SCA*: ${{ needs.sca-snyk.result == 'success' && '✅' || '⚠️' }}\n*Secrets Scan*: ${{ needs.secret-scanning.result == 'success' && '✅' || '⚠️' }}\n*CodeQL*: ${{ needs.codeql.result == 'success' && '✅' || '⚠️' }}"
+                    "text": "*Security Scans Completed*\n*Dependency Check*: ${{ needs['dependency-check'].result == 'success' && '✅' || '⚠️' }}\n*Maven Audit*: ${{ needs['maven-audit'].result == 'success' && '✅' || '⚠️' }}\n*Snyk SCA*: ${{ needs['sca-snyk'].result == 'success' && '✅' || '⚠️' }}\n*Secrets Scan*: ${{ needs['secret-scanning'].result == 'success' && '✅' || '⚠️' }}\n*CodeQL*: ${{ needs.codeql.result == 'success' && '✅' || '⚠️' }}"
                   }
                 },
                 {
@@ -184,4 +187,3 @@ jobs:
                 }
               ]
             }
-        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}

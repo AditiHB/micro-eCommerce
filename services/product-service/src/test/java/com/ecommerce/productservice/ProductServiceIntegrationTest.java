@@ -7,6 +7,7 @@ import com.ecommerce.productservice.dto.UpdateProductRequest;
 import com.ecommerce.productservice.entity.Product;
 import com.ecommerce.productservice.repository.ProductRepository;
 import com.ecommerce.productservice.service.ProductService;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -17,6 +18,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +34,7 @@ import static org.hamcrest.Matchers.*;
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
+@Tag("integration")
 @Import(TestSecurityConfig.class)
 @TestPropertySource(properties = {
         "spring.jpa.hibernate.ddl-auto=create-drop",

@@ -18,12 +18,14 @@ import java.util.Optional;
  * customerId, so Notification Service resolves the owning customer itself.
  */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class OrderClient {
 
-    @Qualifier("orderServiceRestTemplate")
     private final RestTemplate restTemplate;
+
+    public OrderClient(@Qualifier("orderServiceRestTemplate") RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
 
     @Value("${services.order.url:http://localhost:8083}")
     private String orderServiceUrl;

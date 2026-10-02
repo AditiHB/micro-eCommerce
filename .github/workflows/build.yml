@@ -30,13 +30,13 @@ jobs:
         run: mvn clean -DskipTests=true -q
 
       - name: Run unit tests
-        run: mvn test -q
+        run: mvn test -T 1C -q
 
       - name: Run integration tests
-        run: mvn verify -DskipUnitTests=false -q
+        run: mvn verify -DskipUnitTests=true -T 1C -q
 
       - name: Build project
-        run: mvn package -DskipTests=true -q
+        run: mvn package -DskipTests=true -T 1C -q
 
       - name: Upload test results
         if: always()
@@ -119,9 +119,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build, code-quality]
     if: always()
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
       - name: Notify Slack - Build Status
+        if: env.SLACK_WEBHOOK_URL != ''
         uses: slackapi/slack-github-action@v1.26.0
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -133,7 +136,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Build Status*\n${{ needs.build.result == 'success' && '✅ Build Passed' || '❌ Build Failed' }}\n*Code Quality*\n${{ needs.code-quality.result == 'success' && '✅ Quality Checks Passed' || '⚠️ Quality Issues' }}\nBranch: `${{ github.ref_name }}`\nCommit: `${{ github.sha }}`"
+                    "text": "*Build Status*\n${{ needs.build.result == 'success' && '✅ Build Passed' || '❌ Build Failed' }}\n*Code Quality*\n${{ needs['code-quality'].result == 'success' && '✅ Quality Checks Passed' || '⚠️ Quality Issues' }}\nBranch: `${{ github.ref_name }}`\nCommit: `${{ github.sha }}`"
                   }
                 },
                 {
@@ -151,4 +154,3 @@ jobs:
                 }
               ]
             }
-        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}

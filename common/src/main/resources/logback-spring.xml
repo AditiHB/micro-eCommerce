@@ -27,14 +27,19 @@
         </rollingPolicy>
     </appender>
 
-    <!-- Spring profile specific configurations -->
-    <springProfile name="local,dev,test">
+    <springProfile name="local,dev">
         <logger name="com.ecommerce" level="DEBUG"/>
         <logger name="org.springframework.web" level="DEBUG"/>
         <logger name="org.springframework.data" level="DEBUG"/>
         <root level="INFO">
             <appender-ref ref="CONSOLE"/>
             <appender-ref ref="JSON_FILE"/>
+        </root>
+    </springProfile>
+
+    <springProfile name="test">
+        <root level="WARN">
+            <appender-ref ref="CONSOLE"/>
         </root>
     </springProfile>
 
