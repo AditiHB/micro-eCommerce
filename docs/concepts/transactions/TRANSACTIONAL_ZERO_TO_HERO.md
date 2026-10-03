@@ -330,6 +330,468 @@ public void transferMoney(String from, String to, double amount) {
 
 ---
 
+## Part 3B: Read Anomalies in Detail 🔍
+
+### What Are Read Anomalies?
+
+Read anomalies are consistency problems that occur when multiple transactions access the same data concurrently. They represent situations where a transaction reads inconsistent or stale data.
+
+**The Four Main Read Anomalies:**
+1. **Dirty Reads** - Reading uncommitted data
+2. **Non-Repeatable Reads** - Different values on repeated reads
+3. **Phantom Reads** - Rows appearing/disappearing in range queries
+4. **Lost Updates** - Updates overwriting each other
+
+---
+
+### 1. Dirty Reads 💩
+
+**Problem: Reading Uncommitted Data**
+
+```
+SCENARIO: Reading Bank Balance During Transfer
+═════════════════════════════════════════════════
+
+Time 0:
+  Account A: $100 (committed)
+  Account B: $50 (committed)
+
+Time 1:
+  Transaction X starts (Transfer $50 from A to B)
+  ├─ Debit A: $100 → $50 (pending, not committed yet)
+  └─ Account A now shows $50 (uncommitted state)
+
+Time 2:
+  Transaction Y starts (Check balance of A)
+  └─ Reads Account A: $50 (DIRTY! Not yet committed!)
+
+Time 3:
+  Transaction X CRASHES! ROLLBACK!
+  ├─ Account A reverts to $100
+  └─ Account B stays $50
+
+Time 4:
+  Transaction Y continues
+  └─ Still thinks Account A is $50 (WRONG!)
+
+RESULT: Dirty Read! ❌
+Transaction Y read data that was never committed!
+```
+
+**Visual Timeline:**
+```
+TX X:     START    DEBIT    ...CRASH...ROLLBACK
+          │        │ $50←   │
+          │       pending   │
+A:    $100│────────→  $50  ─→ $100 (reverted)
+          │
+TX Y:     │        READ
+          │         │
+          └─────────→ Sees $50 (dirty!)
+
+
+Result: A was never $50 in final state!
+```
+
+**Which Isolation Levels Allow Dirty Reads?**
+```
+READ_UNCOMMITTED: YES ❌ (Allows dirty reads)
+READ_COMMITTED:   NO ✅ (Prevents dirty reads)
+REPEATABLE_READ:  NO ✅ (Prevents dirty reads)
+SERIALIZABLE:     NO ✅ (Prevents dirty reads)
+```
+
+**Spring Configuration to Prevent:**
+```java
+@Transactional(isolation = Isolation.READ_COMMITTED)
+public double getAccountBalance(String accountId) {
+    // Cannot see uncommitted changes
+    return accountRepository.findById(accountId).getBalance();
+}
+```
+
+---
+
+### 2. Non-Repeatable Reads (Unrepeatable Reads) 🔄
+
+**Problem: Getting Different Values When Reading Same Data Twice**
+
+```
+SCENARIO: Reading Product Price Twice
+═══════════════════════════════════════════
+
+Initial State:
+  Product X Price: $100 (committed)
+
+Time 1:
+  Transaction A starts
+  └─ Read Price: $100 ✓
+
+Time 2:
+  Transaction B starts and completes
+  ├─ Update Price: $100 → $120
+  └─ COMMIT ✓
+
+Time 3:
+  Transaction A reads Price again
+  └─ Read Price: $120 ✗ (DIFFERENT!)
+
+RESULT: Non-Repeatable Read! ❌
+Same data read at different times gave different values!
+```
+
+**Visual Timeline:**
+```
+TX A:     START    READ#1    ...wait...    READ#2
+          │        │         │            │
+Price:$100│────────→ $100    │    $100    │
+          │                  │            │
+TX B:     │                START UPDATE   COMMIT
+          │                  │     $120   │
+          │                  └────────────→
+          │                         │
+          └─────────────────────────→ Sees $120 (not repeatable!)
+
+Result: Different value on second read!
+```
+
+**Which Isolation Levels Allow Non-Repeatable Reads?**
+```
+READ_UNCOMMITTED:  YES ❌ (Allows non-repeatable reads)
+READ_COMMITTED:    YES ❌ (Allows non-repeatable reads)
+REPEATABLE_READ:   NO ✅ (Prevents non-repeatable reads)
+SERIALIZABLE:      NO ✅ (Prevents non-repeatable reads)
+```
+
+**Spring Configuration to Prevent:**
+```java
+@Transactional(isolation = Isolation.REPEATABLE_READ)
+public void calculateOrderTotal(String orderId) {
+    Order order = orderRepository.findById(orderId);
+    double price1 = order.getPrice();      // $100
+    
+    // Another transaction updates order price
+    // But we won't see it!
+    
+    double price2 = order.getPrice();      // Still $100 ✓
+    
+    // Both reads are consistent!
+}
+```
+
+---
+
+### 3. Phantom Reads 👻
+
+**Problem: Rows Appearing or Disappearing in Range Queries**
+
+```
+SCENARIO: Counting Total Orders with Range Query
+═════════════════════════════════════════════════
+
+Initial State:
+  Orders with status='PENDING': 5 rows
+
+Time 1:
+  Transaction A starts
+  └─ Query: SELECT COUNT(*) WHERE status='PENDING'
+     Result: 5 rows
+
+Time 2:
+  Transaction B starts and completes
+  ├─ INSERT new order with status='PENDING'
+  ├─ INSERT another order with status='PENDING'
+  └─ COMMIT ✓
+
+Time 3:
+  Transaction A queries again
+  └─ Query: SELECT COUNT(*) WHERE status='PENDING'
+     Result: 7 rows ✗ (PHANTOM! New rows appeared!)
+
+RESULT: Phantom Read! ❌
+Same query gave different results due to new rows!
+```
+
+**Visual Timeline:**
+```
+TX A:     START    COUNT#1    ...wait...    COUNT#2
+          │        │          │             │
+PENDING:5 │───────→ 5 rows    │       7     │
+          │                   │      rows   │
+TX B:     │              START │ INSERT 2   COMMIT
+          │                    │  rows      │
+          │                    └────────────→
+          │                           │
+          └───────────────────────────→ Count: 7 (phantom!)
+
+Result: Different count due to new rows!
+```
+
+**Which Isolation Levels Allow Phantom Reads?**
+```
+READ_UNCOMMITTED:  YES ❌ (Allows phantom reads)
+READ_COMMITTED:    YES ❌ (Allows phantom reads)
+REPEATABLE_READ:   YES ❌ (Allows phantom reads) ⚠️
+SERIALIZABLE:      NO ✅ (Prevents phantom reads)
+```
+
+**Spring Configuration to Prevent:**
+```java
+@Transactional(isolation = Isolation.SERIALIZABLE)
+public int countPendingOrders() {
+    int count1 = orderRepository.countByStatus("PENDING");
+    
+    // Another transaction inserts new pending order
+    // But we won't see it!
+    
+    int count2 = orderRepository.countByStatus("PENDING");
+    
+    // Same count! ✓ (Serializable locks entire table)
+    return count1;  // count1 == count2
+}
+```
+
+---
+
+### 4. Lost Updates 🚫
+
+**Problem: Updates Overwriting Each Other**
+
+```
+SCENARIO: Concurrent Balance Updates
+══════════════════════════════════════
+
+Initial State:
+  Account Balance: $100
+
+Time 1:
+  TX A: READ Balance = $100
+  TX B: READ Balance = $100
+
+Time 2:
+  TX A: CALCULATE → $100 + $50 = $150
+  TX B: CALCULATE → $100 + $30 = $130
+
+Time 3:
+  TX A: WRITE Balance = $150
+  TX B: WRITE Balance = $130
+
+Time 4:
+  TX A: COMMIT ✓ (Balance is $150)
+  TX B: COMMIT ✓ (Balance is $130)
+
+RESULT: Lost Update! ❌
+A's update of +$50 was overwritten by B's update of +$30!
+Correct balance should be $180, not $130!
+```
+
+**Visual Diagram:**
+```
+TX A:   READ    CALC      WRITE    COMMIT
+        │       │         │        │
+        ↓       ↓         ↓        ↓
+        $100    +$50=150  150 ─────→  150
+        │                           │
+Bal:$100│───────────────────────────┼→ WRONG! Should be $180
+        │                           │
+        ↓       ↓         ↓         ↓
+        $100    +$30=130  130 ────→ 130
+TX B:   READ    CALC      WRITE    COMMIT
+
+A's +$50 is LOST!
+```
+
+**How It Happens:**
+```java
+// Thread 1 (TX A)
+int balance = getBalance();       // 100
+balance += 50;                    // 150
+setBalance(balance);              // Write 150
+commit();                         // Lost in time!
+
+// Thread 2 (TX B) - runs concurrently
+int balance = getBalance();       // 100 (reads old value!)
+balance += 30;                    // 130
+setBalance(balance);              // Write 130
+commit();                         // Overwrites TX A!
+
+// Result: Balance = 130 (TX A's update lost!)
+```
+
+**Solutions to Lost Updates:**
+
+**Solution 1: Pessimistic Locking (Read-Lock)**
+```java
+@Transactional(isolation = Isolation.SERIALIZABLE)
+public void updateBalance(String accountId, double amount) {
+    // Lock row with SELECT FOR UPDATE
+    Account account = accountRepository.findByIdWithLock(accountId);
+    
+    // Only this transaction can read/write
+    account.setBalance(account.getBalance() + amount);
+    accountRepository.save(account);
+    // COMMIT (lock released)
+}
+```
+
+**Solution 2: Optimistic Locking (Version Field)**
+```java
+@Entity
+public class Account {
+    @Id
+    private String id;
+    
+    @Version  // Version field
+    private Long version;  // 0, 1, 2, ...
+    
+    private double balance;
+}
+
+@Transactional
+public void updateBalance(String accountId, double amount) {
+    Account account = accountRepository.findById(accountId);
+    // version = 5
+    
+    account.setBalance(account.getBalance() + amount);
+    
+    try {
+        accountRepository.save(account);
+        // Update: WHERE id=? AND version=5
+        // If version != 5, another TX updated it!
+        // Throws: OptimisticLockingFailureException
+    } catch (OptimisticLockingFailureException e) {
+        // Version mismatch! Retry transaction
+        updateBalance(accountId, amount);  // Retry
+    }
+}
+```
+
+**Solution 3: Row-Level Locks (Database-level)**
+```java
+@Query("SELECT a FROM Account a WHERE a.id = ?1")
+Account findByIdWithLock(String id);
+
+@Transactional
+public void updateBalance(String accountId, double amount) {
+    Account account = accountRepository.findByIdWithLock(accountId);
+    // Database locks this row
+    
+    account.setBalance(account.getBalance() + amount);
+    accountRepository.save(account);
+    // Lock released on COMMIT
+}
+```
+
+---
+
+### Read Anomaly Prevention Matrix 📊
+
+```
+ISOLATION LEVEL      DIRTY  NON-REP  PHANTOM  LOST-UPD
+───────────────────────────────────────────────────────
+READ_UNCOMMITTED     YES    YES      YES      YES
+READ_COMMITTED       NO     YES      YES      YES
+REPEATABLE_READ      NO     NO       YES      NO
+SERIALIZABLE         NO     NO       NO       NO
+───────────────────────────────────────────────────────
+
+Legend:
+YES = Anomaly CAN occur ❌
+NO  = Anomaly PREVENTED ✅
+```
+
+---
+
+### Choosing Right Isolation Level 🎯
+
+**READ_UNCOMMITTED - Fastest, Least Safe**
+```java
+@Transactional(isolation = Isolation.READ_UNCOMMITTED)
+public void quickRead() {
+    // Use only for: Analytics, reporting, non-critical reads
+    // Risk: Dirty reads possible
+}
+```
+
+**READ_COMMITTED - Balanced (Most Common)**
+```java
+@Transactional(isolation = Isolation.READ_COMMITTED)
+public void normalOperation() {
+    // Use for: Normal business operations
+    // Prevents: Dirty reads
+    // Allows: Non-repeatable, phantom reads
+    // Performance: Good
+}
+```
+
+**REPEATABLE_READ - Strong Consistency**
+```java
+@Transactional(isolation = Isolation.REPEATABLE_READ)
+public void consistentRead() {
+    // Use for: Complex reads, consistency critical
+    // Prevents: Dirty reads, non-repeatable reads
+    // Allows: Phantom reads (rare)
+    // Performance: Slower
+}
+```
+
+**SERIALIZABLE - Strongest, Slowest**
+```java
+@Transactional(isolation = Isolation.SERIALIZABLE)
+public void criticalOperation() {
+    // Use for: Money transfers, critical operations
+    // Prevents: ALL anomalies
+    // Performance: Slowest (transactions serialized)
+}
+```
+
+---
+
+### Real-World Example: E-Commerce Order Processing
+
+```java
+@Service
+public class OrderService {
+    
+    // Read-only: Safe with READ_COMMITTED
+    @Transactional(readOnly = true, isolation = Isolation.READ_COMMITTED)
+    public Order getOrder(String orderId) {
+        // Allows phantom reads in list queries
+        // But order itself won't change mid-transaction
+        return orderRepository.findById(orderId);
+    }
+    
+    // Inventory deduction: Needs strong isolation
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    public void deductStock(String productId, int quantity) {
+        // Prevents non-repeatable reads of product quantity
+        // Multiple reads of same product see same value
+        Product product = productRepository.findById(productId);
+        product.setStock(product.getStock() - quantity);
+        productRepository.save(product);
+    }
+    
+    // Payment: Absolutely critical, needs SERIALIZABLE
+    @Transactional(isolation = Isolation.SERIALIZABLE)
+    public void processPayment(Order order, String cardToken) {
+        // No anomalies allowed!
+        // Prevents lost updates on account balance
+        Payment payment = new Payment();
+        payment.setOrderId(order.getId());
+        payment.setAmount(order.getTotal());
+        payment.setStatus("COMPLETED");
+        paymentRepository.save(payment);
+        
+        // Update account balance (with locking)
+        Account account = accountRepository.findById(order.getCustomerId());
+        account.setBalance(account.getBalance() - order.getTotal());
+        accountRepository.save(account);
+    }
+}
+```
+
+---
+
 ### ReadOnly: Optimization Hint 📖
 
 **Normal Transaction (Read + Write):**
@@ -1202,6 +1664,9 @@ public class OrderOrchestrator {
 ✅ @Transactional annotation and all attributes
 ✅ Propagation types and nesting
 ✅ Isolation levels and consistency
+✅ Read anomalies in detail (Dirty, Non-Repeatable, Phantom, Lost Updates)
+✅ Read anomaly prevention strategies (pessimistic/optimistic locking)
+✅ Read anomaly isolation level matrix
 ✅ Exception handling in transactions
 ✅ Exception eating and prevention
 ✅ Two-Phase Commit protocol
@@ -1210,7 +1675,7 @@ public class OrderOrchestrator {
 ✅ Deadlock handling
 ✅ Production monitoring and checklist
 ✅ Common mistakes to avoid
-✅ Real-world scenarios
+✅ Real-world scenarios with anomaly prevention
 
 ### What to Do Next:
 1. **Test locally** - Write @Transactional tests
