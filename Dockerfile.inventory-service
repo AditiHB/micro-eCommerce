@@ -14,6 +14,7 @@ COPY services/customer-service/pom.xml ./services/customer-service/
 COPY services/order-service/pom.xml ./services/order-service/
 COPY services/payment-service/pom.xml ./services/payment-service/
 COPY services/product-service/pom.xml ./services/product-service/
+COPY services/notification-service/pom.xml ./services/notification-service/
 COPY services/inventory-service ./services/inventory-service/
 
 RUN mvn clean package -DskipTests -pl services/inventory-service -am

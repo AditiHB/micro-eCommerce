@@ -136,8 +136,8 @@ services:
 
   notification-service:
     build:
-      context: ./services/notification-service
-    container_name: notification-service
+      context: .
+      dockerfile: Dockerfile.notification-service
     ports:
       - "8086:8086"
     depends_on:
