@@ -67,6 +67,7 @@ class PaymentEventListenerTest {
     @Test
     @DisplayName("Should process payment when inventory is reserved")
     void testHandleInventoryReservedSuccess() {
+        when(repository.findByOrderId(123L)).thenReturn(Optional.empty());
         when(repository.save(any(Payment.class))).thenReturn(payment);
 
         listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
@@ -77,8 +78,21 @@ class PaymentEventListenerTest {
     }
 
     @Test
+    @DisplayName("Should skip creating a payment when one already exists for the order")
+    void testHandleInventoryReservedSkipsWhenPaymentAlreadyExists() {
+        when(repository.findByOrderId(123L)).thenReturn(Optional.of(payment));
+
+        listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
+
+        verify(repository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any(), anyString(), anyString(), anyString());
+        verify(acknowledgment).acknowledge();
+    }
+
+    @Test
     @DisplayName("Should publish payment failed event and not ack when processing throws")
     void testHandleInventoryReservedException() {
+        when(repository.findByOrderId(123L)).thenReturn(Optional.empty());
         when(repository.save(any(Payment.class))).thenThrow(new RuntimeException("Database error"));
 
         listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);

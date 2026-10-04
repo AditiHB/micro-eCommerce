@@ -6,6 +6,15 @@ import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * TODO (known gap): this CacheManager is a local, per-instance, in-memory
+ * cache ({@link ConcurrentMapCacheManager}) - NOT shared across service
+ * replicas, even though every service's application.yml configures
+ * {@code spring.cache.type: redis} and a real Redis connection. {@link
+ * RedisConfig} already defines a proper distributed RedisCacheManager for
+ * this, but nothing imports it - every service imports this class instead.
+ * See RedisConfig's javadoc for the fix.
+ */
 @Configuration
 @EnableCaching
 public class CacheConfig {

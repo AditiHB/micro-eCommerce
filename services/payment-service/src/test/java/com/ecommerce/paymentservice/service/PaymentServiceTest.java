@@ -5,6 +5,7 @@ import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.PaymentStatus;
 import com.ecommerce.common.events.EventPublisher;
 import com.ecommerce.common.events.PaymentProcessedEvent;
+import com.ecommerce.common.exception.BusinessException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.common.eventsourcing.EventSourcingService;
 import com.ecommerce.paymentservice.Payment;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -78,9 +80,8 @@ class PaymentServiceTest {
             .status(PaymentStatus.PROCESSING)
             .build();
 
-        when(paymentRepository.save(any(Payment.class)))
-            .thenReturn(processingPayment)
-            .thenReturn(testPayment);
+        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(processingPayment);
+        when(paymentRepository.save(any(Payment.class))).thenReturn(testPayment);
         doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
 
         PaymentResponse response = paymentService.processPayment(processRequest);
@@ -90,8 +91,23 @@ class PaymentServiceTest {
         assertThat(response.getOrderId()).isEqualTo(123L);
         assertThat(response.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(99.99));
         assertThat(response.getStatus()).isEqualTo(PaymentStatus.PROCESSED);
-        verify(paymentRepository, times(2)).save(any(Payment.class));
+        verify(paymentRepository, times(1)).saveAndFlush(any(Payment.class));
+        verify(paymentRepository, times(1)).save(any(Payment.class));
         verify(eventPublisher, times(1)).publishEvent(any(PaymentProcessedEvent.class), anyString());
+    }
+
+    @Test
+    @DisplayName("Should reject as a clean business error when a payment already exists for the order")
+    void testProcessPaymentRejectsDuplicateOrderId() {
+        when(paymentRepository.saveAndFlush(any(Payment.class)))
+            .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint \"uq_payments_order_id\""));
+
+        assertThatThrownBy(() -> paymentService.processPayment(processRequest))
+            .isInstanceOf(BusinessException.class)
+            .hasMessageContaining(String.valueOf(processRequest.getOrderId()));
+
+        verify(paymentRepository, never()).save(any(Payment.class));
+        verify(eventPublisher, never()).publishEvent(any(), anyString());
     }
 
     @Test
@@ -214,9 +230,8 @@ class PaymentServiceTest {
             .status(PaymentStatus.PROCESSING)
             .build();
 
-        when(paymentRepository.save(any(Payment.class)))
-            .thenReturn(processingPayment)
-            .thenReturn(testPayment);
+        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(processingPayment);
+        when(paymentRepository.save(any(Payment.class))).thenReturn(testPayment);
         doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
 
         paymentService.processPayment(processRequest);
@@ -241,9 +256,8 @@ class PaymentServiceTest {
             .status(PaymentStatus.PROCESSED)
             .build();
 
-        when(paymentRepository.save(any(Payment.class)))
-            .thenReturn(smallPayment)
-            .thenReturn(smallPayment);
+        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(smallPayment);
+        when(paymentRepository.save(any(Payment.class))).thenReturn(smallPayment);
         doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
 
         PaymentResponse response = paymentService.processPayment(smallRequest);
@@ -265,9 +279,8 @@ class PaymentServiceTest {
             .status(PaymentStatus.PROCESSED)
             .build();
 
-        when(paymentRepository.save(any(Payment.class)))
-            .thenReturn(largePayment)
-            .thenReturn(largePayment);
+        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(largePayment);
+        when(paymentRepository.save(any(Payment.class))).thenReturn(largePayment);
         doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
 
         PaymentResponse response = paymentService.processPayment(largeRequest);
@@ -289,9 +302,8 @@ class PaymentServiceTest {
             .status(PaymentStatus.PROCESSED)
             .build();
 
-        when(paymentRepository.save(any(Payment.class)))
-            .thenReturn(zeroPayment)
-            .thenReturn(zeroPayment);
+        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(zeroPayment);
+        when(paymentRepository.save(any(Payment.class))).thenReturn(zeroPayment);
         doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
 
         PaymentResponse response = paymentService.processPayment(zeroRequest);

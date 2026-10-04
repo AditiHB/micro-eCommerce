@@ -6,6 +6,7 @@ import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.PaymentStatus;
 import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.events.EventPublisher;
+import com.ecommerce.common.exception.BusinessException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.common.eventsourcing.EventSourcingService;
 import com.ecommerce.paymentservice.Payment;
@@ -16,6 +17,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -54,7 +56,24 @@ public class PaymentService {
             .status(PaymentStatus.PROCESSING)
             .build();
 
-        Payment savedPayment = paymentRepository.save(payment);
+        Payment savedPayment;
+        try {
+            // saveAndFlush, not save: this method is @Transactional at the
+            // class level, so a plain save() only queues the INSERT -
+            // Hibernate wouldn't actually execute it (and so wouldn't hit
+            // the unique constraint below) until the transaction commits,
+            // which happens after this method returns and well outside
+            // this try/catch. Flushing forces it to happen now.
+            savedPayment = paymentRepository.saveAndFlush(payment);
+        } catch (DataIntegrityViolationException e) {
+            // Unique constraint on orderId (see
+            // V7__Enforce_One_Payment_Per_Order.sql) - a payment for this
+            // order already exists, either from an earlier call here or
+            // from PaymentEventListener's saga-driven path reacting to the
+            // same order. Surface this as a clean 400, not a raw 500.
+            throw new BusinessException(
+                "A payment already exists for order " + request.getOrderId(), "PAYMENT_ALREADY_EXISTS", e);
+        }
 
         // Simulate payment processing (in real scenario, call payment gateway)
         savedPayment.setStatus(PaymentStatus.PROCESSED);

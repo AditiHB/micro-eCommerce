@@ -49,13 +49,22 @@ Feature: Customer journey end-to-end
     And match response.status == 'PENDING'
     * def orderId = response.id
 
-    # 4. Invoke the Payment Service for that order
+    # 4. Invoke the Payment Service for that order - this can race the
+    # automatic saga (order-created -> inventory-reserved -> an automatic
+    # payment via PaymentEventListener.handleInventoryReserved, which in
+    # practice reliably wins since it starts as soon as the order is
+    # created, well before this test's own sequential HTTP calls catch up).
+    # "One payment per order" is enforced atomically (a unique constraint on
+    # orderId - see V7__Enforce_One_Payment_Per_Order.sql), so whichever
+    # path gets there first succeeds (201) and the other gets a clean 400
+    # PAYMENT_ALREADY_EXISTS instead of silently double-charging the order.
+    # Either outcome means the order is paid - step 5 is what actually
+    # verifies that, regardless of which path got there first.
     Given path '/api/payments'
     And request { orderId: '#(orderId)', amount: 49.99 }
     When method post
-    Then status 201
-    And match response.orderId == orderId
-    And match response.status == 'PROCESSED'
+    Then assert responseStatus == 201 || responseStatus == 400
+    * if (responseStatus == 400 && response.errorCode != 'PAYMENT_ALREADY_EXISTS') karate.fail('unexpected 400 processing payment: ' + JSON.stringify(response))
 
     # 5. See Notification Service in action - order-created and
     # payment-processed are consumed off Kafka asynchronously, so poll until

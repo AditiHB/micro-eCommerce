@@ -53,6 +53,13 @@ Feature: Gateway resilience patterns
     * configure afterScenario = function(){ docker.start('payment-service') }
     * docker.stop('payment-service')
 
+    # A fresh, unique orderId - "one payment per order" is now an atomic DB
+    # constraint (V7__Enforce_One_Payment_Per_Order.sql), and order 1
+    # already has a seeded payment from the start, so a hardcoded orderId
+    # would make the recovery check below get a permanent 400
+    # PAYMENT_ALREADY_EXISTS instead of ever reaching 201.
+    * def orderId = Java.type('java.lang.System').currentTimeMillis()
+
     # minimumNumberOfCalls=5 / slidingWindowSize=10 / failureRateThreshold=50%
     # (see application.yml's resilience4j.circuitbreaker.configs.default) -
     # a handful of failed calls is enough to open it; each failing call
@@ -60,7 +67,7 @@ Feature: Gateway resilience patterns
     # it does.
     * configure retry = { count: 10, interval: 1000 }
     Given path '/api/payments'
-    And request { orderId: 1, amount: 10.00 }
+    And request { orderId: '#(orderId)', amount: 10.00 }
     And retry until responseStatus == 503 && response.circuitBreakerStatus == 'OPEN'
     When method post
     Then status 503
@@ -75,7 +82,7 @@ Feature: Gateway resilience patterns
 
     * configure retry = { count: 20, interval: 3000 }
     Given path '/api/payments'
-    And request { orderId: 1, amount: 10.00 }
+    And request { orderId: '#(orderId)', amount: 10.00 }
     And retry until responseStatus == 201
     When method post
     Then status 201

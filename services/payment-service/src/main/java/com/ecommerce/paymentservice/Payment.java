@@ -26,7 +26,7 @@ public class Payment {
     private Long id;
 
     @NotNull(message = "Order ID cannot be null")
-    @Column(nullable = false)
+    @Column(nullable = false, unique = true)
     private Long orderId;
 
     @NotNull(message = "Amount cannot be null")

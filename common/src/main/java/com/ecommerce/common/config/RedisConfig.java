@@ -11,6 +11,22 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 /**
  * Redis Cache Configuration
  *
+ * TODO (known gap): this class is never actually imported by any service -
+ * not in customer/order/payment/inventory-service's CommonIntegrationConfig,
+ * nor notification-service's. Every one of those services instead imports
+ * {@link CacheConfig}, whose {@code ConcurrentMapCacheManager} is a local,
+ * per-instance, in-memory cache - so every {@code @Cacheable}/
+ * {@code @CacheEvict} in this codebase today is backed by that, not Redis,
+ * despite each service's application.yml configuring
+ * {@code spring.cache.type: redis} and a real Redis connection (that
+ * property is silently ignored once a user-defined CacheManager bean - the
+ * local one - exists). Redis itself is still used for one real thing in
+ * this app: the API Gateway's RateLimitingFilter. To make application
+ * caching genuinely distributed as this class's javadoc already describes,
+ * either import this class instead of CacheConfig in each service's
+ * CommonIntegrationConfig (and delete CacheConfig), or delete this class
+ * if local-only caching is intentional and the javadoc is just stale.
+ *
  * Purpose: Configure distributed Redis caching across all microservice instances.
  * This enables a shared cache layer that reduces database load and improves response times.
  *
