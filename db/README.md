@@ -34,6 +34,24 @@ mvn -pl services/customer-service flyway:info
 mvn -pl services/customer-service flyway:migrate
 ```
 
+## Seeded test users (JWT auth)
+
+`POST /api/auth/login` authenticates against a `users` table that each
+service keeps as its own local copy (same database-per-service pattern as
+everything else) - there's no shared/central user store, and no
+self-service registration endpoint. Two accounts are seeded by Flyway for
+local/test use:
+
+| Username | Role | Seeded into | Purpose |
+|---|---|---|---|
+| `karate_admin` | ADMIN | customer, inventory, order, payment, notification | Logging in as a real user - e.g. [e2e-tests](../e2e-tests) |
+| `notification-service-account` | USER | customer, order | notification-service's own outbound calls to `GET /api/customers/{id}` and `GET /api/orders/{id}` (service-to-service - see `CustomerClient`/`OrderClient`), which are role-protected endpoints like any other |
+
+Password hashes are bcrypt; see each service's `V*__Seed_Test_Users.sql` /
+`V*__Seed_Service_Account.sql` migration. Since every service validates a
+JWT by loading the username from its *own* local table, a new seeded
+username needs the same row added to every service it will call into.
+
 ## Verifying migrations
 
 ```bash

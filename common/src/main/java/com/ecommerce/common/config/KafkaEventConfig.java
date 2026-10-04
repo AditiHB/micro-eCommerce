@@ -81,7 +81,12 @@ public class KafkaEventConfig {
         configProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, producerMaxBlockMs);
         configProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, producerRequestTimeoutMs);
         configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, producerDeliveryTimeoutMs);
-        configProps.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
+        // Type headers ON (the default): the consumer side's JsonDeserializer has no usable
+        // default type to fall back to (DomainEvent is abstract - every concrete *Event class
+        // is a different shape on a different topic), so it relies entirely on this header to
+        // know which concrete class to deserialize into. Turning this off makes every consumer
+        // fail with "No type information in headers and no default type provided" and silently
+        // never process a single event - this shared factory is used for every topic.
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 

@@ -187,6 +187,7 @@ micro-eCommerce/
 │       ├── pom.xml
 │       └── src/
 │
+├── e2e-tests/                                    # Karate end-to-end tests (see e2e-tests/README.md)
 ├── k8s/                                         # Kubernetes manifests (see docs/KUBERNETES_DEPLOYMENT.md)
 └── config-repo/                                 # Centralized configuration files
 ```

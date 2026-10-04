@@ -485,6 +485,16 @@ mvn test -Dgroups=integration
 mvn test -Dspring.profiles.active=test
 ```
 
+### End-to-end testing with Karate
+
+A full customer-journey E2E scenario (login -> create customer -> browse
+catalogue -> order -> pay -> notification) runs against the live stack over
+real HTTP. See [e2e-tests/README.md](../e2e-tests/README.md).
+```bash
+docker compose up -d
+mvn -f e2e-tests/pom.xml test -Dtest=CustomerJourneyRunner
+```
+
 ### API Testing with Postman / Insomnia
 ```bash
 # Import collection + matching environment
