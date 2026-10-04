@@ -72,6 +72,16 @@ public class KafkaFaultInjector {
      * @return true if found within timeoutSeconds, false otherwise
      */
     public static boolean waitForDlqMessage(String dlqTopic, String expectedEventId, int timeoutSeconds) {
+        return findDlqMessage(dlqTopic, expectedEventId, timeoutSeconds) != null;
+    }
+
+    /**
+     * Same lookup as {@link #waitForDlqMessage}, but returns the matched
+     * message body (or null if not found within the timeout) so the caller
+     * can print the actual DLQ payload - see DataShowcase.showRaw and
+     * dlq-routing.feature.
+     */
+    public static String findDlqMessage(String dlqTopic, String expectedEventId, int timeoutSeconds) {
         Properties props = new Properties();
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
         props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
@@ -87,11 +97,11 @@ public class KafkaFaultInjector {
                 ConsumerRecords<String, String> records = consumer.poll(Duration.ofMillis(500));
                 for (ConsumerRecord<String, String> record : records) {
                     if (record.value() != null && record.value().contains(expectedEventId)) {
-                        return true;
+                        return record.value();
                     }
                 }
             }
-            return false;
+            return null;
         }
     }
 }

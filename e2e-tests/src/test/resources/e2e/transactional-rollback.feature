@@ -29,6 +29,7 @@ Feature: Transactional rollback on constraint violation
 
   Background:
     * url gatewayUrl
+    * def showcase = Java.type('e2e.DataShowcase')
     Given path '/api/auth/login'
     And request { username: '#(testUsername)', password: '#(testPassword)' }
     When method post
@@ -48,6 +49,7 @@ Feature: Transactional rollback on constraint violation
     And match response.status == 'PROCESSED'
     * def originalPaymentId = response.id
     * def originalAmount = response.amount
+    * showcase.show('Payment ' + originalPaymentId + ' for order ' + orderId + ' - first call, committed', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
     # Second payment for the SAME orderId: saveAndFlush's INSERT hits the
     # unique constraint mid-transaction. The whole method rolls back and
@@ -68,3 +70,4 @@ Feature: Transactional rollback on constraint violation
     Then status 200
     And match response.amount == originalAmount
     And match response.status == 'PROCESSED'
+    * showcase.show('Payments for order ' + orderId + ' - still exactly one row, unchanged', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)

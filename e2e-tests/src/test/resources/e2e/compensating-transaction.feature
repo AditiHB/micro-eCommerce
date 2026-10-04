@@ -34,6 +34,7 @@ Feature: Saga compensating transaction on microservice failure
 
   Background:
     * url gatewayUrl
+    * def showcase = Java.type('e2e.DataShowcase')
     Given path '/api/auth/login'
     And request { username: '#(testUsername)', password: '#(testPassword)' }
     When method post
@@ -74,6 +75,7 @@ Feature: Saga compensating transaction on microservice failure
     Then status 201
     And match response.status == 'PENDING'
     * def orderId = response.id
+    * showcase.show('Order ' + orderId + ' created (PENDING, quantity=' + requestedQty + ')', 'order_db', 'SELECT id, product_id, quantity, status FROM orders WHERE id=' + orderId)
 
     # 4. Poll until the saga's compensating transaction has run: order-service
     # consumes InventoryFailedEvent and cancels the order.
@@ -83,6 +85,7 @@ Feature: Saga compensating transaction on microservice failure
     When method get
     Then status 200
     And match response.status == 'CANCELLED'
+    * showcase.show('Order ' + orderId + ' compensated (CANCELLED)', 'order_db', 'SELECT id, status, updated_at FROM orders WHERE id=' + orderId)
 
     # 5. Confirm Inventory Service's side of the compensation: since nothing
     # was ever reserved on the insufficient-stock path, there's nothing to
@@ -91,6 +94,8 @@ Feature: Saga compensating transaction on microservice failure
     When method get
     Then status 200
     And match response.quantity == availableQty
+    * showcase.show('Inventory for ' + productId + ' - untouched', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
+    * showcase.show('Payments for order ' + orderId + ' - expect zero rows', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
     # 6. Confirm the saga never reached Payment Service at all - only the
     # order-created notification should exist for this order, never a
@@ -106,3 +111,4 @@ Feature: Saga compensating transaction on microservice failure
     And assert notificationTypes.includes('ORDER_CREATED')
     And assert !notificationTypes.includes('PAYMENT_SUCCESS')
     And assert !notificationTypes.includes('PAYMENT_FAILED')
+    * showcase.show('Notifications for order ' + orderId + ' - ORDER_CREATED only', 'notification_db', 'SELECT id, type, status, subject FROM notifications WHERE order_id=' + orderId + ' ORDER BY id')

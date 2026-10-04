@@ -1,0 +1,135 @@
+package e2e;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Prints a live, cleanly-aligned snapshot of a table/row straight from the
+ * already-running Postgres container, the moment a feature creates or
+ * mutates it - so every run of these scenarios shows exactly what landed in
+ * which service's own database, instead of needing to go look it up by hand
+ * afterward.
+ *
+ * Connects directly over JDBC to the postgres profile's host-exposed port
+ * (5432 - see docker-compose.yml's postgres service), rather than shelling
+ * out to `docker exec psql`: no process per query, and a ResultSet is far
+ * easier to format into a compact table than psql's own CLI output. Only
+ * works against the postgres profile - the default H2 profile has no
+ * postgres container/port to connect to at all.
+ *
+ * Best-effort and non-fatal by design: a query failure (wrong profile,
+ * postgres not reachable, etc.) prints a note and moves on rather than
+ * failing the scenario - this is diagnostic output, never a test assertion.
+ * Callers should SELECT only the columns worth showing (not {@code *}) -
+ * this class renders exactly the columns it's given, so a focused query
+ * makes for a focused, readable snapshot.
+ */
+public class DataShowcase {
+
+    private static final String JDBC_URL_TEMPLATE = "jdbc:postgresql://localhost:5432/%s";
+    private static final String USER = "ecommerce_user";
+    private static final String PASSWORD = "ecommerce_password";
+
+    /**
+     * @param label what this snapshot represents (printed as a heading)
+     * @param database the service's own Postgres database (e.g. "order_db")
+     * @param sql a SELECT statement, naming the specific columns worth
+     *            showing, filtered to the exact row(s) this scenario just
+     *            created/touched
+     */
+    public static void show(String label, String database, String sql) {
+        StringBuilder out = new StringBuilder();
+        out.append("\n----- ").append(label).append(" (").append(database).append(") -----\n");
+        String url = String.format(JDBC_URL_TEMPLATE, database);
+        try (Connection conn = DriverManager.getConnection(url, USER, PASSWORD);
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+            out.append(renderTable(rs));
+        } catch (SQLException e) {
+            out.append("(snapshot unavailable - ").append(e.getMessage()).append(")\n");
+        }
+        System.out.println(out);
+    }
+
+    /**
+     * Prints an arbitrary block of text (e.g. a Kafka DLQ message body)
+     * under the same heading style as {@link #show}, for data that isn't a
+     * SQL row - see dlq-routing.feature.
+     */
+    public static void showRaw(String label, String content) {
+        System.out.println("\n----- " + label + " -----\n" + content);
+    }
+
+    private static String renderTable(ResultSet rs) throws SQLException {
+        ResultSetMetaData meta = rs.getMetaData();
+        int columnCount = meta.getColumnCount();
+
+        List<String> headers = new ArrayList<>();
+        for (int i = 1; i <= columnCount; i++) {
+            headers.add(meta.getColumnLabel(i));
+        }
+
+        List<List<String>> rows = new ArrayList<>();
+        while (rs.next()) {
+            List<String> row = new ArrayList<>();
+            for (int i = 1; i <= columnCount; i++) {
+                String value = rs.getString(i);
+                row.add(value == null ? "NULL" : value);
+            }
+            rows.add(row);
+        }
+
+        if (rows.isEmpty()) {
+            return "(0 rows)\n";
+        }
+
+        int[] widths = new int[columnCount];
+        for (int i = 0; i < columnCount; i++) {
+            widths[i] = headers.get(i).length();
+        }
+        for (List<String> row : rows) {
+            for (int i = 0; i < columnCount; i++) {
+                widths[i] = Math.max(widths[i], row.get(i).length());
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        appendRow(sb, headers, widths);
+        appendSeparator(sb, widths);
+        for (List<String> row : rows) {
+            appendRow(sb, row, widths);
+        }
+        sb.append("(").append(rows.size()).append(rows.size() == 1 ? " row)\n" : " rows)\n");
+        return sb.toString();
+    }
+
+    private static void appendRow(StringBuilder sb, List<String> values, int[] widths) {
+        for (int i = 0; i < values.size(); i++) {
+            sb.append(pad(values.get(i), widths[i]));
+            if (i < values.size() - 1) {
+                sb.append(" | ");
+            }
+        }
+        sb.append("\n");
+    }
+
+    private static void appendSeparator(StringBuilder sb, int[] widths) {
+        for (int i = 0; i < widths.length; i++) {
+            sb.append("-".repeat(widths[i]));
+            if (i < widths.length - 1) {
+                sb.append("-+-");
+            }
+        }
+        sb.append("\n");
+    }
+
+    private static String pad(String value, int width) {
+        return value + " ".repeat(width - value.length());
+    }
+}

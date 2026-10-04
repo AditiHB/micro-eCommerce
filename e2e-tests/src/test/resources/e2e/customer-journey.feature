@@ -6,6 +6,7 @@ Feature: Customer journey end-to-end
 
   Background:
     * url gatewayUrl
+    * def showcase = Java.type('e2e.DataShowcase')
 
     # The users table has no self-service registration endpoint and starts
     # empty - "karate_admin" is seeded by a Flyway migration specifically
@@ -28,6 +29,7 @@ Feature: Customer journey end-to-end
     Then status 201
     And match response.id == '#number'
     * def customerId = response.id
+    * showcase.show('Customer ' + customerId + ' created', 'customer_db', 'SELECT id, name, email FROM customers WHERE id=' + customerId)
 
     # 2. See the product catalogue (Inventory Service - product-service
     # isn't part of this Compose stack, see docs/SETUP_AND_DEPLOYMENT.md)
@@ -48,6 +50,8 @@ Feature: Customer journey end-to-end
     And match response.productId == productId
     And match response.status == 'PENDING'
     * def orderId = response.id
+    * showcase.show('Order ' + orderId + ' created (PENDING)', 'order_db', 'SELECT id, customer_id, product_id, quantity, status FROM orders WHERE id=' + orderId)
+    * showcase.show('Inventory for ' + productId + ' right after order creation', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
 
     # 4. Invoke the Payment Service for that order - this can race the
     # automatic saga (order-created -> inventory-reserved -> an automatic
@@ -80,3 +84,9 @@ Feature: Customer journey end-to-end
     * def notificationTypes = karate.jsonPath(orderNotifications, '$[*].type')
     And assert notificationTypes.includes('ORDER_CREATED')
     And assert notificationTypes.includes('PAYMENT_SUCCESS')
+
+    # Final state across every service once the saga has settled.
+    * showcase.show('Order ' + orderId + ' final state', 'order_db', 'SELECT id, status, updated_at FROM orders WHERE id=' + orderId)
+    * showcase.show('Payment for order ' + orderId, 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
+    * showcase.show('Inventory for ' + productId + ' final state', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
+    * showcase.show('Notifications for order ' + orderId, 'notification_db', 'SELECT id, type, status, subject FROM notifications WHERE order_id=' + orderId + ' ORDER BY id')

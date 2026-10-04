@@ -66,6 +66,21 @@
             <version>3.6.2</version>
             <scope>test</scope>
         </dependency>
+        <!-- DataShowcase queries postgres directly over JDBC (the postgres
+             profile exposes 5432 on the host - see docker-compose.yml)
+             rather than shelling out to `docker exec psql`: no process-spawn
+             overhead per query, and a ResultSet is far easier to format
+             cleanly than parsing psql's own CLI table output. Version
+             pinned to match what the services themselves resolve via the
+             Spring Boot parent (see services/order-service's dependency
+             tree), though the wire protocol is stable across minor
+             versions regardless. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.6.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

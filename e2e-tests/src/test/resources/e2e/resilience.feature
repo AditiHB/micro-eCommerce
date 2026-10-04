@@ -40,6 +40,7 @@ Feature: Gateway resilience patterns
 
   Background:
     * url gatewayUrl
+    * def showcase = Java.type('e2e.DataShowcase')
     Given path '/api/auth/login'
     And request { username: '#(testUsername)', password: '#(testPassword)' }
     When method post
@@ -73,6 +74,7 @@ Feature: Gateway resilience patterns
     Then status 503
     And match response.circuitBreakerStatus == 'OPEN'
     And match response.error == 'Service Unavailable'
+    * showcase.show('Payments for order ' + orderId + ' while breaker is OPEN - expect zero rows (payment-service never reached)', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
     # Recovery: restart the container, wait past waitDurationInOpenState
     # (30s), and confirm the breaker lets traffic through again
@@ -87,6 +89,7 @@ Feature: Gateway resilience patterns
     When method post
     Then status 201
     And match response.status == 'PROCESSED'
+    * showcase.show('Payment for order ' + orderId + ' after recovery', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
   Scenario: Gateway rate limiter returns 429 once a route's per-minute budget is exceeded
     # payment's route has the lowest budget (50/min - see

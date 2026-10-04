@@ -48,16 +48,40 @@ dropped. Covers 5 of the saga's 8 listener methods - the other 3 are
 guarded against this kind of data-only fault injection by design (see the
 feature file's own header for which, and why).
 
+## Data showcase
+
+Every scenario above prints a live snapshot of the exact rows it just
+created or changed - straight from each service's own Postgres database,
+for the specific IDs that run produced - right after the HTTP assertions
+that confirm them. For example, `customer-journey.feature` prints the new
+customer row, the order's PENDING→COMPLETED transition, the payment row,
+the notification rows, and the inventory row before/after, every single
+run. See [DataShowcase](src/test/java/e2e/DataShowcase.java): it connects
+over JDBC to postgres's host-exposed port (5432) and renders a compact,
+aligned table for whatever columns the calling step's SQL selects - so a
+Karate HTML report or a terminal run both show exactly what landed in the
+database, not just what the API echoed back. Best-effort: if postgres
+isn't reachable (e.g. the H2 profile is running instead), it prints a note
+and the scenario continues unaffected - this is diagnostic output, never
+an assertion.
+
+`dlq-routing.feature` uses the same class's `showRaw` to print the actual
+Kafka message bodies instead (the input crafted event and what landed in
+the DLQ topic), since that scenario's data lives in Kafka, not Postgres.
+
 ## Prerequisites
 
 Start the stack first (see [docs/SETUP_AND_DEPLOYMENT.md](../docs/SETUP_AND_DEPLOYMENT.md)):
 
 ```bash
-docker compose up -d
+docker compose --profile postgres --env-file .env.postgres up -d
 ```
 
-Either the default H2 profile or `--profile postgres` works. HTTPS/observability
-profiles are irrelevant here (the test talks to the gateway on plain HTTP).
+The HTTP assertions in every scenario work the same under the default H2
+profile, but the data showcase above needs the `postgres` profile - H2 is
+in-memory per-service and has no container/port for DataShowcase to query.
+HTTPS/observability profiles are irrelevant here (the test talks to the
+gateway on plain HTTP).
 
 The login step authenticates as `karate_admin`, a test-only ADMIN account
 seeded by a Flyway migration into every service's own local `users` table

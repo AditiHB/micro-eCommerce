@@ -46,6 +46,7 @@ Feature: Saga listener failures are routed to the Dead Letter Queue
     * def authToken = response.token
     * configure headers = { Authorization: '#("Bearer " + authToken)' }
     * def injector = Java.type('e2e.KafkaFaultInjector')
+    * def showcase = Java.type('e2e.DataShowcase')
     * def uuid = function(){ return Java.type('java.util.UUID').randomUUID() + '' }
 
   Scenario: InventoryEventListener.handleOrderCreated failure is routed to order-created-dlq
@@ -61,10 +62,12 @@ Feature: Saga listener failures are routed to the Dead Letter Queue
     * def eventId = uuid()
     * def orderId = Java.type('java.lang.System').currentTimeMillis()
     * def payload = '{"eventId":"' + eventId + '","occurredAt":"2026-01-01T00:00:00","aggregateId":"' + orderId + '","aggregateType":"Order","version":1,"orderId":' + orderId + ',"customerId":1,"productId":"' + productId + '","quantity":null}'
+    * showcase.showRaw('Crafted event published to order-created (quantity: null)', payload)
     * injector.publishRaw('order-created', orderId + '', 'com.ecommerce.common.events.OrderCreatedEvent', payload)
 
-    * def found = injector.waitForDlqMessage('order-created-dlq', eventId, 20)
-    And assert found
+    * def dlqMessage = injector.findDlqMessage('order-created-dlq', eventId, 20)
+    And assert dlqMessage != null
+    * showcase.showRaw('Message landed in order-created-dlq', dlqMessage)
 
   Scenario: OrderEventListener.handlePaymentProcessed failure is routed to payment-processed-dlq
     # A null orderId makes orderService.updateOrderStatusIfPresent's
@@ -72,18 +75,22 @@ Feature: Saga listener failures are routed to the Dead Letter Queue
     # (Spring Data JPA's own null-id guard) - no real order needed at all.
     * def eventId = uuid()
     * def payload = '{"eventId":"' + eventId + '","occurredAt":"2026-01-01T00:00:00","aggregateId":"dlq-test","aggregateType":"Payment","version":1,"paymentId":1,"orderId":null,"amount":99.99}'
+    * showcase.showRaw('Crafted event published to payment-processed (orderId: null)', payload)
     * injector.publishRaw('payment-processed', 'dlq-test', 'com.ecommerce.common.events.PaymentProcessedEvent', payload)
 
-    * def found = injector.waitForDlqMessage('payment-processed-dlq', eventId, 20)
-    And assert found
+    * def dlqMessage = injector.findDlqMessage('payment-processed-dlq', eventId, 20)
+    And assert dlqMessage != null
+    * showcase.showRaw('Message landed in payment-processed-dlq', dlqMessage)
 
   Scenario: OrderEventListener.handleInventoryFailed failure is routed to inventory-failed-dlq
     * def eventId = uuid()
     * def payload = '{"eventId":"' + eventId + '","occurredAt":"2026-01-01T00:00:00","aggregateId":"dlq-test","aggregateType":"Inventory","version":1,"orderId":null}'
+    * showcase.showRaw('Crafted event published to inventory-failed (orderId: null)', payload)
     * injector.publishRaw('inventory-failed', 'dlq-test', 'com.ecommerce.common.events.InventoryFailedEvent', payload)
 
-    * def found = injector.waitForDlqMessage('inventory-failed-dlq', eventId, 20)
-    And assert found
+    * def dlqMessage = injector.findDlqMessage('inventory-failed-dlq', eventId, 20)
+    And assert dlqMessage != null
+    * showcase.showRaw('Message landed in inventory-failed-dlq', dlqMessage)
 
   Scenario: OrderEventListener.handlePaymentFailed failure is routed to payment-failed-dlq
     # productId/quantity are left null too - InventoryEventListener consumes
@@ -93,15 +100,19 @@ Feature: Saga listener failures are routed to the Dead Letter Queue
     # only looks at orderId - is the one meant to throw here.
     * def eventId = uuid()
     * def payload = '{"eventId":"' + eventId + '","occurredAt":"2026-01-01T00:00:00","aggregateId":"dlq-test","aggregateType":"Order","version":1,"orderId":null,"productId":null,"quantity":null,"reason":"dlq-routing test"}'
+    * showcase.showRaw('Crafted event published to payment-failed (orderId: null)', payload)
     * injector.publishRaw('payment-failed', 'dlq-test', 'com.ecommerce.common.events.PaymentFailedEvent', payload)
 
-    * def found = injector.waitForDlqMessage('payment-failed-dlq', eventId, 20)
-    And assert found
+    * def dlqMessage = injector.findDlqMessage('payment-failed-dlq', eventId, 20)
+    And assert dlqMessage != null
+    * showcase.showRaw('Message landed in payment-failed-dlq', dlqMessage)
 
   Scenario: OrderEventListener.handleRefundCompleted failure is routed to refund-completed-dlq
     * def eventId = uuid()
     * def payload = '{"eventId":"' + eventId + '","occurredAt":"2026-01-01T00:00:00","aggregateId":"dlq-test","aggregateType":"Payment","version":1,"orderId":null,"paymentId":1,"refundAmount":10.00}'
+    * showcase.showRaw('Crafted event published to refund-completed (orderId: null)', payload)
     * injector.publishRaw('refund-completed', 'dlq-test', 'com.ecommerce.common.events.RefundCompletedEvent', payload)
 
-    * def found = injector.waitForDlqMessage('refund-completed-dlq', eventId, 20)
-    And assert found
+    * def dlqMessage = injector.findDlqMessage('refund-completed-dlq', eventId, 20)
+    And assert dlqMessage != null
+    * showcase.showRaw('Message landed in refund-completed-dlq', dlqMessage)
