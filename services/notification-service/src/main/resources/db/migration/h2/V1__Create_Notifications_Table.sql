@@ -17,10 +17,11 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-    CONSTRAINT uk_notifications_source_event_id UNIQUE (source_event_id),
-    INDEX idx_notifications_customer_id (customer_id),
-    INDEX idx_notifications_order_id (order_id),
-    INDEX idx_notifications_type (type),
-    INDEX idx_notifications_status (status),
-    INDEX idx_notifications_created_at (created_at)
+    CONSTRAINT uk_notifications_source_event_id UNIQUE (source_event_id)
 );
+
+CREATE INDEX idx_notifications_customer_id ON notifications(customer_id);
+CREATE INDEX idx_notifications_order_id ON notifications(order_id);
+CREATE INDEX idx_notifications_type ON notifications(type);
+CREATE INDEX idx_notifications_status ON notifications(status);
+CREATE INDEX idx_notifications_created_at ON notifications(created_at);

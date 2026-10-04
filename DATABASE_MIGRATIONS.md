@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project uses **Liquibase** for database version control and schema management across all microservices. Liquibase enables safe, versioned database changes with rollback capabilities.
+This project uses **Flyway** for database version control and schema management across all microservices. See [db/README.md](db/README.md) for the authoritative, up-to-date guide to how migrations are structured and run - this document covers schema design conventions and operational practices.
 
 ## Architecture
 
@@ -22,57 +22,23 @@ This project uses **Liquibase** for database version control and schema manageme
 
 ## Migration Files Structure
 
-Each service has a changelog master file:
+Each service has its own versioned Flyway migrations, one subfolder per database vendor:
 
 ```
 services/
 ├── customer-service/
-│   └── src/main/resources/db/changelog/
-│       └── db.changelog-master.xml
+│   └── src/main/resources/db/migration/{h2,oracle,postgresql}/
+│       ├── V1__Create_Customers_Table.sql
+│       └── ...
 ├── order-service/
-│   └── src/main/resources/db/changelog/
-│       └── db.changelog-master.xml
+│   └── src/main/resources/db/migration/{h2,oracle,postgresql}/
 ├── payment-service/
-│   └── src/main/resources/db/changelog/
-│       └── db.changelog-master.xml
+│   └── src/main/resources/db/migration/{h2,oracle,postgresql}/
 └── inventory-service/
-    └── src/main/resources/db/changelog/
-        └── db.changelog-master.xml
+    └── src/main/resources/db/migration/{h2,oracle,postgresql}/
 ```
 
-## ChangeSets
-
-Each service's `db.changelog-master.xml` contains ordered changesets:
-
-### Customer Service
-1. **001-initial-customers-schema**: Creates `customers` table with indexes
-2. **002-customers-indexes**: Creates optimized indexes
-3. **003-audit-log-table**: Creates `audit_logs` table for change tracking
-4. **004-audit-log-indexes**: Indexes for audit log queries
-
-### Order Service
-1. **001-initial-orders-schema**: Creates `orders` table
-2. **002-orders-indexes**: Composite indexes for query optimization
-3. **003-event-sourcing-table**: Creates `order_events` table
-4. **004-event-sourcing-indexes**: Event table indexes
-5. **005-audit-log-table**: Audit logging
-6. **006-audit-log-indexes**: Audit table indexes
-
-### Payment Service
-1. **001-initial-payments-schema**: Creates `payments` table
-2. **002-payments-indexes**: Query optimization indexes
-3. **003-payment-events-table**: Creates `payment_events` table
-4. **004-payment-events-indexes**: Event sourcing indexes
-5. **005-audit-log-table**: Audit logging
-6. **006-audit-log-indexes**: Audit indexes
-
-### Inventory Service
-1. **001-initial-inventory-schema**: Creates `inventory` table
-2. **002-inventory-indexes**: Query performance indexes
-3. **003-inventory-events-table**: Creates `inventory_events` table
-4. **004-inventory-events-indexes**: Event sourcing indexes
-5. **005-audit-log-table**: Audit logging
-6. **006-audit-log-indexes**: Audit indexes
+See each service's migration folder for its exact changeset history - that's the source of truth, not this document.
 
 ## Database Configuration
 
@@ -89,9 +55,9 @@ spring:
   jpa:
     hibernate:
       ddl-auto: validate
-  liquibase:
+  flyway:
     enabled: true
-    change-log: classpath:db/changelog/db.changelog-master.xml
+    locations: classpath:db/migration/{vendor}
 ```
 
 H2 console available at: `http://localhost:8081/h2-console`
@@ -113,13 +79,13 @@ Configuration in `application-postgres.yml`:
 
 ### Running Migrations
 
-Migrations run automatically on application startup via Liquibase Spring Boot integration.
+Migrations run automatically on application startup via Flyway's Spring Boot integration - there is no separate migrate step.
 
 ```bash
 # Development (H2)
 mvn spring-boot:run
 
-# Production (PostgreSQL)
+# Against PostgreSQL (see docker-compose-postgres.yml for the containerized equivalent)
 mvn spring-boot:run -Dspring-boot.run.arguments="--spring.profiles.active=postgres"
 ```
 
@@ -257,57 +223,38 @@ CREATE TABLE audit_logs (
 
 ## Rollback Strategy
 
-### Automatic Rollback
-Liquibase stores migration history in `DATABASECHANGELOG` table. To rollback:
-
-```bash
-# Rollback to specific date
-mvn liquibase:rollback -Dliquibase.rollbackDate=2024-01-01
-
-# Rollback specific number of changesets
-mvn liquibase:rollback -Dliquibase.rollbackCount=3
-
-# Rollback to specific tag
-mvn liquibase:rollback -Dliquibase.rollbackTag=v1.0
-```
-
-### Manual Rollback
-If Liquibase rollback is not possible, manually execute reverse SQL:
+Flyway Community Edition (what this project uses) has **no automated rollback** - that's an Enterprise-only feature. The standard Flyway pattern is **roll forward**: write a new migration that undoes or corrects the previous change, rather than reversing history.
 
 ```sql
--- Example rollback
-DROP TABLE orders;
-DROP TABLE DATABASECHANGELOG;
-DROP TABLE DATABASECHANGELOGLOCK;
+-- Example: V5__Revert_Column_Add.sql, undoing a column added in V4
+ALTER TABLE orders DROP COLUMN discount_code;
+```
+
+If you genuinely need to discard a migration that was already applied (e.g. in a throwaway dev/CI database), manually repair the history table and drop the affected objects:
+
+```sql
+-- Caution: this just forgets the migration happened, it doesn't undo its effects
+DELETE FROM flyway_schema_history WHERE version = '5';
+DROP TABLE orders; -- only if you're also recreating it from scratch
 ```
 
 ### Precautions
-1. Always backup data before migrations
-2. Test migrations on staging environment first
-3. Schedule migrations during maintenance windows
-4. Have a rollback plan documented
+1. Always back up data before migrating a real database
+2. Test migrations against staging before production
+3. Schedule migrations during maintenance windows for production
+4. Prefer additive, backward-compatible changes so a bad deploy doesn't require a schema rollback
 5. Monitor application logs after migration
 
-## Liquibase Monitoring
+## Flyway Status
 
-### Check Migration Status
+### Check pending/applied migrations
 ```bash
-mvn liquibase:status
+mvn -pl services/<service-name> flyway:info
 ```
 
-### View Change History
+### Validate applied migrations against the files on disk
 ```bash
-mvn liquibase:history
-```
-
-### Generate SQL Preview
-```bash
-mvn liquibase:updateSQL
-```
-
-### Validate Changelog
-```bash
-mvn liquibase:validate
+mvn -pl services/<service-name> flyway:validate
 ```
 
 ## Performance Optimization
@@ -334,33 +281,31 @@ All tables include strategic indexes on:
 
 ## Best Practices
 
-1. **One Change Per Changeset**: Each logical database change should be a separate changeset
+1. **One Change Per Migration**: Each logical database change should be its own `V{n}__...sql` file
 2. **Version Control**: Keep all migration files in version control
-3. **Test First**: Always test migrations on staging before production
-4. **Document Changes**: Add comments explaining the "why" behind schema changes
-5. **Use Contexts**: Tag changesets with contexts (dev, test, prod) for environment-specific changes
-6. **Validate Schema**: Run `liquibase:validate` before deploying
+3. **Never Edit Applied Migrations**: Flyway checksums each file - editing one that already ran elsewhere breaks validation. Add a new migration instead.
+4. **Test First**: Always test migrations against staging before production
+5. **Document Changes**: Add SQL comments explaining the "why" behind schema changes
+6. **Validate Schema**: Run `flyway:validate` before deploying
 7. **Monitor Performance**: Track migration execution time and database performance
 
 ## Troubleshooting
 
 ### Migration Failed
-1. Check logs: `mvn liquibase:status`
-2. Verify SQL syntax in changelog
+1. Check logs: `mvn -pl services/<service-name> flyway:info`
+2. Verify SQL syntax in the migration file
 3. Ensure database connectivity
 4. Check user permissions
 
-### Lock Issues
-If Liquibase locks up:
+### Stuck Lock
+Flyway takes an advisory lock while migrating. If a crashed process left it held:
 ```sql
--- Reset lock (use with caution)
-DELETE FROM DATABASECHANGELOGLOCK;
+-- Only if you're certain no migration is actually in progress
+DELETE FROM flyway_schema_history WHERE success = false;
 ```
 
-### Rollback Not Working
-1. Verify `rollbackSQL` is defined in changeset
-2. Check `supportsRollback="true"` attribute
-3. Manual rollback may be required for non-rollbackable operations
+### Checksum Mismatch
+A migration file was edited after it was already applied somewhere. Revert the edit and add a new migration instead - or, if you're certain the environment can be reset, run `flyway:repair` to re-baseline the checksums.
 
 ## Future Enhancements
 
@@ -373,6 +318,6 @@ DELETE FROM DATABASECHANGELOGLOCK;
 
 ## References
 
-- [Liquibase Documentation](https://docs.liquibase.com/)
-- [Spring Boot Liquibase Integration](https://spring.io/guides/gs/database-migrations-with-flyway/)
+- [Flyway Documentation](https://flywaydb.org/documentation/)
+- [Spring Boot Flyway Integration](https://spring.io/guides/gs/database-migrations-with-flyway/)
 - [PostgreSQL Best Practices](https://wiki.postgresql.org/wiki/Performance_Optimization)

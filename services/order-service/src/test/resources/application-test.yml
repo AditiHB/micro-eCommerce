@@ -1,8 +1,6 @@
 spring:
   application:
     name: order-service-test
-  liquibase:
-    enabled: false
   cloud:
     config:
       enabled: false

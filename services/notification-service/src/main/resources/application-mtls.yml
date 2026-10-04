@@ -42,9 +42,6 @@ spring:
   h2:
     console:
       enabled: true
-  liquibase:
-    enabled: true
-    change-log: classpath:db/changelog/db.changelog-master.xml
 
 notification:
   channel: ${NOTIFICATION_CHANNEL:log}

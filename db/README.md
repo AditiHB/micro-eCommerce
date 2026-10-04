@@ -1,277 +1,57 @@
-# Database Migration Scripts
+# Database Migrations
 
-This directory contains SQL migration scripts for the micro-eCommerce database schema and sample data.
+This project uses **Flyway** for schema migrations. There is no manual "migrate" command to run: each microservice runs its own Flyway migrations automatically on startup, via Spring Boot's Flyway auto-configuration (`spring.flyway.enabled: true` in each service's `application.yml`).
 
-## Overview
+## How it actually works in this repo
 
-The migrations follow the **Flyway naming convention** and are compatible with multiple opensource migration tools:
-- **Flyway** - Java-based, most popular
-- **Liquibase** - Java-based, with XML/YAML/JSON support
-- **golang-migrate** - Golang-based, lightweight
-- **Migrate** (any tool that supports versioned migrations)
+Every microservice owns its **own database** and its own migration files - there is no shared/monolithic schema:
 
-## Migration Files
+| Service | Database | Migration files |
+|---|---|---|
+| customer-service | `customer_db` | [services/customer-service/src/main/resources/db/migration](../services/customer-service/src/main/resources/db/migration) |
+| inventory-service | `inventory_db` | [services/inventory-service/src/main/resources/db/migration](../services/inventory-service/src/main/resources/db/migration) |
+| order-service | `order_db` | [services/order-service/src/main/resources/db/migration](../services/order-service/src/main/resources/db/migration) |
+| payment-service | `payment_db` | [services/payment-service/src/main/resources/db/migration](../services/payment-service/src/main/resources/db/migration) |
+| notification-service | `notification_db` | [services/notification-service/src/main/resources/db/migration](../services/notification-service/src/main/resources/db/migration) |
+| product-service | `product_db` | [services/product-service/src/main/resources/db/migration](../services/product-service/src/main/resources/db/migration) |
 
-### V1__Create_Initial_Schema.sql
-**DDL (Data Definition Language)**
-- Creates 4 tables: `customers`, `inventory`, `orders`, `payments`
-- Defines primary keys, foreign keys, and indexes
-- Sets up constraints and relationships
-- Tables use InnoDB engine with UTF-8 charset for compatibility
+Each service's migration directory has a subfolder per database vendor - `h2/`, `oracle/`, `postgresql/` - and Spring Boot picks the right one at runtime via the `{vendor}` placeholder in `spring.flyway.locations` (`classpath:db/migration/{vendor}`). Filenames follow Flyway's standard versioned convention: `V1__Create_X_Table.sql`, `V2__...sql`, etc.
 
-#### Schema Overview
+## When migrations run
 
-| Table | Purpose | Key Columns |
-|-------|---------|-------------|
-| `customers` | Store customer information | id, name, email |
-| `inventory` | Track product stock levels | id, product_id, quantity |
-| `orders` | Record orders with saga status | id, customer_id, product_id, quantity, status |
-| `payments` | Track payments with saga status | id, order_id, amount, status |
+**Automatically, every time a service starts.** Flyway runs before Hibernate/JPA touches the schema (`spring.jpa.hibernate.ddl-auto: validate` - JPA only validates against what Flyway already created, it never creates or alters tables itself).
 
-### V2__Insert_Sample_Data.sql
-**DML (Data Manipulation Language)**
-- Inserts 5 sample customers
-- Inserts 8 sample products with inventory
-- Inserts 5 sample orders at different saga stages
-- Inserts 5 sample payments at different statuses
-- Uses `ON DUPLICATE KEY UPDATE` for idempotent operations
+- **Default (H2 in-memory):** every service boots against its own throwaway H2 database with no setup required. Flyway creates the schema fresh each time the container starts.
+- **Against real PostgreSQL:** start Postgres and the services together so Flyway runs against it instead:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose-postgres.yml up -d
+  ```
+  See [docker-compose-postgres.yml](../docker-compose-postgres.yml) and [LOCAL_INFRASTRUCTURE_SETUP.md](../LOCAL_INFRASTRUCTURE_SETUP.md) for details. If you only need the bare database (e.g. to inspect it, no services), run `docker compose -f docker-compose-postgres.yml up -d postgres` instead.
 
-## Running Migrations
-
-### Using Flyway
-
-#### Maven Integration
-Add to `pom.xml`:
-```xml
-<dependency>
-    <groupId>org.flywaydb</groupId>
-    <artifactId>flyway-core</artifactId>
-    <version>9.20.0</version>
-</dependency>
-```
-
-Configure `application.yml`:
-```yaml
-spring:
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-    schemas: your_database
-    user: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
-```
-
-Run migrations:
+If you need to run Flyway outside of starting the whole application (e.g. to preview pending migrations), use the Maven plugin from the specific service module:
 ```bash
-# Maven
-mvn flyway:migrate
-
-# Or let Spring Boot run them on startup
-mvn spring-boot:run
-
-# Check migration history
-mvn flyway:info
+mvn -pl services/customer-service flyway:info
+mvn -pl services/customer-service flyway:migrate
 ```
 
-### Using Liquibase
-
-Create master changelog `db/changelog/db.changelog-master.yaml`:
-```yaml
-databaseChangeLog:
-  - include:
-      file: migration/V1__Create_Initial_Schema.sql
-  - include:
-      file: migration/V2__Insert_Sample_Data.sql
-```
-
-Add to `pom.xml`:
-```xml
-<dependency>
-    <groupId>org.liquibase</groupId>
-    <artifactId>liquibase-core</artifactId>
-    <version>4.20.0</version>
-</dependency>
-```
-
-Configure `application.yml`:
-```yaml
-spring:
-  liquibase:
-    enabled: true
-    change-log: classpath:db/changelog/db.changelog-master.yaml
-```
-
-### Using golang-migrate
+## Verifying migrations
 
 ```bash
-# Install
-brew install golang-migrate  # macOS
-# or download from: https://github.com/golang-migrate/migrate
+# List tables in a service's database (example: customer_db via the postgres container)
+docker exec postgres psql -U ecommerce_user -d customer_db -c "\dt"
 
-# Run migrations
-migrate -path db/migration -database "mysql://user:password@tcp(localhost:3306)/dbname" up
-
-# Rollback
-migrate -path db/migration -database "mysql://user:password@tcp(localhost:3306)/dbname" down
-```
-
-### Manual SQL Execution
-
-If using manual SQL execution (not recommended for production):
-```bash
-# MySQL
-mysql -u username -p database_name < db/migration/V1__Create_Initial_Schema.sql
-mysql -u username -p database_name < db/migration/V2__Insert_Sample_Data.sql
-
-# PostgreSQL
-psql -U username -d database_name -f db/migration/V1__Create_Initial_Schema.sql
-psql -U username -d database_name -f db/migration/V2__Insert_Sample_Data.sql
-```
-
-## Database Requirements
-
-- **MySQL 5.7+** or **PostgreSQL 10+** or compatible database
-- Character set: **UTF-8 (utf8mb4)** recommended
-- Timezone: **UTC** (all timestamps stored in UTC)
-
-## Saga Pattern Status Values
-
-### OrderStatus
-- `PENDING` - Order created, awaiting inventory reservation
-- `INVENTORY_RESERVED` - Inventory has been reserved
-- `PAYMENT_PROCESSING` - Payment is being processed
-- `COMPLETED` - Order successfully completed
-- `CANCELLED` - Order cancelled (compensation triggered)
-- `FAILED` - Order failed (compensation triggered)
-
-### PaymentStatus
-- `PENDING` - Payment awaiting processing
-- `PROCESSING` - Payment is being processed
-- `PROCESSED` - Payment successful
-- `FAILED` - Payment failed (triggers compensation)
-- `REFUNDED` - Payment refunded (compensating transaction)
-
-## Indexes
-
-Indexes are created on frequently queried columns:
-- `customers.email` - For login/lookup
-- `inventory.product_id` - For product queries
-- `orders.customer_id` - For customer orders
-- `orders.product_id` - For inventory checks
-- `orders.status` - For saga state queries
-- `payments.order_id` - For payment lookup
-- `payments.status` - For compensation queries
-
-## Foreign Keys
-
-Relationships enforce data integrity:
-- `orders.customer_id` → `customers.id` (CASCADE DELETE)
-- `payments.order_id` → `orders.id` (CASCADE DELETE)
-
-## Verifying Migrations
-
-After running migrations, verify schema:
-
-```sql
--- Check tables created
-SHOW TABLES;
-
--- Check table structure
-DESCRIBE customers;
-DESCRIBE inventory;
-DESCRIBE orders;
-DESCRIBE payments;
-
--- Verify data insertion
-SELECT COUNT(*) FROM customers;
-SELECT COUNT(*) FROM inventory;
-SELECT COUNT(*) FROM orders;
-SELECT COUNT(*) FROM payments;
-
--- Check constraints and indexes
-SHOW INDEXES FROM orders;
-SHOW CREATE TABLE orders\G
-```
-
-## Environment Configuration
-
-Set database connection details:
-
-```bash
-# MySQL via environment
-export SPRING_DATASOURCE_URL=jdbc:mysql://localhost:3306/micro_ecommerce
-export SPRING_DATASOURCE_USERNAME=root
-export SPRING_DATASOURCE_PASSWORD=password
-export SPRING_JPA_DATABASE_PLATFORM=org.hibernate.dialect.MySQL8Dialect
-```
-
-Or in `application-local.yml`:
-```yaml
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/micro_ecommerce?serverTimezone=UTC&useUnicode=true&characterEncoding=utf8
-    username: root
-    password: password
-    driver-class-name: com.mysql.cj.jdbc.Driver
-  jpa:
-    hibernate:
-      ddl-auto: validate  # Use 'validate' with Flyway to prevent conflicts
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.MySQL8Dialect
-        format_sql: true
-        use_sql_comments: true
+# Check Flyway's own migration history
+docker exec postgres psql -U ecommerce_user -d customer_db -c "SELECT * FROM flyway_schema_history;"
 ```
 
 ## Troubleshooting
 
-### Migration Already Applied Error
-If you get "Migration already applied" but need to re-run:
+**"Migration checksum mismatch" / Flyway refuses to start:** an already-applied migration file was edited after the fact. Never modify a migration file once it has run anywhere; add a new `V{n+1}__...sql` file instead.
 
-```bash
-# With Flyway
-mvn flyway:clean  # CAUTION: Removes all migrations!
-mvn flyway:migrate
-```
+**Schema validation failure on startup (`Schema-validation: missing table [...]`):** Flyway didn't create the table Hibernate expected. Usually means a migration file isn't being picked up - check it's in the right vendor subfolder and follows the `V<version>__<description>.sql` naming convention exactly (Flyway silently skips files that don't match).
 
-### Foreign Key Constraint Error
-Ensure tables are created in correct order:
-1. `customers` table first
-2. `inventory` table
-3. `orders` table (references customers)
-4. `payments` table (references orders)
+## Adding a new migration
 
-This order is maintained in the migration files.
-
-### Timestamp/Timezone Issues
-- All timestamps use UTC
-- Ensure database timezone is set to UTC
-- Java applications should use `LocalDateTime` (timezone-agnostic)
-
-## Production Considerations
-
-1. **Backup Before Migration**
-   ```bash
-   mysqldump -u user -p database > backup_$(date +%Y%m%d_%H%M%S).sql
-   ```
-
-2. **Test Migrations First**
-   - Run on a staging environment
-   - Verify application works with new schema
-
-3. **Monitor Performance**
-   - Check slow query logs after migration
-   - Verify indexes are being used
-
-4. **Keep Migration History**
-   - Never modify old migration files
-   - Always create new migration files for changes
-   - Maintains schema version consistency
-
-## Additional Resources
-
-- [Flyway Documentation](https://flywaydb.org/documentation/)
-- [Liquibase Documentation](https://docs.liquibase.com/)
-- [golang-migrate](https://github.com/golang-migrate/migrate)
-- [Saga Pattern Guide](../SAGA_PATTERN_GUIDE.md)
-- [Architecture Documentation](../ARCHITECTURE.md)
+1. Add a new `V{n+1}__Description.sql` file to the relevant service's `db/migration/<vendor>/` folder (one per vendor you support).
+2. Never edit or renumber an existing migration file - Flyway tracks what's already been applied by checksum.
+3. Restart the service; Flyway applies it automatically on the next startup.

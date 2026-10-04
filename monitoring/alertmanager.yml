@@ -1,6 +1,11 @@
 global:
   resolve_timeout: 5m
-  slack_api_url: '${SLACK_WEBHOOK_URL}'
+  # Placeholder: Alertmanager doesn't expand ${VAR} in its config file, so a literal
+  # "${SLACK_WEBHOOK_URL}" fails to parse as a URL and the whole config is rejected,
+  # and every receiver below needs *some* valid global.slack_api_url since none sets
+  # its own per-receiver api_url. Replace with a real incoming webhook URL (or switch
+  # each slack_config to its own api_url/api_url_file) to actually deliver to Slack.
+  slack_api_url: 'https://hooks.slack.com/services/PLACEHOLDER/PLACEHOLDER/PLACEHOLDER'
   pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
 
 templates:

@@ -1,8 +1,6 @@
 spring:
   application:
     name: payment-service-test
-  liquibase:
-    enabled: false
   cloud:
     config:
       enabled: false

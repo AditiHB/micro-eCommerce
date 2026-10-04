@@ -24,6 +24,12 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+
   config-server:
     build:
       context: .
@@ -58,9 +64,11 @@ services:
     depends_on:
       - config-server
       - discovery-server
+      - redis
     environment:
       - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+      - REDIS_HOST=redis
       # Local-dev-only default so this compose file boots without extra setup.
       # Override with a real secret via `JWT_SECRET=... docker compose up`, or
       # export it in your shell before running. Never used as a fallback in
@@ -78,9 +86,13 @@ services:
     depends_on:
       - config-server
       - discovery-server
+      - kafka
+      - redis
     environment:
       - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis
       # See api-gateway's JWT_SECRET comment above - same local-dev-only default.
       - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
 
@@ -97,10 +109,14 @@ services:
       - config-server
       - discovery-server
       - kafka
+      - redis
     environment:
       - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis
+      # See api-gateway's JWT_SECRET comment below - same local-dev-only default.
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
 
   order-service:
     build:
@@ -113,10 +129,13 @@ services:
       - config-server
       - discovery-server
       - kafka
+      - redis
     environment:
       - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
 
   payment-service:
     build:
@@ -129,10 +148,13 @@ services:
       - config-server
       - discovery-server
       - kafka
+      - redis
     environment:
       - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - REDIS_HOST=redis
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
 
   notification-service:
     build:
@@ -153,6 +175,7 @@ services:
       - CUSTOMER_SERVICE_URL=http://customer-service:8081
       - ORDER_SERVICE_URL=http://order-service:8083
       - NOTIFICATION_CHANNEL=log
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2

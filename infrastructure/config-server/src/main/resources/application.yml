@@ -13,3 +13,9 @@ spring:
           # uri: https://github.com/your-username/ecommerce-config-repo.git
           default-label: main
           clone-on-start: true
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true

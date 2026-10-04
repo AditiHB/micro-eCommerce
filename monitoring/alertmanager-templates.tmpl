@@ -6,7 +6,7 @@
 {{ range .Alerts.Firing -}}
 *Alert:* {{ .Labels.alertname }}
 *Severity:* {{ .Labels.severity }}
-*Service:* {{ .Labels.service | default "N/A" }}
+*Service:* {{ if .Labels.service }}{{ .Labels.service }}{{ else }}N/A{{ end }}
 *Description:* {{ .Annotations.description }}
 {{- if .Annotations.runbook_url }}
 *Runbook:* <{{ .Annotations.runbook_url }}|View>
@@ -14,7 +14,7 @@
 {{- end }}
 {{ range .Alerts.Resolved -}}
 *Resolved:* {{ .Labels.alertname }}
-*Service:* {{ .Labels.service | default "N/A" }}
+*Service:* {{ if .Labels.service }}{{ .Labels.service }}{{ else }}N/A{{ end }}
 {{- end }}
 {{- end }}
 
@@ -46,8 +46,8 @@
         <h3>{{ .Labels.alertname }}</h3>
         <table>
             <tr><th>Severity</th><td>{{ .Labels.severity }}</td></tr>
-            <tr><th>Service</th><td>{{ .Labels.service | default "N/A" }}</td></tr>
-            <tr><th>Instance</th><td>{{ .Labels.instance | default "N/A" }}</td></tr>
+            <tr><th>Service</th><td>{{ if .Labels.service }}{{ .Labels.service }}{{ else }}N/A{{ end }}</td></tr>
+            <tr><th>Instance</th><td>{{ if .Labels.instance }}{{ .Labels.instance }}{{ else }}N/A{{ end }}</td></tr>
             <tr><th>Description</th><td>{{ .Annotations.description }}</td></tr>
             <tr><th>Details</th><td>{{ .Annotations.summary }}</td></tr>
         </table>
@@ -58,7 +58,7 @@
     <div class="alert resolved">
         <h3>{{ .Labels.alertname }} - RESOLVED</h3>
         <table>
-            <tr><th>Service</th><td>{{ .Labels.service | default "N/A" }}</td></tr>
+            <tr><th>Service</th><td>{{ if .Labels.service }}{{ .Labels.service }}{{ else }}N/A{{ end }}</td></tr>
             <tr><th>Resolved at</th><td>{{ .StartsAt.Format "2006-01-02 15:04:05" }} UTC</td></tr>
         </table>
     </div>

@@ -34,9 +34,6 @@ spring:
   h2:
     console:
       enabled: true
-  liquibase:
-    enabled: false
-    change-log: classpath:db/changelog/db.changelog-master.xml
   redis:
     host: ${REDIS_HOST:localhost}
     port: ${REDIS_PORT:6379}
@@ -81,6 +78,8 @@ management:
     health:
       show-details: always
       show-components: always
+      probes:
+        enabled: true
   metrics:
     export:
       prometheus:

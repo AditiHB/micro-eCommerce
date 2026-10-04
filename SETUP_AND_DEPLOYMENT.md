@@ -603,17 +603,15 @@ psql -U postgres
 DROP DATABASE order_db;
 CREATE DATABASE order_db;
 
-# Then restart service (Liquibase auto-creates schema)
+# Then restart service (Flyway auto-creates schema on startup)
 ```
 
 #### Check Migrations
 ```bash
-# View Liquibase history
-mvn liquibase:history
-
-# Rollback last migration
-mvn liquibase:rollback -Dliquibase.rollbackCount=1
+# View applied/pending migrations for a service
+mvn -pl services/order-service flyway:info
 ```
+Flyway Community Edition has no automated rollback - revert by writing a new forward migration instead (see [db/README.md](db/README.md)).
 
 ### Network Issues in Kubernetes
 

@@ -1,0 +1,70 @@
+services:
+  # Real PostgreSQL in place of each service's default in-memory H2.
+  #
+  # Standalone (just the database, e.g. to browse it or run migrations by hand):
+  #   docker compose -f docker-compose-postgres.yml up -d postgres
+  #
+  # Backing the actual microservices (recreates them with Flyway running
+  # against Postgres instead of H2 - this is what makes tables actually
+  # appear, Flyway runs automatically on Spring Boot startup, there is no
+  # separate "migrate" command to run):
+  #   docker compose -f docker-compose.yml -f docker-compose-postgres.yml up -d
+  #
+  # Creates one database per service (matching each application-postgres.yml),
+  # reachable at localhost:5432 with user/password ecommerce_user/ecommerce_password.
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: ecommerce_user
+      POSTGRES_PASSWORD: ecommerce_password
+      POSTGRES_MULTIPLE_DATABASES: customer_db,inventory_db,order_db,payment_db,notification_db,product_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-multiple-postgres-databases.sh:/docker-entrypoint-initdb.d/init-multiple-postgres-databases.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  customer-service:
+    environment:
+      - SPRING_PROFILES_ACTIVE=postgres
+      - DB_HOST=postgres
+    depends_on:
+      - postgres
+
+  inventory-service:
+    environment:
+      - SPRING_PROFILES_ACTIVE=postgres
+      - DB_HOST=postgres
+    depends_on:
+      - postgres
+
+  order-service:
+    environment:
+      - SPRING_PROFILES_ACTIVE=postgres
+      - DB_HOST=postgres
+    depends_on:
+      - postgres
+
+  payment-service:
+    environment:
+      - SPRING_PROFILES_ACTIVE=postgres
+      - DB_HOST=postgres
+    depends_on:
+      - postgres
+
+  notification-service:
+    environment:
+      - SPRING_PROFILES_ACTIVE=postgres
+      - DB_HOST=postgres
+    depends_on:
+      - postgres
+
+volumes:
+  postgres-data:
+    driver: local

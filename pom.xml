@@ -26,7 +26,6 @@
         <lombok.version>1.18.30</lombok.version>
         <springdoc-openapi.version>2.1.0</springdoc-openapi.version>
         <jjwt.version>0.12.3</jjwt.version>
-        <liquibase.version>4.27.0</liquibase.version>
         <postgresql.version>42.7.3</postgresql.version>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
@@ -260,7 +259,6 @@
                             <spring.cloud.discovery.enabled>false</spring.cloud.discovery.enabled>
                             <eureka.client.enabled>false</eureka.client.enabled>
                             <spring.flyway.enabled>false</spring.flyway.enabled>
-                            <spring.liquibase.enabled>false</spring.liquibase.enabled>
                         </systemPropertyVariables>
                         <!-- Exclude integration tests from fast unit test suite -->
                         <excludes>
@@ -287,7 +285,6 @@
                             <spring.cloud.discovery.enabled>false</spring.cloud.discovery.enabled>
                             <eureka.client.enabled>false</eureka.client.enabled>
                             <spring.flyway.enabled>false</spring.flyway.enabled>
-                            <spring.liquibase.enabled>false</spring.liquibase.enabled>
                         </systemPropertyVariables>
                         <!-- Include integration tests for failsafe verify phase -->
                         <includes>
