@@ -1,6 +1,7 @@
 package com.ecommerce.common.security;
 
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -42,6 +43,26 @@ public class SecurityConfig {
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
+    }
+
+    /**
+     * JwtAuthenticationFilter is a @Component so it can be constructor-injected
+     * here, but that also makes Spring Boot auto-register it as a global servlet
+     * filter running before Spring Security's own filter chain even starts. In
+     * that early pass it sets a valid Authentication, but
+     * SecurityContextPersistenceFilter then resets the context to empty when the
+     * security chain actually runs, and - since this is a OncePerRequestFilter -
+     * its addFilterBefore(...) invocation inside that chain is skipped as a
+     * duplicate, so the authentication is never set where AuthorizationFilter can
+     * see it. Every role-protected endpoint ends up looking anonymous. Disabling
+     * the auto-registration leaves addFilterBefore as the only place it runs.
+     */
+    @Bean
+    public FilterRegistrationBean<JwtAuthenticationFilter> jwtAuthenticationFilterRegistration(
+            JwtAuthenticationFilter filter) {
+        FilterRegistrationBean<JwtAuthenticationFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
     }
 
     @Bean
