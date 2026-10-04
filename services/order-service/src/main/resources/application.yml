@@ -34,9 +34,6 @@ spring:
   h2:
     console:
       enabled: true
-  liquibase:
-    enabled: false
-    change-log: classpath:db/changelog/db.changelog-master.xml
   redis:
     host: ${REDIS_HOST:localhost}
     port: ${REDIS_PORT:6379}
@@ -72,6 +69,9 @@ eureka:
     service-url:
       defaultZone: http://localhost:8761/eureka/
 
+jwt:
+  secret: ${JWT_SECRET:local-dev-only-secret-do-not-use-in-production}
+
 management:
   endpoints:
     web:
@@ -81,6 +81,8 @@ management:
     health:
       show-details: always
       show-components: always
+      probes:
+        enabled: true
   metrics:
     export:
       prometheus:

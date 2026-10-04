@@ -97,7 +97,7 @@ This is a **production-grade microservices architecture** for an e-commerce plat
 **Common Features Across Services:**
 - Spring Data JPA for persistence
 - H2 database (development) / PostgreSQL (production)
-- Liquibase for schema versioning
+- Flyway for schema versioning
 - Spring Security for authorization
 - Redis caching with TTL: 10 minutes
 
@@ -106,7 +106,7 @@ This is a **production-grade microservices architecture** for an e-commerce plat
 #### Relational Database
 - **Development**: H2 (in-memory)
 - **Production**: PostgreSQL (recommended)
-- **Schema Management**: Liquibase 4.x with versioned migrations
+- **Schema Management**: Flyway with versioned migrations
 - **Connection Pooling**: HikariCP with optimized settings
 
 #### Cache Layer
@@ -322,22 +322,21 @@ Each service has its own database:
 - Technology choice per service
 - Failure isolation
 
-### 2. **Schema Versioning (Liquibase)**
+### 2. **Schema Versioning (Flyway)**
 
-**Migration Strategy:**
+**Migration Strategy** (per service, see [db/README.md](db/README.md)):
 ```
-0001_initial_schema.xml       → Base tables
-0002_add_audit_tables.xml     → Audit logging
-0003_add_event_store.xml      → Event sourcing
-0004_add_indexes.xml          → Performance
-0005_add_partitions.xml       → Scalability
+V1__Create_X_Table.sql        → Base table
+V2__Insert_Sample_Data.sql    → Seed data
+V3__Create_Event_Store_Table.sql → Event sourcing
+V4__...sql                    → Further schema changes
 ```
 
 **Key Features:**
-- Version control for schema changes
-- Rollback capability
-- Pre/post-condition checks
-- Automatically run on startup
+- Plain versioned SQL files, no custom changelog format
+- Automatically run on startup - no separate migrate step
+- Schema history tracked in `flyway_schema_history`
+- No automated rollback in Community Edition - revert via a new forward migration
 
 ### 3. **Caching Strategy**
 
@@ -536,7 +535,7 @@ helm install micro-ecommerce ./helm \
 | **Containers** | Docker | 24.x |
 | **Orchestration** | Kubernetes | 1.27+ |
 | **IaC** | Helm | 3.x |
-| **DB Versioning** | Liquibase | 4.x |
+| **DB Versioning** | Flyway | 9.x |
 | **Database** | H2 (dev) / PostgreSQL (prod) | 2.x |
 | **Testing** | JUnit 5 + Mockito | 5.x / 5.x |
 

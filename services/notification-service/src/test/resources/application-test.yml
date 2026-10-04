@@ -19,8 +19,6 @@ spring:
       enabled: false
   flyway:
     enabled: false
-  liquibase:
-    enabled: false
   kafka:
     admin:
       auto-create: false

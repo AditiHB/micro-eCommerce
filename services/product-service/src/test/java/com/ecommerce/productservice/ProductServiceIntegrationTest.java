@@ -39,7 +39,6 @@ import static org.hamcrest.Matchers.*;
 @TestPropertySource(properties = {
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.kafka.bootstrap-servers=localhost:9092",
-        "spring.liquibase.enabled=false",
         "kafka.listener.auto-startup=false"
 })
 class ProductServiceIntegrationTest {

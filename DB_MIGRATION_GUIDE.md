@@ -2,233 +2,21 @@
 
 ## Overview
 
-This guide explains how to use the SQL migration scripts included in the `db/migration` directory to set up and manage the micro-eCommerce database schema.
-
-The migration scripts are compatible with popular opensource database migration tools:
-- **Flyway** (Recommended for Java/Spring Boot)
-- **Liquibase** (Alternative for Spring Boot)
-- **golang-migrate** (Lightweight, language-agnostic)
-- **Manual SQL execution** (Not recommended for production)
+This project uses **Flyway** for database migrations. Each microservice owns its own database and its own versioned migration files - there is no shared/monolithic schema and no separate migration tool to install. See [db/README.md](db/README.md) for the authoritative, up-to-date guide to how migrations are laid out and run; this document covers the saga-pattern schema design and operational practices.
 
 ## Quick Start
 
-### Prerequisites
-- MySQL 5.7+ or PostgreSQL 10+
-- Database client installed
-- One of the migration tools listed above
+Migrations run automatically when a service starts - you don't install or invoke anything separately. See [db/README.md](db/README.md) for exactly how, including how to point a service at a containerized PostgreSQL instead of the default in-memory H2.
 
-### Option 1: Flyway (Recommended for Spring Boot)
-
-1. **Add Flyway Dependency**
-   ```xml
-   <!-- Add to pom.xml -->
-   <dependency>
-       <groupId>org.flywaydb</groupId>
-       <artifactId>flyway-core</artifactId>
-       <version>9.22.3</version>
-   </dependency>
-   ```
-
-2. **Configure Spring Boot** (`application.yml` or `application-local.yml`)
-   ```yaml
-   spring:
-     datasource:
-       url: jdbc:mysql://localhost:3306/micro_ecommerce?serverTimezone=UTC&useUnicode=true&characterEncoding=utf8
-       username: root
-       password: password
-       driver-class-name: com.mysql.cj.jdbc.Driver
-     jpa:
-       hibernate:
-         ddl-auto: validate  # Important: Use 'validate' with Flyway
-       properties:
-         hibernate:
-           dialect: org.hibernate.dialect.MySQL8Dialect
-     flyway:
-       enabled: true
-       locations: classpath:db/migration
-       baseline-on-migrate: true
-   ```
-
-3. **Copy Migration Files**
-   ```bash
-   mkdir -p src/main/resources/db/migration
-   cp db/migration/*.sql src/main/resources/db/migration/
-   ```
-
-4. **Run Migrations**
-   ```bash
-   # Spring Boot will run migrations automatically on startup
-   mvn spring-boot:run
-   
-   # Or run manually
-   mvn flyway:migrate
-   
-   # Check migration history
-   mvn flyway:info
-   
-   # Validate without applying
-   mvn flyway:validate
-   ```
-
-### Option 2: Liquibase
-
-1. **Add Liquibase Dependency**
-   ```xml
-   <dependency>
-       <groupId>org.liquibase</groupId>
-       <artifactId>liquibase-core</artifactId>
-       <version>4.23.0</version>
-   </dependency>
-   ```
-
-2. **Create Master Changelog** (`src/main/resources/db/changelog/db.changelog-master.yaml`)
-   ```yaml
-   databaseChangeLog:
-     - sqlFile:
-         dbms: mysql
-         path: db/migration/V1__Create_Initial_Schema.sql
-         relativeToChangelogFile: false
-     - sqlFile:
-         dbms: mysql
-         path: db/migration/V2__Insert_Sample_Data.sql
-         relativeToChangelogFile: false
-   ```
-
-3. **Configure Spring Boot**
-   ```yaml
-   spring:
-     datasource:
-       url: jdbc:mysql://localhost:3306/micro_ecommerce?serverTimezone=UTC
-       username: root
-       password: password
-     liquibase:
-       enabled: true
-       change-log: classpath:db/changelog/db.changelog-master.yaml
-   ```
-
-4. **Run Migrations**
-   ```bash
-   # Spring Boot runs them on startup
-   mvn spring-boot:run
-   
-   # Check status
-   mvn liquibase:status
-   
-   # Generate SQL without applying
-   mvn liquibase:update-sql
-   ```
-
-### Option 3: golang-migrate
-
-1. **Install golang-migrate**
-   ```bash
-   # macOS
-   brew install golang-migrate
-   
-   # Linux (download binary)
-   wget https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-amd64.tar.gz
-   tar xvzf migrate.linux-amd64.tar.gz
-   sudo mv migrate /usr/local/bin/
-   ```
-
-2. **Run Migrations**
-   ```bash
-   # Apply all migrations
-   migrate -path db/migration \
-     -database "mysql://root:password@tcp(localhost:3306)/micro_ecommerce" \
-     up
-   
-   # Check version
-   migrate -path db/migration \
-     -database "mysql://root:password@tcp(localhost:3306)/micro_ecommerce" \
-     version
-   
-   # Rollback (down)
-   migrate -path db/migration \
-     -database "mysql://root:password@tcp(localhost:3306)/micro_ecommerce" \
-     down
-   ```
-
-### Option 4: Manual SQL Execution
-
+To inspect migrations for a specific service without starting it:
 ```bash
-# Create database first
-mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS micro_ecommerce"
-
-# Apply migrations
-mysql -u root -p micro_ecommerce < db/migration/V1__Create_Initial_Schema.sql
-mysql -u root -p micro_ecommerce < db/migration/V2__Insert_Sample_Data.sql
-
-# Verify
-mysql -u root -p micro_ecommerce -e "SHOW TABLES; SELECT COUNT(*) as customer_count FROM customers;"
+mvn -pl services/<service-name> flyway:info
+mvn -pl services/<service-name> flyway:validate
 ```
 
 ## Migration Files
 
-### V1__Create_Initial_Schema.sql
-**DDL (Data Definition Language) - Creates Database Schema**
-
-Creates 4 tables with proper structure for the saga pattern:
-
-```
-customers
-├── id (BIGINT, PRIMARY KEY)
-├── name (VARCHAR 100)
-├── email (VARCHAR 255, UNIQUE)
-├── created_at (TIMESTAMP)
-└── updated_at (TIMESTAMP)
-
-inventory
-├── id (BIGINT, PRIMARY KEY)
-├── product_id (VARCHAR 50, UNIQUE)
-├── quantity (INT)
-├── created_at (TIMESTAMP)
-└── updated_at (TIMESTAMP)
-
-orders
-├── id (BIGINT, PRIMARY KEY)
-├── customer_id (BIGINT, FK → customers)
-├── product_id (VARCHAR 50)
-├── quantity (INT)
-├── status (VARCHAR 50) - PENDING, INVENTORY_RESERVED, PAYMENT_PROCESSING, COMPLETED, CANCELLED, FAILED
-├── created_at (TIMESTAMP)
-└── updated_at (TIMESTAMP)
-
-payments
-├── id (BIGINT, PRIMARY KEY)
-├── order_id (BIGINT, FK → orders)
-├── amount (DECIMAL 10,2)
-├── status (VARCHAR 50) - PENDING, PROCESSING, PROCESSED, FAILED, REFUNDED
-├── created_at (TIMESTAMP)
-└── updated_at (TIMESTAMP)
-```
-
-**Indexes:**
-- Foreign key indexes for performance
-- Status indexes for saga queries
-- Timestamp indexes for time-range queries
-- Unique indexes for lookups
-
-**Constraints:**
-- NOT NULL on required fields
-- Foreign key relationships with CASCADE DELETE
-- UNIQUE constraints where needed
-
-### V2__Insert_Sample_Data.sql
-**DML (Data Manipulation Language) - Inserts Test Data**
-
-Populates initial data for testing:
-- 5 sample customers
-- 8 products with varying inventory levels
-- 5 sample orders at different saga stages
-- 5 sample payments at different statuses
-
-Uses `ON DUPLICATE KEY UPDATE` for idempotency - safe to run multiple times.
-
-### U1__Undo_Create_Initial_Schema.sql
-**Undo Script - Removes All Tables**
-
-Rollback script for development/testing. Drops tables in proper order to handle foreign keys.
+Each service keeps its own migration history under `services/<service-name>/src/main/resources/db/migration/{h2,oracle,postgresql}/`, following Flyway's standard naming (`V1__Create_X_Table.sql`, `V2__...sql`, etc. - see [db/README.md](db/README.md) for the full per-service list). The schema below describes the conceptual design those migrations implement.
 
 ## Saga Pattern Integration
 
@@ -310,9 +98,9 @@ mysqldump -u root -p micro_ecommerce > backup_$(date +%Y%m%d_%H%M%S).sql
 - Check performance with realistic data volume
 
 ### 3. Naming Convention
-- Flyway: `V{version}__{description}.sql` (e.g., `V1__Create_Initial_Schema.sql`)
-- Undo: `U{version}__{description}.sql` (e.g., `U1__Undo_Create_Initial_Schema.sql`)
+- `V{version}__{description}.sql` (e.g., `V1__Create_Initial_Schema.sql`)
 - Use double underscore to separate version and description
+- Flyway Community Edition (what this project uses) has no undo/rollback migrations - that's a Teams/Enterprise feature. To reverse a change, write a new forward migration instead.
 
 ### 4. Never Modify Applied Migrations
 - Once a migration is applied, never edit it
@@ -423,7 +211,6 @@ When making schema changes:
 1. **Create new migration file**
    ```bash
    # V3__Add_New_Table.sql
-   # U3__Undo_Add_New_Table.sql
    ```
 
 2. **Write idempotent SQL**
@@ -507,7 +294,4 @@ mysql -u root -p -e "USE micro_ecommerce; SHOW TABLES;"
 ## Support Resources
 
 - [Flyway Documentation](https://flywaydb.org/documentation/)
-- [Liquibase Documentation](https://docs.liquibase.com/)
-- [golang-migrate GitHub](https://github.com/golang-migrate/migrate)
-- [MySQL Documentation](https://dev.mysql.com/doc/)
 - [PostgreSQL Documentation](https://www.postgresql.org/docs/)

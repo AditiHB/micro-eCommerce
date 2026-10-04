@@ -45,9 +45,6 @@ spring:
   h2:
     console:
       enabled: true
-  liquibase:
-    enabled: false
-    change-log: classpath:db/changelog/db.changelog-master.xml
   redis:
     host: redis
     port: 6379

@@ -210,7 +210,7 @@ All key files have been commented with detailed explanations. Start with:
 ### Week 4: Deep Dive
 - [ ] Study: Event-driven architecture code
 - [ ] Understand: Kafka topics and consumers
-- [ ] Learn: Database migrations with Liquibase
+- [ ] Learn: Database migrations with Flyway
 - [ ] Explore: CI/CD pipeline in .github/workflows/
 
 ---
