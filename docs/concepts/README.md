@@ -131,10 +131,10 @@ KUBERNETES_IN_THIS_PROJECT.md (20 min)
 
 ## 🔗 Related Documentation
 
-- **ARCHITECTURE.md** - How Kafka and Kubernetes work together
-- **KUBERNETES_DEPLOYMENT.md** - Real deployment configurations
-- **LOCAL_INFRASTRUCTURE_SETUP.md** - Setting things up locally
-- **PHASES_GUIDE.md** - Implementation phases
+- **[../ARCHITECTURE.md](../ARCHITECTURE.md)** - How Kafka and Kubernetes work together
+- **[../KUBERNETES_DEPLOYMENT.md](../KUBERNETES_DEPLOYMENT.md)** - Real deployment configurations
+- **[../SETUP_AND_DEPLOYMENT.md](../SETUP_AND_DEPLOYMENT.md)** - Setting things up locally
+- **[../PHASES_GUIDE.md](../PHASES_GUIDE.md)** - Implementation phases
 
 ---
 

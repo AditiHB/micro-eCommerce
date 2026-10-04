@@ -22,11 +22,11 @@ Each service's migration directory has a subfolder per database vendor - `h2/`, 
 **Automatically, every time a service starts.** Flyway runs before Hibernate/JPA touches the schema (`spring.jpa.hibernate.ddl-auto: validate` - JPA only validates against what Flyway already created, it never creates or alters tables itself).
 
 - **Default (H2 in-memory):** every service boots against its own throwaway H2 database with no setup required. Flyway creates the schema fresh each time the container starts.
-- **Against real PostgreSQL:** start Postgres and the services together so Flyway runs against it instead:
+- **Against real PostgreSQL:** start the stack with the `postgres` profile so Flyway runs against it instead:
   ```bash
-  docker compose -f docker-compose.yml -f docker-compose-postgres.yml up -d
+  docker compose --profile postgres --env-file .env.postgres up -d
   ```
-  See [docker-compose-postgres.yml](../docker-compose-postgres.yml) and [LOCAL_INFRASTRUCTURE_SETUP.md](../LOCAL_INFRASTRUCTURE_SETUP.md) for details. If you only need the bare database (e.g. to inspect it, no services), run `docker compose -f docker-compose-postgres.yml up -d postgres` instead.
+  See [docs/SETUP_AND_DEPLOYMENT.md](../docs/SETUP_AND_DEPLOYMENT.md) for details. If you only need the bare database (e.g. to inspect it, no services), run `docker compose --profile postgres --env-file .env.postgres up -d postgres` instead.
 
 If you need to run Flyway outside of starting the whole application (e.g. to preview pending migrations), use the Maven plugin from the specific service module:
 ```bash

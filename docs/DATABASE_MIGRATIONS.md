@@ -85,7 +85,7 @@ Migrations run automatically on application startup via Flyway's Spring Boot int
 # Development (H2)
 mvn spring-boot:run
 
-# Against PostgreSQL (see docker-compose-postgres.yml for the containerized equivalent)
+# Against PostgreSQL (see docker-compose.yml's `postgres` Compose profile for the containerized equivalent)
 mvn spring-boot:run -Dspring-boot.run.arguments="--spring.profiles.active=postgres"
 ```
 

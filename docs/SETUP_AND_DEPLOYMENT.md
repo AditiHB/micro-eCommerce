@@ -2,13 +2,16 @@
 
 ## 📋 Table of Contents
 1. [Prerequisites](#prerequisites)
-2. [Local Development Setup](#local-development-setup)
-3. [Running Services](#running-services)
-4. [Docker Setup](#docker-setup)
-5. [Kubernetes Deployment](#kubernetes-deployment)
-6. [Monitoring Stack](#monitoring-stack)
-7. [Testing](#testing)
-8. [Troubleshooting](#troubleshooting)
+2. [Local Setup Scenarios](#local-setup-scenarios)
+3. [Local Development Setup](#local-development-setup)
+4. [Running Services](#running-services)
+5. [Docker Setup](#docker-setup)
+6. [Kubernetes Deployment](#kubernetes-deployment)
+7. [Monitoring Stack](#monitoring-stack)
+8. [Testing](#testing)
+9. [Troubleshooting](#troubleshooting)
+
+This project is **local-only**: everything here runs on your own machine, either with Docker Compose (one `docker-compose.yml` at the repo root, switched between scenarios with `--profile` flags) or inside a local Kubernetes cluster (minikube/kind) using the manifests under `k8s/`. There is no separate "production" compose file or environment to maintain.
 
 ---
 
@@ -40,9 +43,9 @@ git --version
 ```
 
 ### Hardware Requirements
-- **CPU**: 4+ cores (for parallel builds and containers)
-- **RAM**: 16GB minimum (8GB for VM + 8GB for services/database/redis)
-- **Disk**: 50GB free (for Docker images, databases, logs)
+- **CPU**: 2+ cores (4+ recommended for building all modules in parallel)
+- **RAM**: the default core stack (H2, no observability) fits comfortably in **12GB** laptops - see the memory budget table in [Local Setup Scenarios](#local-setup-scenarios) below. Every container has an explicit `mem_limit` and every JVM service an explicit heap cap (`JAVA_TOOL_OPTIONS`/`*_HEAP_OPTS`) in `docker-compose.yml`, so usage is capped and predictable rather than growing unbounded.
+- **Disk**: ~10GB free for Docker images (more if you also enable the `observability` profile - ELK images are large)
 
 ### Network Ports
 ```
@@ -51,12 +54,66 @@ git --version
 8082 - Inventory Service
 8083 - Order Service
 8084 - Payment Service
-5432 - PostgreSQL (if used)
+8086 - Notification Service
+8888 - Config Server
+8761 - Eureka Dashboard
+5432 - PostgreSQL (--profile postgres)
 6379 - Redis
 9092 - Kafka
-3000 - Grafana
-9090 - Prometheus
+2181 - Zookeeper
+80/443 - Nginx HTTP/HTTPS (--profile https)
+3000 - Grafana (--profile observability)
+9090 - Prometheus (--profile observability)
+5601 - Kibana (--profile observability)
 ```
+
+---
+
+## Local Setup Scenarios
+
+Everything below uses the **single** `docker-compose.yml` at the repo root. Nothing is started that you didn't ask for - the default command starts only the core application stack, and every extra piece (Postgres, HTTPS, observability) is opt-in via `--profile`. Profiles can be combined freely.
+
+| # | Scenario | Command | Adds |
+|---|---|---|---|
+| 1 | **Only H2** (default) | `docker compose up -d` | Core app stack only, each service with its own in-memory H2 database - nothing to configure |
+| 2 | **Real PostgreSQL** | `docker compose --profile postgres --env-file .env.postgres up -d` | A `postgres` container + switches customer/inventory/order/payment/notification-service from H2 to Postgres (one schema per service, Flyway migrates automatically on startup - see [db/README.md](../db/README.md)) |
+| 3 | **HTTPS locally** | `docker compose --profile https up -d` | An `nginx` container terminating TLS with a self-signed cert and forwarding `/api/` to the gateway. **Generate the cert first** (see [HTTPS setup](#https-setup) below) |
+| 4 | **Compact / low-memory** (no logs, no ELK, no metrics) | `docker compose up -d` | Same as #1 - the observability stack is never started unless you explicitly request it. This is the lowest-memory option and the right default for resource-constrained machines |
+| 5 | **Entire stack** | `docker compose --profile postgres --profile https --profile observability --env-file .env.postgres up -d` | Everything: Postgres + HTTPS + ELK/Prometheus/Grafana/Alertmanager/Loki |
+
+Any subset of profiles can be combined, e.g. just HTTPS + Postgres without observability:
+```bash
+docker compose --profile postgres --profile https --env-file .env.postgres up -d
+```
+
+### Memory budget per scenario
+
+Every container in `docker-compose.yml` has a `mem_limit`/`mem_reservation`, and every JVM-based one also caps its heap explicitly (so the JVM can't grow into the rest of the container and get OOM-killed by the kernel instead of GC'ing cleanly). Approximate totals (sum of `mem_limit` per profile combination):
+
+| Profiles active | Approx. RAM | Notes |
+|---|---|---|
+| *(none)* - core stack, H2 | **~3.8 GB** | Zookeeper, Kafka, Redis, Config Server, Discovery Server, API Gateway, 5 microservices. Fits a 12GB/i3 laptop with plenty of headroom for the OS, Docker Desktop/WSL2, and your IDE. |
+| `postgres` | +~320 MB | One extra lightweight Postgres container |
+| `https` | +~64 MB | Nginx is tiny |
+| `observability` | **+~3 GB** | ELK (Elasticsearch/Logstash/Kibana) + Prometheus/Grafana/Alertmanager/exporters/Loki - nearly as expensive as the whole application. Only start this when you actually want to browse logs in Kibana or dashboards in Grafana |
+| All profiles (full stack) | **~7.2 GB** | Still comfortable headroom on a 12GB machine |
+
+### HTTPS setup
+
+The `https` profile expects certificates under `infrastructure/nginx/certs/`. Example certs are checked in for convenience, but to generate your own locally:
+```bash
+bash infrastructure/scripts/setup-certificates.sh
+# Writes privkey.pem / cert.pem / fullchain.pem / chain.pem / dhparam.pem / session_ticket.key
+# into infrastructure/nginx/certs/ (self-signed, valid for localhost / 127.0.0.1)
+docker compose --profile https up -d
+curl -k https://localhost/health          # nginx health check
+curl -k https://localhost/api/customers   # through nginx -> gateway (401 without a token is expected)
+```
+Browsers and `curl` will warn about the self-signed cert - that's expected for local HTTPS; use `-k`/`--insecure` with curl, or accept the browser warning, or disable SSL verification in Postman/Insomnia (see `postman_environment_https.json`).
+
+### Switching back to H2
+
+Postgres is opt-in, not persistent-by-default: stop the stack and omit `--profile postgres --env-file .env.postgres` on your next `docker compose up -d` to go back to the default in-memory H2 (each service's data is freshly seeded on every restart either way, per [db/README.md](../db/README.md)).
 
 ---
 
@@ -90,12 +147,12 @@ mvn clean package -DskipTests
 micro-eCommerce/
 ├── common/                              # Shared dependencies
 │   ├── src/main/java/com/ecommerce/common/
-│   │   ├── config/                     # RedisConfig, CacheConfig
+│   │   ├── config/                     # RedisConfig, SecurityConfig
 │   │   ├── metrics/                    # ApplicationMetrics, BusinessMetrics
 │   │   ├── logging/                    # RequestResponseLoggingFilter
 │   │   ├── dto/                        # Data Transfer Objects
 │   │   ├── exception/                  # Custom exceptions
-│   │   └── constants/                  # API constants
+│   │   └── security/                   # JwtAuthenticationFilter, SecurityConfig
 │   └── pom.xml                         # Parent POM (dependency management)
 │
 ├── services/                            # Microservices
@@ -105,28 +162,29 @@ micro-eCommerce/
 │   │       └── application.yml         # Service config
 │   ├── order-service/                  # Order management
 │   ├── payment-service/                # Payment processing
-│   └── inventory-service/              # Inventory management
+│   ├── inventory-service/              # Inventory management
+│   ├── notification-service/           # Customer/order notifications
+│   └── product-service/                # Product catalog
 │
-├── api-gateway/                        # API Gateway (Spring Cloud Gateway)
-│   ├── src/main/java/...
-│   └── src/main/resources/
-│       └── application.yml
+├── infrastructure/                     # Infra services + ops config
+│   ├── api-gateway/                    # Spring Cloud Gateway
+│   ├── config-server/                  # Spring Cloud Config Server
+│   ├── discovery-server/               # Netflix Eureka
+│   ├── nginx/                          # HTTPS termination (--profile https)
+│   ├── scripts/                        # Cert generation, secret rotation
+│   └── postgres/                       # Multi-DB init script (--profile postgres)
 │
-├── k8s/                                # Kubernetes manifests
-│   ├── namespace.yaml
-│   ├── deployments/
-│   ├── services/
-│   └── statefulsets/
+├── k8s/                                 # Kubernetes manifests (flat, numbered files)
 │
-├── helm/                               # Helm charts
+├── helm/ecommerce/                      # Helm chart
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   └── templates/
 │
-└── monitoring/                         # Prometheus, Grafana configs
+└── monitoring/                          # Prometheus, Grafana, Alertmanager, Loki configs
     ├── prometheus.yml
     ├── alert-rules.yml
-    └── grafana/dashboards/
+    └── grafana-dashboards/
 ```
 
 ---
@@ -172,7 +230,7 @@ mvn spring-boot:run
 
 #### Terminal 5 - API Gateway
 ```bash
-cd services/api-gateway
+cd infrastructure/api-gateway
 mvn spring-boot:run
 
 # ✓ Running at http://localhost:8080 (main entry point)
@@ -180,21 +238,15 @@ mvn spring-boot:run
 
 ### Option 2: Run with Docker Compose
 
-```bash
-# Start all services + Redis + infrastructure
-docker-compose up
+See [Local Setup Scenarios](#local-setup-scenarios) above for the full set of options (H2, Postgres, HTTPS, observability). The simplest case:
 
-# Output:
-# ✓ customer-service | Started CustomerServiceApplication
-# ✓ order-service | Started OrderServiceApplication
-# ✓ payment-service | Started PaymentServiceApplication
-# ✓ inventory-service | Started InventoryServiceApplication
-# ✓ api-gateway | Started ApiGatewayApplication
-# ✓ redis | * Ready to accept connections
+```bash
+# Start the core stack (H2, no extra flags needed)
+docker compose up -d
 
 # Access:
 # - API Gateway: http://localhost:8080
-# - Redis CLI: redis-cli
+# - Eureka Dashboard: http://localhost:8761
 ```
 
 ### Option 3: Run Specific Service in IDE
@@ -287,9 +339,9 @@ kubectl get nodes
 kubectl create namespace ecommerce
 
 # Install chart
-helm install micro-ecommerce ./helm \
+helm install micro-ecommerce ./helm/ecommerce \
   -n ecommerce \
-  --values helm/values.yaml
+  --values helm/ecommerce/values.yaml
 
 # Verify installation
 kubectl get all -n ecommerce
@@ -329,18 +381,21 @@ kubectl port-forward -n ecommerce \
 
 ### Deploy Using kubectl (Manual)
 
+The manifests under `k8s/` are flat, numbered files applied in order (numbering encodes the dependency order - namespace/secrets first, then infra, then each service):
+
 ```bash
-# Apply all K8s manifests
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/configmaps/
-kubectl apply -f k8s/secrets/
-kubectl apply -f k8s/deployments/
-kubectl apply -f k8s/services/
-kubectl apply -f k8s/statefulsets/
+kubectl apply -f k8s/
+# or apply in explicit order if you want to watch each step:
+kubectl apply -f k8s/00-namespace.yaml
+kubectl apply -f k8s/01-secrets.yaml -f k8s/02-configmaps.yaml
+kubectl apply -f k8s/03-infrastructure.yaml
+kubectl apply -f k8s/04-discovery-server.yaml -f k8s/05-config-server.yaml -f k8s/06-api-gateway.yaml
+kubectl apply -f k8s/07-customer-service.yaml -f k8s/08-order-service.yaml -f k8s/09-inventory-service.yaml -f k8s/10-payment-service.yaml -f k8s/18-notification-service.yaml
 
 # Verify
 kubectl get all -n ecommerce
 ```
+See [docs/KUBERNETES_DEPLOYMENT.md](KUBERNETES_DEPLOYMENT.md) for the full manifest list (mTLS, network policies, secrets rotation, etc.) and [docs/SECRETS_MANAGEMENT.md](SECRETS_MANAGEMENT.md) for how secrets are provisioned.
 
 ### Monitor Deployment
 ```bash
@@ -375,71 +430,28 @@ kubectl rollout undo deployment/customer-service -n ecommerce
 
 ## Monitoring Stack
 
-### Start Prometheus
+### Local (recommended): the `observability` Compose profile
+
+The repo's own Prometheus/Grafana/Alertmanager config (`monitoring/prometheus.yml`, `monitoring/alert-rules.yml`, `monitoring/grafana-*`) is already wired up and pre-provisioned with dashboards for this stack - no manual data-source setup needed:
 
 ```bash
-# Option 1: Docker
-docker run -d \
-  --name prometheus \
-  -p 9090:9090 \
-  -v $(pwd)/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml \
-  prom/prometheus:latest
-
-# Option 2: Kubernetes
-kubectl apply -f monitoring/k8s/prometheus.yaml -n ecommerce
+docker compose --profile observability up -d
 ```
 
-**Access Prometheus:**
-- URL: http://localhost:9090
-- Query examples:
-  - `rate(ecommerce_orders_created[5m])` - Orders per second
-  - `ecommerce_order_creation_time_seconds` - Order duration
-  - `up{job="customer-service"}` - Service status
+**Access:**
+- Prometheus: http://localhost:9090 (targets should show the 5 app services as `UP`)
+- Grafana: http://localhost:3000 (admin / admin123, dashboards auto-provisioned from `monitoring/grafana-dashboards/`)
+- Alertmanager: http://localhost:9093
+- Kibana (logs): http://localhost:5601
 
-### Start Grafana
+Query examples in Prometheus:
+- `rate(ecommerce_orders_created[5m])` - Orders per second
+- `ecommerce_order_creation_time_seconds` - Order duration
+- `up{job="customer-service"}` - Service status
 
-```bash
-# Option 1: Docker
-docker run -d \
-  --name grafana \
-  -p 3000:3000 \
-  -e GF_SECURITY_ADMIN_PASSWORD=admin \
-  grafana/grafana:latest
+### Kubernetes
 
-# Option 2: Kubernetes
-kubectl apply -f monitoring/k8s/grafana.yaml -n ecommerce
-```
-
-**Access Grafana:**
-- URL: http://localhost:3000
-- Username: admin
-- Password: admin (change immediately!)
-
-**Setup Data Source:**
-1. Configuration → Data Sources
-2. Add Prometheus
-3. URL: http://localhost:9090 (or prometheus:9090 in K8s)
-4. Save & Test
-
-**Import Dashboards:**
-1. Dashboards → Browse
-2. Import → Paste JSON from `monitoring/grafana/dashboards/`
-3. Select Prometheus data source
-4. Save
-
-### Start Alertmanager
-
-```bash
-# Option 1: Docker
-docker run -d \
-  --name alertmanager \
-  -p 9093:9093 \
-  -v $(pwd)/monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml \
-  prom/alertmanager:latest
-
-# Option 2: Kubernetes
-kubectl apply -f monitoring/k8s/alertmanager.yaml -n ecommerce
-```
+The `k8s/` manifests in this repo focus on the application services, mTLS and secrets (see [docs/KUBERNETES_DEPLOYMENT.md](KUBERNETES_DEPLOYMENT.md)); they don't currently include Prometheus/Grafana. To monitor a K8s deployment, install the [kube-prometheus-stack Helm chart](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) into the `ecommerce` namespace, or point an existing cluster-wide Prometheus at the services' `/actuator/prometheus` endpoints.
 
 ---
 
@@ -473,22 +485,22 @@ mvn test -Dgroups=integration
 mvn test -Dspring.profiles.active=test
 ```
 
-### API Testing with Postman
+### API Testing with Postman / Insomnia
 ```bash
-# Import collection
-1. Open Postman
+# Import collection + matching environment
+1. Open Postman (or Insomnia)
 2. Import → postman-collection.json
-3. Select environment
-4. Run collection
+3. Import → postman_environment_http.json (default) or postman_environment_https.json (--profile https)
+4. Select the environment, then run requests/the collection
 ```
 
-### Load Testing with JMeter
+### HTTPS / mTLS test scripts
 ```bash
-# Run load test
-jmeter -n -t tests/load/order_api.jmx -l results.jtl
+# Verify the nginx HTTPS setup (--profile https) end to end
+bash infrastructure/tests/test-ssl.sh
 
-# Open results
-jmeter -g results.jtl
+# Verify mTLS between services (Kubernetes deployment - see docs/MTLS_CONFIGURATION.md)
+bash infrastructure/tests/test-mtls.sh
 ```
 
 ### Health Checks
@@ -598,12 +610,12 @@ kubectl logs -n ecommerce -f deployment/customer-service
 # H2 in-memory (auto-resets)
 # Just restart service
 
-# PostgreSQL
-psql -U postgres
-DROP DATABASE order_db;
-CREATE DATABASE order_db;
+# PostgreSQL (container started via --profile postgres)
+docker exec -it postgres psql -U ecommerce_user -d order_db
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
 
-# Then restart service (Flyway auto-creates schema on startup)
+# Then restart the service (Flyway auto-creates the schema on startup)
 ```
 
 #### Check Migrations
@@ -611,7 +623,7 @@ CREATE DATABASE order_db;
 # View applied/pending migrations for a service
 mvn -pl services/order-service flyway:info
 ```
-Flyway Community Edition has no automated rollback - revert by writing a new forward migration instead (see [db/README.md](db/README.md)).
+Flyway Community Edition has no automated rollback - revert by writing a new forward migration instead (see [../db/README.md](../db/README.md)).
 
 ### Network Issues in Kubernetes
 
@@ -720,7 +732,7 @@ export JAVA_OPTS="
 1. **Explore API Documentation**: http://localhost:8080/swagger-ui.html
 2. **View Metrics**: http://localhost:9090 (Prometheus)
 3. **Monitor Dashboards**: http://localhost:3000 (Grafana)
-4. **Read Architecture**: See `ARCHITECTURE.md`
-5. **Learn Concepts**: See `CONCEPTS_EXPLAINED.md`
-6. **Check Phases**: See `PHASES_GUIDE.md`
+4. **Read Architecture**: See [ARCHITECTURE.md](ARCHITECTURE.md)
+5. **Learn Concepts**: See [CONCEPTS_EXPLAINED.md](CONCEPTS_EXPLAINED.md)
+6. **Check Phases**: See [PHASES_GUIDE.md](PHASES_GUIDE.md)
 

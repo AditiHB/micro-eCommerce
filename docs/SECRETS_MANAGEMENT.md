@@ -71,21 +71,18 @@ spring:
 
 ### Local Docker Compose (Without Kubernetes)
 
-If running without Kubernetes, use `.env` file:
+If running without Kubernetes, use a `.env` file - Compose loads a file literally named `.env` in the project root automatically, so no `--env-file` flag is needed for it:
 
 ```bash
-# .env file
+# .env file (repo root)
 JWT_SECRET=your-jwt-secret-key-here
-DB_USERNAME=postgres
-DB_PASSWORD=postgres-password
-REDIS_PASSWORD=redis-password
 ```
-
-Run with docker-compose:
 
 ```bash
-docker-compose --env-file .env -f docker-compose-secrets.yml up
+docker compose up -d
 ```
+
+`JWT_SECRET` defaults to a clearly-labeled local-dev-only value in `docker-compose.yml` if you don't set one, so the stack still boots without any setup - just don't rely on that default past local development. For Postgres credentials, see `.env.postgres` and the `postgres` Compose profile in [SETUP_AND_DEPLOYMENT.md](SETUP_AND_DEPLOYMENT.md#local-setup-scenarios) (the username/password there are fixed per-container local dev credentials, not meant to be rotated the way `JWT_SECRET` is).
 
 ---
 

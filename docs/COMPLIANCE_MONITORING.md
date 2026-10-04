@@ -248,13 +248,16 @@ cat /tmp/security-audit-*.txt
 
 ### Starting the Stack
 
+Locally, Prometheus/Grafana/Alertmanager/Elasticsearch/Kibana/Loki are started via the main `docker-compose.yml`'s `observability` profile (see [SETUP_AND_DEPLOYMENT.md](SETUP_AND_DEPLOYMENT.md#monitoring-stack)):
+
 ```bash
-# Start all monitoring services
-docker-compose -f infrastructure/docker-compose-monitoring.yml up -d
+docker compose --profile observability up -d
 
 # Verify services
-docker-compose -f infrastructure/docker-compose-monitoring.yml ps
+docker compose ps
 ```
+
+Filebeat, the standalone certificate-exporter container, and Vault shown in the architecture above are part of the **Kubernetes** compliance deployment (see the `kubectl apply` commands in this doc and [KUBERNETES_DEPLOYMENT.md](KUBERNETES_DEPLOYMENT.md)/[SECRETS_MANAGEMENT.md](SECRETS_MANAGEMENT.md)) - they aren't part of the local Compose stack.
 
 ### Service Health Checks
 
