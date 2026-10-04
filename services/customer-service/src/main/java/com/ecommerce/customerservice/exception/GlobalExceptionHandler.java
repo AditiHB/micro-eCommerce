@@ -6,6 +6,7 @@ import com.ecommerce.common.exception.ResourceNotFoundException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -67,6 +68,34 @@ public class GlobalExceptionHandler {
         response.put("errors", errors);
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+    }
+
+    /**
+     * Handle a failed login (bad username/password). AuthenticationManager.
+     * authenticate() throws this (BadCredentialsException, etc.) straight
+     * out of UserService.login - nothing upstream was catching it, so every
+     * wrong-password attempt fell through to the generic 500 handler below
+     * instead of the 400 AuthController's own Swagger doc already promised
+     * ("400: Invalid credentials"). Deliberately generic message - whether
+     * the username doesn't exist or the password is simply wrong isn't
+     * reported, so this endpoint can't be used to enumerate valid usernames.
+     */
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ErrorResponse> handleAuthenticationException(
+            AuthenticationException ex,
+            WebRequest request) {
+        log.warn("Authentication failed: {}", ex.getMessage());
+
+        ErrorResponse errorResponse = ErrorResponse.builder()
+            .status(HttpStatus.BAD_REQUEST.value())
+            .error("BAD_REQUEST")
+            .message("Invalid username or password")
+            .errorCode("INVALID_CREDENTIALS")
+            .timestamp(LocalDateTime.now())
+            .path(request.getDescription(false).replace("uri=", ""))
+            .build();
+
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(errorResponse);
     }
 
     /**
