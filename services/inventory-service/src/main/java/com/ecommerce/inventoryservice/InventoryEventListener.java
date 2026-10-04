@@ -26,6 +26,13 @@ import org.springframework.stereotype.Component;
  *
  * This implements choreography-based Saga pattern where services emit events
  * and other services listen and react, including compensating actions on failure.
+ *
+ * Both handlers are idempotent against Kafka redelivery of the same event -
+ * a normal occurrence under AckMode.MANUAL (consumer restart/rebalance
+ * before acking), not a failure. See InventoryService.reserveStockIfAvailable/
+ * releaseStockIfPresent's javadoc: an inventory_reservations row per orderId
+ * (unique constraint) is what makes a second delivery a safe no-op instead
+ * of decrementing/incrementing the same order's stock twice.
  */
 @Component
 @RequiredArgsConstructor
@@ -47,7 +54,7 @@ public class InventoryEventListener {
                 event.getOrderId(), event.getProductId(), event.getQuantity());
 
             boolean reserved = inventoryService
-                .reserveStockIfAvailable(event.getProductId(), event.getQuantity())
+                .reserveStockIfAvailable(event.getOrderId(), event.getProductId(), event.getQuantity())
                 .isPresent();
 
             if (reserved) {
@@ -91,7 +98,7 @@ public class InventoryEventListener {
 
             if (event.getProductId() != null && event.getQuantity() != null) {
                 boolean released = inventoryService
-                    .releaseStockIfPresent(event.getProductId(), event.getQuantity())
+                    .releaseStockIfPresent(event.getOrderId(), event.getProductId(), event.getQuantity())
                     .isPresent();
 
                 if (released) {

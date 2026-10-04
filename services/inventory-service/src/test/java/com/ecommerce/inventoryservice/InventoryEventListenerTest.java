@@ -74,11 +74,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should reserve inventory when order is created")
     void testHandleOrderCreatedSuccess() {
-        when(inventoryService.reserveStockIfAvailable("PROD-001", 5)).thenReturn(Optional.of(inventoryResponse));
+        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.of(inventoryResponse));
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(inventoryService).reserveStockIfAvailable("PROD-001", 5);
+        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
         verify(eventPublisher).publishEvent(any(InventoryReservedEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -86,11 +86,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should publish failure event when insufficient inventory")
     void testHandleOrderCreatedInsufficientStock() {
-        when(inventoryService.reserveStockIfAvailable("PROD-001", 5)).thenReturn(Optional.empty());
+        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.empty());
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(inventoryService).reserveStockIfAvailable("PROD-001", 5);
+        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
         verify(eventPublisher).publishEvent(any(InventoryFailedEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -98,11 +98,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should publish failure event when product not found")
     void testHandleOrderCreatedProductNotFound() {
-        when(inventoryService.reserveStockIfAvailable("PROD-001", 5)).thenReturn(Optional.empty());
+        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.empty());
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(inventoryService).reserveStockIfAvailable("PROD-001", 5);
+        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
         verify(eventPublisher).publishEvent(any(InventoryFailedEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -110,11 +110,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should release inventory when payment fails")
     void testHandlePaymentFailedSuccess() {
-        when(inventoryService.releaseStockIfPresent("PROD-001", 5)).thenReturn(Optional.of(inventoryResponse));
+        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenReturn(Optional.of(inventoryResponse));
 
         listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
-        verify(inventoryService).releaseStockIfPresent("PROD-001", 5);
+        verify(inventoryService).releaseStockIfPresent(123L, "PROD-001", 5);
         verify(eventPublisher).publishEvent(any(InventoryReleasedEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -122,11 +122,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should handle payment failed when inventory not found")
     void testHandlePaymentFailedInventoryNotFound() {
-        when(inventoryService.releaseStockIfPresent("PROD-001", 5)).thenReturn(Optional.empty());
+        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenReturn(Optional.empty());
 
         listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
-        verify(inventoryService).releaseStockIfPresent("PROD-001", 5);
+        verify(inventoryService).releaseStockIfPresent(123L, "PROD-001", 5);
         verify(eventPublisher, never()).publishEvent(any(), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -139,14 +139,14 @@ class InventoryEventListenerTest {
 
         listener.handlePaymentFailed(event, acknowledgment);
 
-        verify(inventoryService, never()).releaseStockIfPresent(anyString(), any());
+        verify(inventoryService, never()).releaseStockIfPresent(any(), anyString(), any());
         verify(acknowledgment).acknowledge();
     }
 
     @Test
     @DisplayName("Should route to DLQ and still ack when order created processing throws")
     void testHandleOrderCreatedException() {
-        when(inventoryService.reserveStockIfAvailable("PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
+        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
@@ -157,7 +157,7 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should route to DLQ and still ack when payment failed processing throws")
     void testHandlePaymentFailedException() {
-        when(inventoryService.releaseStockIfPresent("PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
+        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
 
         listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
