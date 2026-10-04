@@ -1,3 +1,7 @@
+# Port 8082 - see order-service's header comment for why this and
+# order-service's port were swapped in the original manifests and are fixed
+# here. REDIS_HOST=redis set here to match docker-compose.yml's own
+# inventory-service block (harmless either way - see order-service's note).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -12,46 +16,31 @@ spec:
     metadata:
       labels:
         app: inventory-service
+        tier: service
     spec:
+      serviceAccountName: inventory-service-sa
       containers:
       - name: inventory-service
         image: micro-ecommerce:inventory-service
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 8083
+        - containerPort: 8082
         env:
-        - name: SERVER_PORT
-          value: "8083"
-        - name: SPRING_DATASOURCE_URL
-          value: "jdbc:h2:mem:inventory_db"
-        - name: SPRING_DATASOURCE_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: db-username
-        - name: SPRING_DATASOURCE_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: db-password
-        - name: SPRING_REDIS_HOST
+        - name: SPRING_CONFIG_IMPORT
+          value: "optional:configserver:http://config-server:8888/"
+        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+          value: "http://discovery-server:8761/eureka/"
+        - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+          value: "true"
+        - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        - name: REDIS_HOST
           value: "redis"
-        - name: SPRING_REDIS_PORT
-          value: "6379"
-        - name: SPRING_REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: redis-password
-        - name: SPRING_REDIS_DATABASE
-          value: "2"
         - name: JWT_SECRET
           valueFrom:
             secretKeyRef:
               name: ecommerce-secrets
               key: jwt-secret
-        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
-          value: "http://discovery-server:8761/eureka/"
         resources:
           requests:
             cpu: 250m
@@ -62,7 +51,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8083
+            port: 8082
           initialDelaySeconds: 60
           periodSeconds: 15
           timeoutSeconds: 5
@@ -70,18 +59,11 @@ spec:
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8083
+            port: 8082
           initialDelaySeconds: 45
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        volumeMounts:
-        - name: config
-          mountPath: /app/config
-      volumes:
-      - name: config
-        configMap:
-          name: inventory-service-config
 ---
 apiVersion: v1
 kind: Service
@@ -93,6 +75,6 @@ spec:
   selector:
     app: inventory-service
   ports:
-  - port: 8083
-    targetPort: 8083
+  - port: 8082
+    targetPort: 8082
     protocol: TCP

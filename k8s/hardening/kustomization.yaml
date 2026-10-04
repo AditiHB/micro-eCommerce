@@ -1,0 +1,14 @@
+# Not part of the default deploy (k8s/overlays/h2 or k8s/overlays/postgres).
+# Apply on top of an already-working base deployment:
+#
+#   kubectl apply -k k8s/hardening
+#
+# See network-policies.yaml's own header for what this adds, its CNI
+# prerequisite, and why this project's original NetworkPolicy/RBAC/
+# mTLS/cert-manager manifests were cut rather than carried forward -
+# docs/KUBERNETES_DEPLOYMENT.md has the full writeup.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - network-policies.yaml

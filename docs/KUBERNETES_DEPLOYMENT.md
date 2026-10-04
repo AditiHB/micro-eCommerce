@@ -1,627 +1,413 @@
 # Kubernetes Deployment Guide - Micro-eCommerce
 
-This guide provides instructions for deploying the micro-ecommerce microservices system to Kubernetes using Docker images and Helm charts.
+A local-learning deployment of this project's microservices to Kubernetes
+(Minikube or Kind), using [Kustomize](https://kustomize.io/) - built into
+`kubectl` itself, no extra tool to install. Covers getting the whole stack
+running, switching between an H2-per-pod profile and a real shared Postgres
+profile (mirroring Docker Compose's own two modes), and genuine
+HPA-based horizontal scaling - with the load test to actually trigger it.
+
+This guide was rewritten alongside a full audit and fix of `k8s/` - see
+["What was fixed"](#what-was-fixed) for the bug list, and
+["What this round didn't cover"](#what-this-round-didnt-cover) for what was
+deliberately left alone and why.
 
 ## Table of Contents
 
 1. [Prerequisites](#prerequisites)
 2. [Architecture Overview](#architecture-overview)
-3. [Docker Images](#docker-images)
-4. [Local Deployment (Minikube/Kind)](#local-deployment-minikubukind)
-5. [Cloud Deployment](#cloud-deployment)
-6. [Helm Deployment](#helm-deployment)
-7. [Verification & Testing](#verification--testing)
+3. [Building the Images](#building-the-images)
+4. [Deploying Locally](#deploying-locally)
+5. [Verifying the Deployment](#verifying-the-deployment)
+6. [Scaling](#scaling)
+7. [Switching to Postgres](#switching-to-postgres)
 8. [Troubleshooting](#troubleshooting)
+9. [Cleanup](#cleanup)
+10. [What was fixed](#what-was-fixed)
+11. [What this round didn't cover](#what-this-round-didnt-cover)
 
 ## Prerequisites
 
-### Required Tools
+- **Docker**: 20.10+
+- **kubectl**: 1.25+ (this project's manifests assume at least this -
+  `PodSecurityPolicy`, which the original manifests used, was removed in
+  1.25; everything here is written against the current API surface)
+- A local cluster - either:
+  - **Minikube** 1.26+, or
+  - **Kind** 0.17+
+- **metrics-server** enabled in that cluster - required for the
+  [Scaling](#scaling) section's HorizontalPodAutoscalers to report anything
+  other than `<unknown>`. Setup is cluster-specific, covered below.
 
-- **Docker**: Version 20.10+ ([Install](https://docs.docker.com/get-docker/))
-- **Kubernetes Cluster**: One of:
-  - **Minikube**: Version 1.26+ ([Install](https://minikube.sigs.k8s.io/docs/start/))
-  - **Kind**: Version 0.17+ ([Install](https://kind.sigs.k8s.io/docs/user/quick-start/))
-  - **Kubeadm**: For on-premises clusters
-- **kubectl**: Version 1.25+ ([Install](https://kubernetes.io/docs/tasks/tools/))
-- **Helm**: Version 3.12+ ([Install](https://helm.sh/docs/intro/install/))
+### Resource budget
 
-### Resource Requirements
-
-- **Minimum**: 4 CPU cores, 8 GB RAM
-- **Recommended**: 8 CPU cores, 16 GB RAM
+Everything in `k8s/base` (minimum replica counts, before any HPA scale-up)
+needs roughly **2.5 CPU / 3.5Gi memory** at requests, dominated by Kafka
+(250m/512Mi) and two replicas each of API Gateway and the 5 business
+services (250m/256Mi apiece). Give Minikube/Kind at least 4 CPU / 6Gi to
+leave room for actual scale-up.
 
 ## Architecture Overview
 
-### Components
-
-- **Infrastructure Services**:
-  - **Discovery Server** (Eureka): Service discovery and registration
-  - **Config Server**: Centralized configuration management
-  - **API Gateway**: Single entry point for client requests
-
-- **Microservices**:
-  - **Customer Service** (Port 8081): Customer management
-  - **Order Service** (Port 8082): Order processing
-  - **Inventory Service** (Port 8083): Stock management
-  - **Payment Service** (Port 8084): Payment processing
-
-- **Data Layer**:
-  - **Redis** (Port 6379): Distributed caching
-  - **H2 Database**: In-memory relational database
-
-### Deployment Architecture
+- **Infrastructure**: Discovery Server (Eureka), Config Server, API Gateway,
+  Kafka + Zookeeper (the saga's backbone), Redis (used only by the Gateway's
+  rate limiter - see [its own note](#redis) below)
+- **Business services**: Customer (8081), Order (8083), Inventory (8082),
+  Payment (8084), Notification (8086) - all Kafka-driven via the
+  choreographed saga, plus their own REST APIs behind the gateway
+- **Data layer**: in-process H2 by default (one per pod - see
+  [Switching to Postgres](#switching-to-postgres) for why that matters the
+  moment you run more than one replica), or a real shared Postgres
 
 ```
-┌─────────────────────────────────────────┐
-│      Load Balancer (API Gateway)        │
-│          (LoadBalancer Service)         │
-└──────────────┬──────────────────────────┘
-               │
-    ┌──────────┼──────────┐
-    │          │          │
-┌───▼──┐  ┌────▼───┐  ┌──▼────┐
-│Order │  │Inventory│  │Payment │
-│Service  │ Service │  │Service │
-└───┬──┘  └────┬───┘  └──┬────┘
-    │          │         │
-    └──────────┼─────────┘
-               │
-        ┌──────▼──────┐
-        │   Redis     │
-        │   Cache     │
-        └─────────────┘
+                    ┌─────────────────────────┐
+  outside traffic → │  api-gateway (Service:   │
+                    │  LoadBalancer, 2 pods)   │
+                    └───────────┬──────────────┘
+                 Eureka-discovered lb:// routes
+            ┌───────────┬───────┴───────┬───────────┐
+       customer      order         inventory      payment
+       -service      -service      -service        -service
+       (8081)        (8083)        (8082)          (8084)
+            │            │  Kafka choreography  │       │
+            └──────┬─────┴───────────┬───────────┴───────┘
+                   │                 │
+            notification-service  kafka + zookeeper
+               (8086, also
+            calls customer/order
+               directly)
+
+  discovery-server (8761) + config-server (8888): every service above
+  registers with/fetches from these two.
+  redis (6379): only api-gateway's rate limiter actually uses this.
 ```
 
-## Docker Images
+## Building the Images
 
-### Building Docker Images
-
-Each service has an optimized multi-stage Dockerfile for minimal image size.
-
-#### Build All Images
+Same Dockerfiles used by Docker Compose - nothing Kubernetes-specific here.
 
 ```bash
-# Build discovery-server
-docker build -f Dockerfile.discovery-server -t micro-ecommerce:discovery-server .
-
-# Build config-server
-docker build -f Dockerfile.config-server -t micro-ecommerce:config-server .
-
-# Build api-gateway
-docker build -f Dockerfile.api-gateway -t micro-ecommerce:api-gateway .
-
-# Build customer-service
-docker build -f Dockerfile.customer-service -t micro-ecommerce:customer-service .
-
-# Build order-service
-docker build -f Dockerfile.order-service -t micro-ecommerce:order-service .
-
-# Build inventory-service
-docker build -f Dockerfile.inventory-service -t micro-ecommerce:inventory-service .
-
-# Build payment-service
-docker build -f Dockerfile.payment-service -t micro-ecommerce:payment-service .
-```
-
-#### Build Script
-
-Create a `build-images.sh` script:
-
-```bash
-#!/bin/bash
-
-set -e
-
-SERVICES=("discovery-server" "config-server" "api-gateway" "customer-service" "order-service" "inventory-service" "payment-service")
-
-for service in "${SERVICES[@]}"; do
-    echo "Building $service..."
+for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service notification-service; do
     docker build -f Dockerfile.$service -t micro-ecommerce:$service .
 done
-
-echo "All images built successfully!"
-docker images | grep micro-ecommerce
 ```
 
-## Local Deployment (Minikube/Kind)
-
-### Using Minikube
-
-#### Step 1: Start Minikube
+### Minikube
 
 ```bash
-# Start with adequate resources
-minikube start \
-  --cpus 4 \
-  --memory 8192 \
-  --driver docker \
-  --kubernetes-version v1.27
-
-# Enable metrics-server for resource monitoring
-minikube addons enable metrics-server
-```
-
-#### Step 2: Build and Load Images
-
-```bash
-# For each Dockerfile
 eval $(minikube docker-env)
-
-# Build images in Minikube's Docker
-for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service; do
-    docker build -f Dockerfile.$service -t micro-ecommerce:$service .
-done
+# re-run the build loop above - this builds straight into Minikube's own
+# Docker daemon, so no separate load/push step is needed
 ```
 
-#### Step 3: Deploy Using kubectl
+### Kind
 
 ```bash
-# Apply manifests in order
-kubectl apply -f k8s/00-namespace.yaml
-kubectl apply -f k8s/01-secrets.yaml
-kubectl apply -f k8s/02-configmaps.yaml
-kubectl apply -f k8s/03-infrastructure.yaml
-kubectl apply -f k8s/04-discovery-server.yaml
-kubectl apply -f k8s/05-config-server.yaml
-kubectl apply -f k8s/06-api-gateway.yaml
-kubectl apply -f k8s/07-customer-service.yaml
-kubectl apply -f k8s/08-order-service.yaml
-kubectl apply -f k8s/09-inventory-service.yaml
-kubectl apply -f k8s/10-payment-service.yaml
-```
-
-#### Step 4: Access the Service
-
-```bash
-# Get Minikube IP
-minikube ip
-
-# Forward port for API Gateway
-kubectl port-forward -n ecommerce service/api-gateway 8080:80
-
-# Access the API
-curl http://localhost:8080/api/customers
-```
-
-### Using Kind
-
-#### Step 1: Create Kind Cluster
-
-```bash
-# Create a cluster configuration file: kind-config.yaml
-cat > kind-config.yaml << 'EOF'
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-name: ecommerce
-nodes:
-- role: control-plane
-  extraPortMappings:
-  - containerPort: 80
-    hostPort: 80
-    listenAddress: "127.0.0.1"
-  - containerPort: 8080
-    hostPort: 8080
-    listenAddress: "127.0.0.1"
-EOF
-
-# Create the cluster
-kind create cluster --config kind-config.yaml
-```
-
-#### Step 2: Load Docker Images
-
-```bash
-# Build all images first
-for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service; do
-    docker build -f Dockerfile.$service -t micro-ecommerce:$service .
-done
-
-# Load images into Kind cluster
-for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service; do
+# build with your normal Docker daemon first (the loop above), then:
+for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service notification-service; do
     kind load docker-image micro-ecommerce:$service --name ecommerce
 done
 ```
 
-#### Step 3: Deploy
+## Deploying Locally
+
+### 1. Start the cluster with metrics-server enabled
+
+**Minikube:**
 
 ```bash
-# Apply all manifests
-kubectl apply -f k8s/
-
-# Verify all resources
-kubectl get all -n ecommerce
+minikube start --cpus 4 --memory 6144 --driver docker --kubernetes-version stable
+minikube addons enable metrics-server
 ```
 
-## Cloud Deployment
-
-### Prerequisites
-
-- Cloud CLI configured (AWS CLI, GCP SDK, Azure CLI)
-- Container registry access (ECR, GCR, ACR)
-- Kubernetes cluster created (EKS, GKE, AKS)
-
-### Push to Container Registry
-
-#### AWS ECR
+**Kind:**
 
 ```bash
-# Create ECR repositories
-aws ecr create-repository --repository-name micro-ecommerce/discovery-server
-aws ecr create-repository --repository-name micro-ecommerce/config-server
-aws ecr create-repository --repository-name micro-ecommerce/api-gateway
-aws ecr create-repository --repository-name micro-ecommerce/customer-service
-aws ecr create-repository --repository-name micro-ecommerce/order-service
-aws ecr create-repository --repository-name micro-ecommerce/inventory-service
-aws ecr create-repository --repository-name micro-ecommerce/payment-service
-
-# Login to ECR
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
-
-# Tag and push images
-for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service; do
-    docker tag micro-ecommerce:$service <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/micro-ecommerce/$service:latest
-    docker push <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/micro-ecommerce/$service:latest
-done
+kind create cluster --name ecommerce
+# metrics-server needs one patch on Kind: its kubelet serving certs aren't
+# signed by a CA metrics-server trusts by default.
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+kubectl patch deployment metrics-server -n kube-system --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
 ```
 
-#### Google Container Registry (GCR)
+Confirm it's working before moving on (give it a minute after creation):
 
 ```bash
-# Configure Docker authentication
-gcloud auth configure-docker gcr.io
-
-# Tag and push images
-for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service; do
-    docker tag micro-ecommerce:$service gcr.io/PROJECT_ID/micro-ecommerce/$service:latest
-    docker push gcr.io/PROJECT_ID/micro-ecommerce/$service:latest
-done
+kubectl top nodes
 ```
 
-### Deploy to EKS
+### 2. Deploy the stack
+
+Pick one profile - this is the same H2-vs-Postgres choice
+`docker-compose.yml` vs. `docker-compose-postgres.yml` gives you locally:
 
 ```bash
-# Update kubeconfig
-aws eks update-kubeconfig --name ecommerce-cluster --region us-east-1
+# Default: H2, one database per pod. Good for a first run.
+kubectl apply -k k8s/overlays/h2
 
-# Apply manifests
-kubectl apply -f k8s/
-
-# Verify deployment
-kubectl get deployments -n ecommerce
-kubectl get services -n ecommerce
+# Or: real shared Postgres - needed once you run more than 1 replica per
+# service and expect them to agree on the same data (see "Switching to
+# Postgres" below).
+kubectl apply -k k8s/overlays/postgres
 ```
 
-## Helm Deployment
-
-### Using Helm Charts
-
-Helm simplifies deployment with templating and variable management.
-
-#### Installation
+### 3. Wait for everything to come up
 
 ```bash
-# Add Helm repository (if using private repo)
-# helm repo add ecommerce https://example.com/helm
-# helm repo update
-
-# Dry-run to see what will be deployed
-helm install ecommerce ./helm/ecommerce \
-  --namespace ecommerce \
-  --create-namespace \
-  --dry-run \
-  --debug
-
-# Install the chart
-helm install ecommerce ./helm/ecommerce \
-  --namespace ecommerce \
-  --create-namespace
-```
-
-#### Custom Values
-
-Create a `custom-values.yaml`:
-
-```yaml
-namespace: ecommerce
-
-replicaCount: 3
-
-image:
-  registry: your-registry.azurecr.io
-  pullPolicy: Always
-  tag: v1.0.0
-
-resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
-  requests:
-    cpu: 250m
-    memory: 256Mi
-
-apiGateway:
-  enabled: true
-  replicaCount: 3
-  service:
-    type: LoadBalancer
-
-services:
-  customer:
-    replicaCount: 3
-  order:
-    replicaCount: 3
-  inventory:
-    replicaCount: 3
-  payment:
-    replicaCount: 3
-
-infrastructure:
-  redis:
-    persistence:
-      size: 5Gi
-
-secrets:
-  jwtSecret: "your-production-secret-key"
-  dbPassword: "your-secure-password"
-  redisPassword: "your-redis-password"
-```
-
-Deploy with custom values:
-
-```bash
-helm install ecommerce ./helm/ecommerce \
-  --namespace ecommerce \
-  --create-namespace \
-  -f custom-values.yaml
-```
-
-#### Upgrade Deployment
-
-```bash
-# Upgrade to a new version
-helm upgrade ecommerce ./helm/ecommerce \
-  --namespace ecommerce \
-  -f custom-values.yaml
-
-# Rollback to previous version
-helm rollback ecommerce -n ecommerce
-
-# Get release history
-helm history ecommerce -n ecommerce
-```
-
-## Verification & Testing
-
-### Check Deployment Status
-
-```bash
-# Get all resources in ecommerce namespace
-kubectl get all -n ecommerce
-
-# Check pod status
-kubectl get pods -n ecommerce -o wide
-
-# Check deployment readiness
-kubectl get deployment -n ecommerce
-
-# Check services
-kubectl get svc -n ecommerce
-
-# Check statefulsets
-kubectl get statefulset -n ecommerce
-```
-
-### View Logs
-
-```bash
-# View logs from a pod
-kubectl logs -n ecommerce pod/api-gateway-xxxx
-
-# Stream logs
-kubectl logs -f -n ecommerce pod/api-gateway-xxxx
-
-# View logs from all pods in deployment
-kubectl logs -n ecommerce -l app=api-gateway --tail=100
-```
-
-### Health Check Endpoints
-
-```bash
-# Port forward to a service
-kubectl port-forward -n ecommerce svc/api-gateway 8080:80
-
-# Test health endpoints
-curl http://localhost:8080/actuator/health
-curl http://localhost:8080/actuator/health/liveness
-curl http://localhost:8080/actuator/health/readiness
-curl http://localhost:8080/actuator/metrics
-```
-
-### Test API Endpoints
-
-```bash
-# Customer Service
-curl http://localhost:8080/api/customers
-
-# Order Service
-curl http://localhost:8080/api/orders
-
-# Inventory Service
-curl http://localhost:8080/api/inventory
-
-# Payment Service
-curl http://localhost:8080/api/payments
-```
-
-### Monitor Resources
-
-```bash
-# Check resource usage
-kubectl top nodes -n ecommerce
-kubectl top pods -n ecommerce
-
-# Watch pod creation
 kubectl get pods -n ecommerce -w
+```
 
-# Describe a pod for troubleshooting
-kubectl describe pod -n ecommerce pod/customer-service-xxxxx
+Kafka takes the longest to become ready (and api-gateway/the business
+services will crash-loop a few times waiting on Eureka/Kafka before
+settling - that's normal startup-ordering noise, not a bug, since nothing
+here uses `initContainers` to block on every dependency).
+
+### 4. Reach the API Gateway
+
+```bash
+# Minikube:
+minikube service api-gateway -n ecommerce --url
+# Kind (no LoadBalancer support by default) or either cluster, always works:
+kubectl port-forward -n ecommerce svc/api-gateway 8080:80
+curl http://localhost:8080/actuator/health
+```
+
+## Verifying the Deployment
+
+```bash
+kubectl get all -n ecommerce
+kubectl get hpa -n ecommerce
+kubectl logs -n ecommerce -l app=api-gateway --tail=100
+kubectl describe pod -n ecommerce <pod-name>   # for anything not Ready
+```
+
+Confirm the saga is actually wired end to end (Kafka reachable, Eureka
+registration working):
+
+```bash
+kubectl exec -it -n ecommerce deploy/discovery-server -- \
+  curl -s http://localhost:8761/eureka/apps | grep -o '<name>[A-Z-]*</name>'
+# Expect: API-GATEWAY, CUSTOMER-SERVICE, ORDER-SERVICE, INVENTORY-SERVICE,
+# PAYMENT-SERVICE, NOTIFICATION-SERVICE, CONFIG-SERVER
+```
+
+If that list is short or empty, see [Troubleshooting](#troubleshooting).
+
+## Scaling
+
+### Manual
+
+```bash
+kubectl scale deployment -n ecommerce customer-service --replicas=4
+```
+
+Safe under `overlays/postgres` (shared database). Under `overlays/h2`,
+each new replica starts with its own empty in-process database - reads can
+land on a different pod than the write that created them. Fine for kicking
+the tires with one replica; switch profiles before relying on more than
+one.
+
+### Automatic (HorizontalPodAutoscaler)
+
+`k8s/base/13-hpa.yaml` defines a real HPA for the API Gateway and all 5
+business services already - it's part of what `kubectl apply -k` just
+deployed, not a separate step:
+
+```bash
+kubectl get hpa -n ecommerce
+# NAME                   REFERENCE                         TARGETS   MINPODS   MAXPODS   REPLICAS
+# customer-service       Deployment/customer-service        3%/70%    2         5         2
+```
+
+If TARGETS stays `<unknown>` instead of a percentage, metrics-server isn't
+reachable - revisit step 1.
+
+**Trigger a real scale-up** (no extra tooling needed - a handful of
+parallel busy-loops from inside the cluster, hitting a real endpoint, is
+enough against a 250m CPU request):
+
+```bash
+kubectl run load-generator -n ecommerce --image=busybox:1.36 --restart=Never -- \
+  /bin/sh -c "for i in $(seq 1 20); do (while true; do wget -q -O- http://customer-service:8081/api/customers >/dev/null; done) & done; wait"
+```
+
+Watch it react, in another terminal:
+
+```bash
+kubectl get hpa -n ecommerce customer-service -w
+```
+
+Within a couple of minutes you should see TARGETS climb past 70% and
+REPLICAS increase (up to the HPA's `maxReplicas: 5`). Stop the load once
+you've seen it:
+
+```bash
+kubectl delete pod -n ecommerce load-generator
+```
+
+Then watch it **scale back down** - this is the "descaling" half of the
+ask, and it's deliberately not instant:
+
+```bash
+kubectl get hpa -n ecommerce customer-service -w
+```
+
+The default HPA scale-down stabilization window is 5 minutes (this
+project's HPAs shorten it to 60s via `behavior.scaleDown.stabilizationWindowSeconds`
+- see `k8s/base/13-hpa.yaml` - specifically so this demo doesn't take
+10+ minutes to show the other direction), so expect replicas to drop back
+to `minReplicas: 2` within a minute or so of the load stopping, not
+immediately.
+
+## Switching to Postgres
+
+Already deployed H2 and want to move to Postgres without starting over:
+
+```bash
+kubectl apply -k k8s/overlays/postgres
+kubectl rollout restart deployment -n ecommerce customer-service order-service inventory-service payment-service notification-service
+```
+
+(`kubectl apply -k` alone changes the Deployments' env vars, but Kubernetes
+only rolls pods when the pod template actually changes - which it does
+here - so the restart above is usually redundant; included for certainty
+if you've made other local edits.)
+
+Each service creates its own schema via Flyway on first connection
+(`db/migration/postgresql/*.sql` - see [db/README.md](../db/README.md)),
+exactly like `docker-compose-postgres.yml` does.
+
+To go back to H2: `kubectl apply -k k8s/overlays/h2` does **not** remove the
+Postgres StatefulSet or revert the env var patch by itself (Kustomize only
+adds/changes what its own resource list describes) - delete the Postgres
+overlay's own resources first:
+
+```bash
+kubectl delete -k k8s/overlays/postgres
+kubectl apply -k k8s/overlays/h2
 ```
 
 ## Troubleshooting
 
-### Common Issues
+**Pods stuck in `CrashLoopBackOff` right after `kubectl apply`:** almost
+always startup ordering (Kafka/Eureka not ready yet) - give it 2-3 minutes;
+check `kubectl logs -n ecommerce <pod>` for the actual exception if it
+doesn't resolve itself.
 
-#### Pods Not Starting
+**Eureka's app list (see [Verifying](#verifying-the-deployment)) is
+missing services:** check `EUREKA_INSTANCE_PREFER_IP_ADDRESS=true` is
+present on the affected Deployment (`kubectl get deploy -n ecommerce
+<name> -o yaml | grep -A1 PREFER_IP`) - without it, a Deployment's pods
+register with Eureka under an unresolvable pod hostname instead of their
+routable IP, since (unlike a StatefulSet) individual Deployment pods don't
+get their own DNS record.
 
-```bash
-# Check pod events
-kubectl describe pod -n ecommerce <pod-name>
+**`kubectl get hpa` TARGETS column stuck on `<unknown>`:** metrics-server
+isn't reachable - `kubectl top pods -n ecommerce` will fail with the same
+root cause; revisit [step 1](#1-start-the-cluster-with-metrics-server-enabled).
 
-# View pod logs
-kubectl logs -n ecommerce <pod-name>
+**Redis:** only `api-gateway`'s rate limiter actually talks to Redis in
+this codebase - `customer-service`/`order-service`/etc.'s own caching
+(`@Cacheable`) is backed by an in-process map regardless of what's
+configured, a known, documented gap (see
+`common/config/RedisConfig`'s own javadoc). `kubectl logs -n ecommerce -l
+app=redis` / `kubectl exec -it -n ecommerce redis-0 -- redis-cli ping` work
+the same as always if you need to debug the gateway's rate limiting
+specifically.
 
-# Check resource availability
-kubectl top nodes
-kubectl describe node <node-name>
-```
-
-#### Service Discovery Issues
-
-```bash
-# Verify Eureka registration
-kubectl exec -it -n ecommerce discovery-server-0 -- \
-  curl http://localhost:8761/eureka/apps
-
-# Check service connectivity
-kubectl exec -it -n ecommerce customer-service-0 -- \
-  curl http://discovery-server:8761/eureka/apps/CUSTOMER-SERVICE
-```
-
-#### Redis Connection Issues
-
-```bash
-# Test Redis connectivity
-kubectl exec -it -n ecommerce redis-0 -- redis-cli ping
-
-# Check Redis logs
-kubectl logs -n ecommerce -l app=redis
-
-# Verify Redis service
-kubectl get svc redis -n ecommerce
-```
-
-#### Configuration Issues
-
-```bash
-# Verify ConfigMaps
-kubectl get configmap -n ecommerce
-kubectl describe configmap -n ecommerce discovery-server-config
-
-# Verify Secrets
-kubectl get secret -n ecommerce
-kubectl describe secret -n ecommerce ecommerce-secrets
-```
-
-### Debug Commands
-
-```bash
-# Execute commands in container
-kubectl exec -it -n ecommerce <pod-name> -- /bin/sh
-
-# Copy files from pod
-kubectl cp ecommerce/<pod-name>:/app/app.jar ./app.jar
-
-# Port forward for debugging
-kubectl port-forward -n ecommerce <pod-name> 5005:5005
-
-# View resource quotas
-kubectl describe quota -n ecommerce
-```
-
-## Scaling
-
-### Manual Scaling
-
-```bash
-# Scale deployment
-kubectl scale deployment -n ecommerce customer-service --replicas=3
-
-# Scale statefulset
-kubectl scale statefulset -n ecommerce redis --replicas=2
-```
-
-### Horizontal Pod Autoscaler (HPA)
-
-```bash
-# Create HPA for API Gateway
-kubectl autoscale deployment -n ecommerce api-gateway \
-  --min=2 \
-  --max=10 \
-  --cpu-percent=70
-
-# View HPA status
-kubectl get hpa -n ecommerce
-```
-
-## Persistence
-
-### Storage Classes
-
-Redis and H2 Database use PersistentVolumeClaims:
-
-```bash
-# View persistent volumes
-kubectl get pv -n ecommerce
-
-# View persistent volume claims
-kubectl get pvc -n ecommerce
-
-# Check storage classes
-kubectl get storageclass
-```
-
-### Backup & Restore
-
-```bash
-# Create backup of Redis data
-kubectl exec -n ecommerce redis-0 -- redis-cli BGSAVE
-
-# Backup database
-kubectl cp ecommerce/h2-database-0:/opt/h2-data ./h2-backup
-
-# Restore from backup
-kubectl cp ./h2-backup ecommerce/h2-database-0:/opt/h2-data
-```
+**`kubectl apply -k k8s/hardening` makes everything unreachable:** check
+your cluster's CNI actually enforces NetworkPolicy (Kind's default CNI
+does; plain Minikube's does not unless started with `--cni=calico` or
+similar) - if it doesn't enforce, the objects apply but do nothing, which
+is a different, and much less alarming, non-issue.
 
 ## Cleanup
 
 ```bash
-# Delete all resources in namespace
-kubectl delete namespace ecommerce
-
-# Delete using Helm
-helm uninstall ecommerce -n ecommerce
-
-# Delete Minikube cluster
-minikube delete
-
-# Delete Kind cluster
-kind delete cluster --name ecommerce
+kubectl delete -k k8s/overlays/postgres   # or k8s/overlays/h2 - whichever you applied
+kubectl delete -k k8s/hardening            # if you applied it
+minikube delete      # or: kind delete cluster --name ecommerce
 ```
 
-## References
+## What was fixed
 
-- [Kubernetes Documentation](https://kubernetes.io/docs/)
-- [Helm Documentation](https://helm.sh/docs/)
-- [Minikube Documentation](https://minikube.sigs.k8s.io/)
-- [Kind Documentation](https://kind.sigs.k8s.io/)
-- [Spring Cloud Kubernetes](https://spring.io/projects/spring-cloud-kubernetes)
-- [Docker Documentation](https://docs.docker.com/)
+A full audit of the original `k8s/*.yaml` + `helm/ecommerce/` found several
+confirmed bugs, ranging from "silently breaks horizontal scaling" to
+"takes the whole app down the moment you follow the doc's own cloud-deploy
+instructions." Summary (full detail was in the audit itself, not
+reproduced in full here):
 
-## Support
+- **No shared database across replicas** - every business service defaulted
+  to an in-process H2 database with `replicas: 2`; two pods of the same
+  service didn't agree on what data existed. Fixed by `k8s/overlays/postgres`.
+- **A dead `h2-database` StatefulSet** - deployed, claimed a
+  PersistentVolumeClaim, and nothing's JDBC URL ever pointed at it. Removed.
+- **No HorizontalPodAutoscaler anywhere** - "scaling" was one imperative
+  example command in this doc, never a committed resource. Fixed by
+  `k8s/base/13-hpa.yaml`.
+- **API Gateway had zero Redis configuration** - its rate limiter makes a
+  blocking Redis call on every gated request; without `REDIS_HOST` it
+  defaulted to `localhost`, breaking every such request in Kubernetes.
+  Fixed.
+- **Kafka/Zookeeper were entirely absent from `k8s/`** - the original
+  manifests predate this project's Kafka-driven saga. Without them, no
+  `@KafkaListener` in any service has anything to connect to. Added.
+- **No path for Eureka registration to work in Kubernetes at all** - none
+  of the original manifests set `EUREKA_INSTANCE_PREFER_IP_ADDRESS`, so
+  every service would have registered under an unresolvable pod hostname
+  instead of its routable IP; Docker Compose never surfaces this because
+  container hostnames are resolvable there. Fixed on every service.
+- **`order-service` and `inventory-service` had their ports swapped**
+  relative to Docker Compose and their own `application.yml` defaults
+  (consistently enough internally that it wouldn't have crashed, just run
+  on the wrong port vs. every other deployment path for the same service -
+  and `notification-service`'s `ORDER_SERVICE_URL` pointed at the resulting
+  wrong port too). Fixed.
+- **A config-drift trap**: every service mounted a ConfigMap as
+  `/app/config/application.yml`, duplicating config already baked into the
+  image and in one case actively conflicting with it (`hibernate.ddl-auto:
+  update` fighting Flyway's own schema versioning, which the image's real
+  config sets to `validate`). Removed in favor of plain env vars, matching
+  how `docker-compose.yml` already does it.
+- **A Redis password mismatch** - a secret defined one, 4 services sent it,
+  and the actual Redis container never enforced one. Resolved by matching
+  Docker Compose's own fidelity: no password, since nothing here currently
+  needs one.
+- **The NetworkPolicy file would have taken the whole app down if applied**
+  (and `kubectl apply -f k8s/`, previously documented here, applied it along
+  with everything else) - see `k8s/hardening/network-policies.yaml`'s own
+  header for the specifics. Rewritten from the project's real dependency
+  graph, not patched.
+- **The RBAC file used a `PodSecurityPolicy`**, an API kind removed in
+  Kubernetes 1.25 (this project's own stated minimum version), and an
+  `audit.k8s.io/v1 Policy` object, which isn't `kubectl apply`-able at all.
+  Replaced with a working per-service ServiceAccount+Role+RoleBinding set
+  in `k8s/base/02-rbac.yaml`.
 
-For issues or questions:
-1. Check logs: `kubectl logs -n ecommerce <pod-name>`
-2. Describe resources: `kubectl describe <resource> -n ecommerce`
-3. Review manifest files in `k8s/` directory
-4. Consult Helm chart values in `helm/ecommerce/values.yaml`
+## What this round didn't cover
+
+Documented rather than silently dropped, matching this project's existing
+"known gaps" convention (see `e2e-tests/README.md`):
+
+- **mTLS + cert-manager + the split `ecommerce-secrets` namespace.** The
+  original attempt here had several independent, fatal problems: Certificates
+  issued for the wrong namespace (`default` instead of `ecommerce`), a
+  keystore path pointing at a PEM `.crt` file where Spring Boot needs an
+  actual PKCS12 keystore (nothing converted one to the other), a second
+  Secret namespace that Kubernetes architecturally cannot use for
+  `secretKeyRef` env injection across namespaces regardless of RBAC, and a
+  file using `kind: Patch` - not a real Kubernetes API kind. A correct
+  version of this is a substantial project on its own (real keystore
+  generation via an init container, at minimum) and was cut rather than
+  rebuilt under this pass's local-learning scope.
+- **`k8s/nginx-https`** - kept, not verified working end-to-end in this
+  pass. See its own README.
+- **Helm chart parity** - `helm/ecommerce` was not brought to the same fix
+  bar as `k8s/`. See `helm/ecommerce/NOTE.md`.
+- **Cloud deployment (EKS/GKE/ACR, Let's Encrypt).** This round's scope was
+  explicitly local learning (Minikube/Kind); none of the cloud-specific
+  assumptions from the previous version of this guide were re-verified, and
+  the Let's Encrypt `ClusterIssuer`s that used to live in the (now removed)
+  cert-manager setup need a publicly resolvable domain for their HTTP01
+  challenge anyway - inapplicable to a local cluster regardless.

@@ -1,3 +1,12 @@
+# CUSTOMER_SERVICE_URL/ORDER_SERVICE_URL are plain Kubernetes Service DNS
+# names (CustomerClient/OrderClient call them directly, not via Eureka's
+# lb:// scheme), so they work regardless of Eureka IP-preference. The
+# original 18-notification-service.yaml pointed ORDER_SERVICE_URL at port
+# 8083 while order-service's own Deployment at the time actually listened on
+# 8082 (the swapped-port bug - see order-service's header comment) - every
+# call from notification-service to order-service would have 404'd/refused
+# the moment anything actually exercised that path. Now consistent: order-
+# service really does listen on 8083.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -12,7 +21,9 @@ spec:
     metadata:
       labels:
         app: notification-service
+        tier: service
     spec:
+      serviceAccountName: notification-service-sa
       containers:
       - name: notification-service
         image: micro-ecommerce:notification-service
@@ -20,28 +31,25 @@ spec:
         ports:
         - containerPort: 8086
         env:
-        - name: SERVER_PORT
-          value: "8086"
-        - name: SPRING_DATASOURCE_URL
-          value: "jdbc:h2:mem:notification_db"
-        - name: SPRING_DATASOURCE_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: db-username
-        - name: SPRING_DATASOURCE_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: db-password
+        - name: SPRING_CONFIG_IMPORT
+          value: "optional:configserver:http://config-server:8888/"
         - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
           value: "http://discovery-server:8761/eureka/"
+        - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+          value: "true"
+        - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
         - name: CUSTOMER_SERVICE_URL
           value: "http://customer-service:8081"
         - name: ORDER_SERVICE_URL
           value: "http://order-service:8083"
         - name: NOTIFICATION_CHANNEL
           value: "log"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: jwt-secret
         resources:
           requests:
             cpu: 250m

@@ -177,10 +177,15 @@ run_audit "INFRA" "Non-root container user" \
   'test -f Dockerfile && grep -q "USER\|RUN.*useradd" Dockerfile || echo "Manual verification required" && true'
 
 run_audit "INFRA" "Kubernetes security policies" \
-  'test -f k8s/21-network-policies.yaml && grep -q "NetworkPolicy" k8s/21-network-policies.yaml || echo "Manual verification required" && true'
+  'test -f k8s/hardening/network-policies.yaml && grep -q "NetworkPolicy" k8s/hardening/network-policies.yaml || echo "Manual verification required" && true'
 
-run_audit "INFRA" "Pod security standards" \
-  'kubectl get psp 2>/dev/null | grep -q "restricted" || echo "Manual verification required" && true'
+# PodSecurityPolicy (what this check used to look for) was removed in
+# Kubernetes 1.25, this project's own stated minimum version - `kubectl get
+# psp` fails outright on any cluster meeting it. Pod-level security now
+# comes from each Deployment's own securityContext (see e.g.
+# k8s/nginx-https/deployment.yaml) rather than a cluster-wide PSP object.
+run_audit "INFRA" "Pod security context" \
+  'grep -rl "securityContext" k8s/base k8s/nginx-https >/dev/null 2>&1 || echo "Manual verification required" && true'
 
 # Summary
 echo "" | tee -a "$AUDIT_REPORT"

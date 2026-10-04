@@ -174,9 +174,13 @@ micro-eCommerce/
 │   ├── scripts/                        # Cert generation, secret rotation
 │   └── postgres/                       # Multi-DB init script (--profile postgres)
 │
-├── k8s/                                 # Kubernetes manifests (flat, numbered files)
+├── k8s/                                 # Kubernetes manifests (Kustomize base + overlays)
+│   ├── base/                            # Core stack, defaults to H2
+│   ├── overlays/{h2,postgres}/          # Pick one: kubectl apply -k k8s/overlays/<name>
+│   ├── hardening/                       # Optional NetworkPolicy layer
+│   └── nginx-https/                     # Optional, not yet verified end-to-end
 │
-├── helm/ecommerce/                      # Helm chart
+├── helm/ecommerce/                      # Helm chart - NOT the maintained path, see its NOTE.md
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   └── templates/
@@ -332,70 +336,47 @@ kubectl get nodes
 # minikube   Ready    control-plane   5m      v1.27.0
 ```
 
-### Deploy Using Helm
+### Deploy with Kustomize (the maintained path)
+
+`k8s/` is a Kustomize base + overlays, not a flat numbered-file list - pick
+the H2 or Postgres profile (same choice `docker-compose.yml` vs.
+`docker-compose-postgres.yml` gives you locally) and apply it in one
+command:
 
 ```bash
-# Create ecommerce namespace
-kubectl create namespace ecommerce
+# Default profile: H2, one database per pod
+kubectl apply -k k8s/overlays/h2
 
-# Install chart
-helm install micro-ecommerce ./helm/ecommerce \
-  -n ecommerce \
-  --values helm/ecommerce/values.yaml
+# Or: real shared Postgres (needed once you run more than 1 replica per
+# service - see docs/KUBERNETES_DEPLOYMENT.md's "Switching to Postgres")
+kubectl apply -k k8s/overlays/postgres
 
-# Verify installation
+# Verify
 kubectl get all -n ecommerce
 kubectl get pods -n ecommerce -w
-
-# Expected output (after 1-2 minutes):
-# NAME                                 READY   STATUS    RESTARTS   AGE
-# pod/customer-service-6c9d8f4c9-xxxx  1/1     Running   0          30s
-# pod/order-service-6c9d8f4c9-xxxx     1/1     Running   0          25s
-# pod/payment-service-6c9d8f4c9-xxxx   1/1     Running   0          20s
-# pod/inventory-service-6c9d8f4c9-xxxx 1/1     Running   0          15s
-# pod/api-gateway-6c9d8f4c9-xxxx       1/1     Running   0          10s
 ```
+
+The Helm chart under `helm/ecommerce/` is **not** kept at the same fix bar
+as `k8s/` - see `helm/ecommerce/NOTE.md` for why - so use the Kustomize path
+above unless you specifically want to work with Helm as a known-stale
+starting point.
 
 ### Access Services
 
 #### Through API Gateway (LoadBalancer)
 ```bash
-# Get LoadBalancer external IP
-kubectl get service api-gateway -n ecommerce
-
-# Wait for EXTERNAL-IP to be assigned (minikube: use minikube service)
+# Minikube:
 minikube service api-gateway -n ecommerce --url
 
-# Test API
-curl http://$(minikube ip):8080/api/customers
+# Any cluster, always works:
+kubectl port-forward -n ecommerce svc/api-gateway 8080:80
+curl http://localhost:8080/api/customers
 ```
 
-#### Port Forwarding (if no LoadBalancer)
-```bash
-# Forward local port to service
-kubectl port-forward -n ecommerce \
-  svc/api-gateway 8080:8080
-
-# Now access at http://localhost:8080
-```
-
-### Deploy Using kubectl (Manual)
-
-The manifests under `k8s/` are flat, numbered files applied in order (numbering encodes the dependency order - namespace/secrets first, then infra, then each service):
-
-```bash
-kubectl apply -f k8s/
-# or apply in explicit order if you want to watch each step:
-kubectl apply -f k8s/00-namespace.yaml
-kubectl apply -f k8s/01-secrets.yaml -f k8s/02-configmaps.yaml
-kubectl apply -f k8s/03-infrastructure.yaml
-kubectl apply -f k8s/04-discovery-server.yaml -f k8s/05-config-server.yaml -f k8s/06-api-gateway.yaml
-kubectl apply -f k8s/07-customer-service.yaml -f k8s/08-order-service.yaml -f k8s/09-inventory-service.yaml -f k8s/10-payment-service.yaml -f k8s/18-notification-service.yaml
-
-# Verify
-kubectl get all -n ecommerce
-```
-See [docs/KUBERNETES_DEPLOYMENT.md](KUBERNETES_DEPLOYMENT.md) for the full manifest list (mTLS, network policies, secrets rotation, etc.) and [docs/SECRETS_MANAGEMENT.md](SECRETS_MANAGEMENT.md) for how secrets are provisioned.
+See [docs/KUBERNETES_DEPLOYMENT.md](KUBERNETES_DEPLOYMENT.md) for the full
+walkthrough (metrics-server setup, a real HPA scale-up/scale-down demo,
+troubleshooting) and [docs/SECRETS_MANAGEMENT.md](SECRETS_MANAGEMENT.md) for
+how the one Secret this project uses is provisioned.
 
 ### Monitor Deployment
 ```bash

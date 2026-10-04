@@ -1,0 +1,143 @@
+# Zookeeper + Kafka - entirely missing from the original k8s manifests (they
+# predate this project's Kafka-driven saga). Without these, every
+# @KafkaListener in customer/order/inventory/payment/notification-service has
+# nothing to connect to and the saga can't run at all in Kubernetes. Mirrors
+# docker-compose.yml's zookeeper/kafka services (same images), simplified to a
+# single-listener setup since there's no host-port access to juggle inside
+# the cluster. No PersistentVolumeClaim - docker-compose.yml doesn't persist
+# this data either, so neither does this, for the same local-learning,
+# throwaway-stack fidelity.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zookeeper
+  namespace: ecommerce
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: zookeeper
+  template:
+    metadata:
+      labels:
+        app: zookeeper
+        tier: database
+    spec:
+      containers:
+      - name: zookeeper
+        image: confluentinc/cp-zookeeper:7.3.2
+        ports:
+        - containerPort: 2181
+          name: client
+        env:
+        - name: ZOOKEEPER_CLIENT_PORT
+          value: "2181"
+        - name: ZOOKEEPER_TICK_TIME
+          value: "2000"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        readinessProbe:
+          tcpSocket:
+            port: 2181
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 2181
+          initialDelaySeconds: 20
+          periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zookeeper
+  namespace: ecommerce
+spec:
+  type: ClusterIP
+  selector:
+    app: zookeeper
+  ports:
+  - port: 2181
+    targetPort: 2181
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka
+  namespace: ecommerce
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+        tier: database
+    spec:
+      initContainers:
+      - name: wait-for-zookeeper
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - until nc -z zookeeper 2181; do echo waiting for zookeeper; sleep 2; done
+      containers:
+      - name: kafka
+        image: confluentinc/cp-kafka:7.3.2
+        ports:
+        - containerPort: 9092
+          name: broker
+        env:
+        - name: KAFKA_BROKER_ID
+          value: "1"
+        - name: KAFKA_ZOOKEEPER_CONNECT
+          value: "zookeeper:2181"
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: "PLAINTEXT://kafka:9092"
+        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+          value: "PLAINTEXT:PLAINTEXT"
+        - name: KAFKA_INTER_BROKER_LISTENER_NAME
+          value: "PLAINTEXT"
+        - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+          value: "1"
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 1
+            memory: 1Gi
+        readinessProbe:
+          tcpSocket:
+            port: 9092
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 9092
+          initialDelaySeconds: 40
+          periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: ecommerce
+spec:
+  type: ClusterIP
+  selector:
+    app: kafka
+  ports:
+  - port: 9092
+    targetPort: 9092

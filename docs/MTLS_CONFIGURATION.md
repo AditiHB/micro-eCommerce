@@ -1,5 +1,34 @@
 # mTLS (Mutual TLS) Configuration Guide
 
+> **Removed during the Kubernetes rework - this guide describes manifests
+> that no longer exist in `k8s/`.** The audit behind that rework found this
+> implementation broken on multiple independent axes, not just one typo to
+> patch:
+>
+> - Every `Certificate` in the old `k8s/13-service-certificates.yaml` was
+>   issued for `*.default.svc.cluster.local` - the wrong namespace (this
+>   project deploys to `ecommerce`, never `default`). TLS hostname
+>   verification would have failed for all of them.
+> - `SERVER_SSL_KEY_STORE` pointed at a `.crt` file (a PEM certificate) while
+>   `SERVER_SSL_KEY_STORE_TYPE` was `PKCS12` - a `.crt` isn't a PKCS12
+>   keystore, and nothing anywhere converted cert-manager's `tls.crt`/
+>   `tls.key` output into one. Spring Boot would have failed SSL
+>   initialization on startup even with the namespace fixed.
+> - The old `k8s/15-deployments-mtls-updates.yaml` wasn't really a manifest
+>   to apply - its own header comment said it documented updates meant to be
+>   hand-merged into the plain-HTTP deployment files - but it shipped full
+>   `Deployment` objects sharing those same names, so `kubectl apply -f
+>   k8s/` applied both and silently let this one win by filename sort,
+>   switching production-looking HTTPS config live without anyone asking
+>   for it.
+>
+> A correct version of this (real keystore generation via an init
+> container, at minimum) is a substantial project on its own and was cut
+> rather than rebuilt under that rework's local-learning deployment scope -
+> see `docs/KUBERNETES_DEPLOYMENT.md`'s "What this round didn't cover" for
+> the full writeup. The rest of this document is kept for historical
+> reference only; none of its `kubectl apply` commands will work as written.
+
 ## Overview
 
 This guide explains the implementation of mutual TLS (mTLS) for service-to-service communication in the micro-ecommerce platform. mTLS ensures that both client and server verify each other's identity using X.509 certificates, providing:

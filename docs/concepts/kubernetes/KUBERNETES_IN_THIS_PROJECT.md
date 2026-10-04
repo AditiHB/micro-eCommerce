@@ -1,699 +1,269 @@
 # Kubernetes in the Micro-eCommerce Project 🏪
 
+Rewritten to match what's actually deployed in `k8s/` - the previous version
+of this doc described a generic Kubernetes tutorial with this project's name
+pasted on top (a `Delivery Service` that doesn't exist, replica/memory
+numbers matching no real manifest, a NodePort example and an Ingress
+controller never deployed here). Every number and example below is read
+straight from `k8s/base` - if a manifest changes, this doc can drift again,
+so when in doubt, `kubectl get` is more authoritative than this file.
+
 ## The Big Picture
 
-This project uses Kubernetes to automatically manage all microservices. Each service runs in containers, and Kubernetes keeps them healthy, scales them, and routes traffic!
-
----
-
-## The Services in Kubernetes 🔗
-
 ```
-┌──────────────────────────────────────────────┐
-│                                              │
-│   📦 Order Service                           │
-│   💳 Payment Service                         │
-│   📊 Inventory Service   ← Kubernetes →      │
-│   📧 Notification Service                    │
-│   🚚 Delivery Service                        │
-│   🚪 API Gateway                             │
-│                                              │
-└──────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  🚪 API Gateway            (2 pods, scales to 5)      │
+│  👤 Customer Service        (2 pods, scales to 5)      │
+│  📦 Order Service           (2 pods, scales to 5)      │
+│  📊 Inventory Service       (2 pods, scales to 5)      │
+│  💳 Payment Service         (2 pods, scales to 5)      │
+│  📧 Notification Service    (2 pods, scales to 5)      │
+│  🧭 Discovery Server (Eureka)   (1 pod, not scaled)     │
+│  ⚙️  Config Server               (1 pod, not scaled)     │
+│  📨 Kafka + Zookeeper            (1 pod each)           │
+│  💾 Redis                        (1 pod)                │
+└──────────────────────────────────────────────────────┘
 ```
 
----
+No Delivery Service - that's not a real part of this project. The saga is
+choreographed over Kafka between Order/Inventory/Payment/Notification; see
+`docs/SAGA_PATTERN_GUIDE.md` for the actual flow.
 
-## How Kubernetes Manages Each Service 🎯
+## A Real Deployment From This Project
 
-### Order Service Deployment
-
-**Declaration (What we tell Kubernetes):**
+**Declaration** (`k8s/base/08-customer-service.yaml`, trimmed):
 ```yaml
-Deployment: OrderService
-├─ Always keep: 3 pods running
-├─ Container image: order-service:latest
-├─ Memory needed: 512MB per pod
-├─ CPU needed: 250m per pod
-└─ Port: 8080
+Deployment: customer-service
+├─ replicas: 2
+├─ image: micro-ecommerce:customer-service
+├─ requests: 250m CPU / 256Mi memory
+├─ limits: 500m CPU / 512Mi memory
+└─ port: 8081
 ```
 
-**What Kubernetes does:**
+**What Kubernetes does with it:**
 ```
-Kubernetes sees this and:
-✅ Creates 3 Order Service containers
-✅ Monitors all 3
-✅ If one dies → Creates a replacement
-✅ If load increases → Creates more automatically
-✅ Routes all requests to available pods
+✅ Creates 2 customer-service pods
+✅ Watches both continuously
+✅ If one dies → replaces it automatically
+✅ If CPU averages over 70% across both → the HPA in
+   k8s/base/13-hpa.yaml asks for more (up to 5)
+✅ Routes requests to whichever pod is Ready
 ```
 
-### Payment Service Deployment
+## How a Request Actually Gets Routed Here
 
-**Declaration:**
+```
+Customer in browser / curl
+       ↓
+Service: api-gateway (type: LoadBalancer, k8s/base/07-api-gateway.yaml)
+       ↓
+One of the 2 (or more, under load) api-gateway pods
+       ↓
+Gateway's own baked-in route: uri: lb://customer-service
+       ↓ (resolved via Eureka, NOT a hardcoded host:port)
+Eureka (discovery-server) returns the real pod IPs currently registered
+       ↓
+Spring Cloud LoadBalancer picks one
+       ↓
+That customer-service pod handles the request
+```
+
+The `lb://` scheme matters: this is why every service sets
+`EUREKA_INSTANCE_PREFER_IP_ADDRESS=true`. A Deployment's pods (unlike a
+StatefulSet's) don't get individually resolvable DNS names - only the
+Service does - so without that setting, Eureka would register each pod
+under an unresolvable hostname and this whole chain would break the moment
+there was more than one pod to choose from.
+
+## Pods and Deployments, With Real Numbers
+
+```
+Deployment: customer-service
+Desired: 2 pods   Current: 2 pods
+├─ customer-service-7d9f8b6c99-a1b2c: Running ✅
+└─ customer-service-7d9f8b6c99-x3y4z: Running ✅
+
+If a1b2c crashes:
+   ↓
+Deployment: "Should be 2, only 1 running!"
+   ↓
+Creates customer-service-7d9f8b6c99-q5r6s
+   ↓
+Back to 2 running
+```
+
+## Services (Stable Addresses), as Actually Used Here
+
+#### ClusterIP - everything internal
+
+```
+order-service's own Service (k8s/base/09-order-service.yaml):
+  type: ClusterIP, port 8083
+
+Any pod in the ecommerce namespace reaches it the same way, always:
+  http://order-service:8083
+regardless of which specific pod currently answers.
+```
+
+#### LoadBalancer - the one externally-facing entry point
+
+```
+api-gateway's Service: type: LoadBalancer, port 80 → containerPort 8080
+
+Minikube:  minikube service api-gateway -n ecommerce --url
+Kind (no real LoadBalancer support locally): kubectl port-forward
+  -n ecommerce svc/api-gateway 8080:80
+```
+
+Nothing else in this project uses NodePort or has its own Ingress resource
+- `k8s/nginx-https` is an *optional*, not-yet-verified alternative front
+door (see its own README), not something deployed by default.
+
+## Auto-Scaling: The Actual HPA, Not a Generic Example
+
 ```yaml
-Deployment: PaymentService
-├─ Always keep: 2 pods running
-├─ Container image: payment-service:latest
-├─ Memory needed: 1GB per pod
-├─ CPU needed: 500m per pod
-└─ Port: 8081
+# k8s/base/13-hpa.yaml, for customer-service
+minReplicas: 2
+maxReplicas: 5
+metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target: { type: Utilization, averageUtilization: 70 }
+behavior:
+  scaleDown: { stabilizationWindowSeconds: 60 }
 ```
 
-**What happens:**
 ```
-Payment Service needs more resources (1GB each)
+kubectl top reports CPU usage from metrics-server
        ↓
-Kubernetes puts them on powerful nodes
+Averaged across customer-service's pods: say 85%
        ↓
-2 pods always running and healthy
+HPA controller: "Above the 70% target, and 2 < maxReplicas (5)"
        ↓
-If busy → Auto-scales to 5 pods
+Scale to 3 (then checks again ~15s later, scales further if still hot)
        ↓
-If quiet → Scales back to 2 pods
-```
-
----
-
-## Services Communicating 🔗
-
-### Internal Communication (Pod to Pod)
-
-```
-Order Pod 1 needs to call Payment Service
+Load drops back under 70%
        ↓
-Asks Kubernetes: "Where is PaymentService?"
+HPA waits out its 60s scale-down window, then scales back toward 2
+```
+
+This genuinely works, with a load test you can run yourself -
+`docs/KUBERNETES_DEPLOYMENT.md`'s ["Scaling"](../../KUBERNETES_DEPLOYMENT.md#scaling)
+section has the exact command. `discovery-server` and `config-server` are
+deliberately *not* autoscaled - this project only ever runs one replica of
+each by design (Eureka's own self-preservation model and a git-backed config
+server don't behave like a stateless HTTP tier under naive CPU-based HPA).
+
+## Persistent Data: Two Real Profiles, Not a Generic PV Example
+
+```
+Profile 1 - k8s/overlays/h2 (the default):
+   Each service pod → its own in-process H2 database
+   ↓
+   Simple, zero extra infrastructure, but NOT shared between replicas -
+   a write that lands on pod A is invisible from pod B.
+
+Profile 2 - k8s/overlays/postgres:
+   Each service pod → the same shared `postgres` StatefulSet
+   (1 PersistentVolumeClaim, 2Gi, survives pod restarts)
+   ↓
+   What makes running more than 1 replica per service actually safe.
+```
+
+This is this project's real "why you'd want a PersistentVolumeClaim"
+story - not a generic example database.
+
+## ConfigMaps and Secrets, as Actually Used Here
+
+```
+Secret: ecommerce-secrets (k8s/base/01-secrets.yaml)
+└─ jwt-secret - the only thing in it. (Not db-username/password or a
+   redis-password - this project's H2/Postgres credentials and its
+   currently-unauthenticated local Redis don't need secret-sourced values;
+   see k8s/base/04-redis.yaml's own header for why.)
+
+customer-service's Deployment:
+   ↓
+env: JWT_SECRET valueFrom secretKeyRef(ecommerce-secrets, jwt-secret)
+   ↓
+Available to the app as the JWT_SECRET env var, same as docker-compose.yml
+```
+
+No per-service ConfigMap holding a mounted `application.yml` - the original
+version of these manifests did that, and it silently drifted from the
+image's own baked-in config (in one case fighting Flyway's own schema
+versioning). Every override here is a plain env var instead, matching how
+`docker-compose.yml` already does it.
+
+## Health Checks, With Real Endpoints
+
+```
+customer-service pod just started:
        ↓
-Kubernetes Service: "Here's the stable address: payment-service:8081"
+Kubernetes checks every 5s (periodSeconds) via Spring Boot Actuator:
+       GET http://pod-ip:8081/actuator/health/readiness
        ↓
-Order Pod gets routed to any available Payment Pod
+200 OK → Ready, traffic starts flowing
+Non-200 → wait, try again (up to failureThreshold: 3)
+
+Separately, every 15s:
+       GET http://pod-ip:8081/actuator/health/liveness
        ↓
-Payment Pod processes the request
+Non-200 across 3 tries → Kubernetes kills and restarts the pod
 ```
 
-### External Communication (Customer to API)
+Real endpoints, real intervals, straight from
+`k8s/base/08-customer-service.yaml` - not a generic `/health/live` example.
+
+## RBAC: Real, and Mostly for Learning Value
 
 ```
-Customer in browser
+ServiceAccount: customer-service-sa
        ↓
-Calls: your-app.com
+Role: read-ecommerce-secrets (get, on Secret "ecommerce-secrets" only)
        ↓
-Kubernetes Ingress Controller
-       ↓
-Routes to API Gateway Service
-       ↓
-API Gateway Service load-balances to any available Gateway Pod
-       ↓
-API Gateway routes to correct backend service
+RoleBinding ties them together
 ```
 
----
-
-## Pods and Deployments 📦
-
-### What is a Pod?
-
-```
-1 Pod = 1 or more containers (usually 1)
-
-Order Service Pod:
-└─ Container: order-service application
-   ├─ Code
-   ├─ Dependencies
-   ├─ Configuration
-   └─ Runs on a Node (physical machine)
-```
-
-### What is a Deployment?
-
-```
-Deployment: "Keep Order Service healthy"
-
-Deployment Controller watches:
-┌─────────────────────────────────────┐
-│ ORDER SERVICE DEPLOYMENT            │
-│ Desired: 3 pods                     │
-│ Current: 3 pods                     │
-│                                     │
-│ Pod 1: Running ✅                   │
-│ Pod 2: Running ✅                   │
-│ Pod 3: Running ✅                   │
-└─────────────────────────────────────┘
-
-If Pod 1 crashes:
-   ↓
-Deployment: "Should be 3, only 2 running!"
-   ↓
-Creates new Pod 4
-   ↓
-Back to 3 running!
-```
-
----
-
-## Nodes (The Kitchens) 🏪
-
-### What is a Node?
-
-```
-Node = Physical or virtual machine
-
-Node 1 (Powerful):
-├─ Payment Pod 1 (needs 1GB memory)
-├─ Payment Pod 2 (needs 1GB memory)
-└─ 4GB memory, 4 CPU cores
-
-Node 2 (Medium):
-├─ Order Pod 1 (needs 512MB)
-├─ Order Pod 2 (needs 512MB)
-├─ Notification Pod 1 (needs 256MB)
-└─ 2GB memory, 2 CPU cores
-
-Node 3 (Small):
-├─ Inventory Pod 1 (needs 512MB)
-└─ 1GB memory, 1 CPU core
-```
-
-### Kubernetes Scheduler
-
-```
-New Pod needs to be created
-       ↓
-Kubernetes Scheduler checks all nodes:
-   Node 1: Full ❌
-   Node 2: Enough space ✅
-   Node 3: Not enough memory ❌
-       ↓
-Scheduler: "Put it on Node 2"
-       ↓
-Pod created on Node 2
-```
-
----
-
-## The Deployment Lifecycle 🔄
-
-### Creating a Service
-
-```
-Step 1: Create Deployment definition
-   ↓ (YAML file)
-Step 2: kubectl apply -f deployment.yaml
-   ↓
-Step 3: Kubernetes creates 3 pods
-   ↓ (Based on desired replicas)
-Step 4: Pods start on available nodes
-   ↓
-Step 5: Kubernetes Service created
-   ↓ (Stable address for pods)
-Step 6: Pods ready to receive requests
-   ↓
-🎉 Service running!
-```
-
-### Updating a Service (Rolling Update)
-
-```
-Step 1: New version available (v2.0)
-   ↓
-Step 2: Update Deployment with new image
-   ↓
-Step 3: Kubernetes does rolling update:
-   
-   OLD: [Pod1 v1.0] [Pod2 v1.0] [Pod3 v1.0]
-       ↓
-   STEP 1: [Pod1 v2.0] [Pod2 v1.0] [Pod3 v1.0]
-       ↓
-   STEP 2: [Pod1 v2.0] [Pod2 v2.0] [Pod3 v1.0]
-       ↓
-   STEP 3: [Pod1 v2.0] [Pod2 v2.0] [Pod3 v2.0]
-       ↓
-Step 4: All updated, zero downtime! ✅
-```
-
----
-
-## Services (Stable Addresses) 📞
-
-### Service Types
-
-#### 1. ClusterIP (Internal Only)
-```
-Service: payment-service (ClusterIP)
-├─ Internal address: 10.0.0.5:8081
-├─ Only accessible within cluster
-└─ Routes to Payment Pods
-
-Order Pod:
-   ↓
-Calls: http://payment-service:8081
-   ↓
-Service load-balances to:
-   Pod A or Pod B or Pod C (whichever is free)
-```
-
-#### 2. NodePort (Expose to Outside)
-```
-Service: api-gateway (NodePort)
-├─ External port: 30000
-├─ Maps to: api-gateway Service
-└─ Accessible from outside cluster
-
-External:
-   ↓
-Calls: 192.168.1.100:30000
-   ↓
-Kubernetes routes to API Gateway Pod
-```
-
-#### 3. LoadBalancer (Best for Production)
-```
-Service: api-gateway (LoadBalancer)
-├─ Cloud provider load balancer
-├─ External IP: 35.192.50.100
-└─ Accessible from anywhere
-
-Customer:
-   ↓
-Calls: 35.192.50.100
-   ↓
-Load balancer distributes to Nodes
-   ↓
-API Gateway handles request
-```
-
----
-
-## Auto-Scaling 📈
-
-### How Kubernetes Scales
-
-```
-Metrics monitoring:
-   ↓
-CPU usage: 80% 🔴
-Memory usage: 75% 🟠
-   ↓
-Kubernetes Autoscaler checks limits:
-   "Service says max 5 pods"
-   "Current: 3 pods"
-   ↓
-Decision: Scale up!
-   ↓
-Create new pod
-   ↓
-Now: 4 pods
-   ↓
-Monitor again...
-
-After traffic goes down:
-   ↓
-CPU usage: 30% ✅
-Memory usage: 25% ✅
-   ↓
-Kubernetes: "We have too many pods"
-   ↓
-Scale down to 2 pods
-   ↓
-Save resources and money! 💰
-```
-
----
-
-## Persistent Data (Volumes) 💾
-
-### Why Pods Need Storage
-
-```
-Problem: Pods are temporary
-   ↓
-Pod deleted or moved
-   ↓
-Data inside pod GONE! ❌
-   ↓
-Solution: Kubernetes Volumes
-```
-
-### Volume Types
-
-```
-Type 1: emptyDir
-├─ Temporary storage
-├─ Deleted when pod deleted
-└─ Good for: Caches, temp files
-
-Type 2: hostPath
-├─ Storage on host node
-├─ Survives pod restart
-└─ Good for: Single node setups
-
-Type 3: PersistentVolume (PV)
-├─ Real storage (cloud storage)
-├─ Survives node restart
-└─ Good for: Production databases
-
-Example:
-Database Pod needs storage
-   ↓
-PersistentVolumeClaim: "I need 10GB"
-   ↓
-Kubernetes: "Creating 10GB storage volume"
-   ↓
-Pod mounts it: /data
-   ↓
-Data survives pod restart ✅
-```
-
----
-
-## ConfigMaps and Secrets 🔐
-
-### ConfigMap (Non-sensitive config)
-
-```
-ConfigMap: app-config
-├─ DATABASE_HOST=postgres.default
-├─ DATABASE_PORT=5432
-├─ LOG_LEVEL=INFO
-└─ API_TIMEOUT=30s
-
-Order Service Pod:
-   ↓
-Mounts ConfigMap as volume
-   ↓
-Reads configuration values
-   ↓
-Uses them in application
-```
-
-### Secret (Sensitive data)
-
-```
-Secret: app-secrets
-├─ DATABASE_PASSWORD=super-secret-123
-├─ API_KEY=abcd1234efgh5678
-└─ PAYMENT_TOKEN=xyz789
-
-Payment Service Pod:
-   ↓
-Mounts Secret (encrypted in etcd)
-   ↓
-Reads sensitive values
-   ↓
-Never exposed in logs or configs
-```
-
----
-
-## Health Checks 🏥
-
-### Liveness Probe (Is it alive?)
-
-```
-Payment Service Pod:
-   ↓
-Kubernetes checks every 10 seconds:
-   ↓
-Send request to: /health/live
-   ↓
-Response 200 OK ✅
-   Pod is alive!
-   ↓
-Response timeout ❌
-   Pod not responding!
-   ↓
-Kubernetes: Kill and restart this pod
-```
-
-### Readiness Probe (Can it handle traffic?)
-
-```
-Order Service Pod just started:
-   ↓
-Kubernetes checks every 5 seconds:
-   ↓
-Send request to: /health/ready
-   ↓
-Response 200 OK ✅
-   Pod is ready! Start sending traffic
-   ↓
-Response 500 ❌
-   Pod not ready! Don't send traffic yet
-   ↓
-Wait 10 more seconds and check again
-```
-
----
-
-## Namespaces (Virtual Clusters) 🏘️
-
-### What is a Namespace?
-
-```
-Cluster has 3 namespaces:
-
-Namespace: production
-├─ Order Service: 5 pods
-├─ Payment Service: 5 pods
-└─ Inventory Service: 3 pods
-
-Namespace: staging
-├─ Order Service: 2 pods
-├─ Payment Service: 2 pods
-└─ Inventory Service: 1 pod
-
-Namespace: development
-├─ Order Service: 1 pod
-├─ Payment Service: 1 pod
-└─ Inventory Service: 1 pod
-```
-
-### Benefits
-
-```
-✅ Isolation: Dev can't affect Production
-✅ Resource quotas: Dev gets 2 cores, Prod gets 16 cores
-✅ Policies: Different rules per namespace
-✅ Organization: Separate teams' services
-```
-
----
-
-## Monitoring and Logging 📊
-
-### What Kubernetes Tracks
-
-```
-Metrics collected for each pod:
-├─ CPU usage
-├─ Memory usage
-├─ Network traffic
-├─ Disk I/O
-├─ Restart count
-└─ Age
-
-Alerts triggered when:
-├─ Pod crashes (>3 restarts/hour)
-├─ Memory usage >90%
-├─ CPU usage >80%
-├─ Pod not ready for >5 minutes
-└─ Node unreachable
-```
-
-### Logging
-
-```
-Each pod's logs collected by Kubernetes:
-   ↓
-kubectl logs order-service-pod-1
-   ↓
-Shows all output from that pod
-   ↓
-Useful for debugging issues!
-```
-
----
-
-## Ingress (External Access) 🚪
-
-### What is Ingress?
-
-```
-┌─────────────────────────────────────┐
-│ OUTSIDE WORLD (Internet)            │
-└─────────────────────────────────────┘
-           ↓
-┌─────────────────────────────────────┐
-│ Ingress Controller (Load balancer)  │
-│ Reads Ingress rules                 │
-└─────────────────────────────────────┘
-           ↓
-Routes based on:
-├─ Hostname: api.example.com → API Gateway
-├─ Path: /admin → Admin Service
-└─ Path: /shop → Shop Service
-           ↓
-┌─────────────────────────────────────┐
-│ Kubernetes Services                 │
-│ (Internal network)                  │
-└─────────────────────────────────────┘
-```
-
----
-
-## Typical Deployment Flow in This Project 🚀
-
-```
-Developer pushes code to GitHub
-       ↓
-CI/CD Pipeline runs tests
-       ↓
-Tests pass ✅
-       ↓
-Build new container image
-       ↓
-Push to Docker Registry
-       ↓
-Update Kubernetes Deployment YAML
-   image: order-service:v2.0
-       ↓
-kubectl apply -f deployment.yaml
-       ↓
-Kubernetes starts rolling update:
-   Old pods: v1.0
-   New pods: v2.0 (gradual replacement)
-       ↓
-All pods updated with zero downtime! ✅
-       ↓
-Service running v2.0
-       ↓
-✅ Deployment complete!
-```
-
----
-
-## Commands You'll Use 💻
+Worth being honest about: none of these services actually call the
+Kubernetes API themselves (no client library in use anywhere in this
+codebase), so this Role doesn't change what the app can do -
+`secretKeyRef` env injection is resolved by the kubelet, not the pod's own
+RBAC permissions. It's here as a genuine, working least-privilege example
+and as the hook point if a service ever does need API access later - not
+because this app needs it today.
+
+## Commands That Actually Apply to This Project
 
 ```bash
-# See all pods
-kubectl get pods
+# See everything in this project's namespace
+kubectl get all -n ecommerce
 
-# Describe a pod
-kubectl describe pod order-service-pod-1
+# Deploy (pick one - see docs/KUBERNETES_DEPLOYMENT.md)
+kubectl apply -k k8s/overlays/h2
+kubectl apply -k k8s/overlays/postgres
 
-# View pod logs
-kubectl logs order-service-pod-1
+# Scale manually
+kubectl scale deployment -n ecommerce customer-service --replicas=4
 
-# Scale a deployment
-kubectl scale deployment order-service --replicas=5
+# Watch the real HPA react
+kubectl get hpa -n ecommerce -w
 
-# Update a deployment
-kubectl set image deployment/order-service \
-  order-service=order-service:v2.0
+# Logs from a real deployment here
+kubectl logs -n ecommerce -l app=customer-service --tail=100
 
-# See services
-kubectl get svc
-
-# See deployments
-kubectl get deployments
-
-# Delete a pod (it will restart)
-kubectl delete pod order-service-pod-1
+# Eureka's actual registered services
+kubectl exec -it -n ecommerce deploy/discovery-server -- \
+  curl -s http://localhost:8761/eureka/apps
 ```
 
 ---
 
-## Common Scenarios 🎯
-
-### Scenario 1: Traffic Spike
-```
-Traffic increases 10x
-       ↓
-Kubernetes detects high CPU/Memory
-       ↓
-Autoscaler creates new pods
-   1 pod → 3 pods → 10 pods
-       ↓
-Load balancer distributes requests
-       ↓
-All customers get responses! ✅
-```
-
-### Scenario 2: Pod Crash
-```
-Order Service Pod crashes 💥
-       ↓
-Kubernetes liveness probe fails
-       ↓
-Kubernetes: "Pod is dead, replacing it"
-       ↓
-Creates new pod
-       ↓
-Customers don't notice! ✅
-```
-
-### Scenario 3: Node Dies
-```
-Node 1 goes down completely 🔥
-       ↓
-Kubernetes detects: "Node 1 unreachable"
-       ↓
-Reschedules all pods from Node 1 to Node 2 & 3
-       ↓
-Everything still running! ✅
-```
-
-### Scenario 4: Update to New Version
-```
-New order-service v2.0 released
-       ↓
-Update deployment:
-   image: order-service:v2.0
-       ↓
-Kubernetes rolling update:
-   Stop 1 old pod
-   Start 1 new pod (v2.0)
-   Repeat for all pods
-       ↓
-Zero downtime! ✅
-```
-
----
-
-## Why Kubernetes Matters for Your Project 💡
-
-### Without Kubernetes
-```
-Each service on separate servers:
-   Server 1: Order Service (static)
-   Server 2: Payment Service (static)
-   Server 3: Inventory Service (static)
-   
-Problems:
-❌ Server crashes? Manual intervention
-❌ Traffic spike? Manual scaling
-❌ Update service? Downtime
-❌ Adding service? Buy new server
-❌ Wasted resources when traffic is low
-```
-
-### With Kubernetes
-```
-All services in Kubernetes cluster:
-   
-Benefits:
-✅ Automatic recovery from crashes
-✅ Automatic scaling based on traffic
-✅ Zero-downtime updates
-✅ Add services easily (just deploy)
-✅ Efficient resource usage
-✅ Monitoring and logging built-in
-✅ High availability out of the box
-```
-
----
-
-*Happy Learning! 🎉*
-
-*For more Kubernetes concepts, see KUBERNETES_FOR_BEGINNERS.md*
-
-*Last Updated: 2026-10-01*
+*For the genuinely generic Kubernetes concepts (what's a Pod, what's a
+Namespace, etc.) see [KUBERNETES_FOR_BEGINNERS.md](KUBERNETES_FOR_BEGINNERS.md)
+- that one isn't making project-specific claims, so it doesn't need the same
+grounding this file does. For the full deployment walkthrough, HPA load
+test, and the list of what was fixed vs. deliberately cut in this round, see
+[docs/KUBERNETES_DEPLOYMENT.md](../../KUBERNETES_DEPLOYMENT.md).*

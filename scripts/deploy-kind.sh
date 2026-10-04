@@ -1,9 +1,20 @@
 #!/bin/bash
+#
+# Usage: ./scripts/deploy-kind.sh [h2|postgres]
+# Defaults to h2 (the same default docker-compose.yml uses). Pass postgres
+# for a real shared database - needed once you run more than 1 replica per
+# service. See docs/KUBERNETES_DEPLOYMENT.md for the full walkthrough.
 
 set -e
 
+PROFILE="${1:-h2}"
+if [[ "$PROFILE" != "h2" && "$PROFILE" != "postgres" ]]; then
+    echo "Usage: $0 [h2|postgres]"
+    exit 1
+fi
+
 echo "==================================="
-echo "Kind Deployment Script"
+echo "Kind Deployment Script (profile: $PROFILE)"
 echo "==================================="
 
 CLUSTER_NAME="ecommerce"
@@ -34,43 +45,35 @@ EOF
 fi
 
 echo ""
+echo "Installing metrics-server (required for the HPAs in k8s/base to report real numbers)..."
+echo "Kind's kubelet serving certs aren't signed by a CA metrics-server trusts by default -"
+echo "this patches it to skip that verification, fine for a local learning cluster."
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+kubectl patch deployment metrics-server -n kube-system --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]' \
+  2>/dev/null || true
+
+echo ""
 echo "Building Docker images..."
-for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service; do
+for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service notification-service; do
     echo "Building $service..."
     docker build -f Dockerfile.$service -t micro-ecommerce:$service . || exit 1
 done
 
 echo ""
 echo "Loading images into Kind cluster..."
-for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service; do
+for service in discovery-server config-server api-gateway customer-service order-service inventory-service payment-service notification-service; do
     echo "Loading $service..."
     kind load docker-image micro-ecommerce:$service --name $CLUSTER_NAME
 done
 
 echo ""
-echo "Deploying to Kind cluster..."
+echo "Deploying to Kind cluster ($PROFILE profile)..."
 
 # Switch to Kind cluster context
 kubectl cluster-info --context kind-$CLUSTER_NAME
 
-# Deploy in order
-kubectl apply -f k8s/00-namespace.yaml
-sleep 2
-kubectl apply -f k8s/01-secrets.yaml
-kubectl apply -f k8s/02-configmaps.yaml
-sleep 2
-kubectl apply -f k8s/03-infrastructure.yaml
-sleep 5
-kubectl apply -f k8s/04-discovery-server.yaml
-sleep 5
-kubectl apply -f k8s/05-config-server.yaml
-sleep 5
-kubectl apply -f k8s/06-api-gateway.yaml
-sleep 5
-kubectl apply -f k8s/07-customer-service.yaml
-kubectl apply -f k8s/08-order-service.yaml
-kubectl apply -f k8s/09-inventory-service.yaml
-kubectl apply -f k8s/10-payment-service.yaml
+kubectl apply -k "k8s/overlays/$PROFILE"
 
 echo ""
 echo "==================================="
@@ -78,7 +81,7 @@ echo "Deployment Complete!"
 echo "==================================="
 echo ""
 echo "Waiting for pods to be ready..."
-sleep 10
+kubectl wait --for=condition=Ready pods --all -n ecommerce --timeout=300s || true
 
 echo ""
 echo "Pod Status:"
@@ -89,6 +92,11 @@ echo "Service Status:"
 kubectl get svc -n ecommerce
 
 echo ""
-echo "To access API Gateway on localhost:"
-echo "  http://localhost:8080/api/customers"
+echo "HPA Status (TARGETS stays <unknown> for a minute or two after metrics-server starts):"
+kubectl get hpa -n ecommerce
+
+echo ""
+echo "To access API Gateway:"
+echo "  kubectl port-forward -n ecommerce svc/api-gateway 8080:80"
+echo "  curl http://localhost:8080/api/customers"
 echo ""

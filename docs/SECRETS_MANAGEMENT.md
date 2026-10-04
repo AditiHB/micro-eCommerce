@@ -18,36 +18,49 @@ This document provides comprehensive guidance on managing sensitive data (JWT ke
 
 ### Kubernetes Secrets (Local Development)
 
-For local development using Docker Desktop or minikube, we use Kubernetes Secrets with base64 encoding.
+> **Note (Kubernetes rework):** the split `ecommerce-secrets` *namespace*
+> design this section used to describe (`k8s/15-secrets-namespace.yaml` /
+> `16-service-secrets.yaml` / `17-service-secrets-env.yaml`) was removed, not
+> just moved - it was architecturally impossible as designed. A Pod's
+> `env.valueFrom.secretKeyRef` can only reference a Secret in that Pod's own
+> namespace; it can't reach across to a separate `ecommerce-secrets`
+> namespace no matter what RBAC `Role`/`RoleBinding` grants the Pod's
+> `ServiceAccount` read access to (that controls API calls the app itself
+> makes, not what the kubelet can inject as env vars). `17-service-secrets-
+> env.yaml` additionally used `kind: Patch`, which isn't a real Kubernetes
+> API kind at all - `kubectl apply` would have rejected it outright. See
+> `docs/KUBERNETES_DEPLOYMENT.md`'s "What this round didn't cover" for the
+> full reasoning.
+>
+> What secrets actually exist now: one `Secret` (`ecommerce-secrets`) in the
+> same `ecommerce` namespace as every pod that needs it -
+> `k8s/base/01-secrets.yaml`, holding just `jwt-secret` (this project's H2/
+> Postgres credentials and its currently-unauthenticated local Redis don't
+> need secret-sourced values - see `k8s/base/04-redis.yaml`'s own header).
+> If you want centralized, cross-service secret management for real, that's
+> what a tool like Vault or the External Secrets Operator is for - neither
+> is wired into this project.
 
-#### Step 1: Create Secrets Namespace
+For local development using Docker Desktop, Minikube, or Kind, this project uses a single Kubernetes Secret with base64-encoded values.
+
+#### Step 1: Deploy the base stack (creates the Secret as part of it)
 
 ```bash
-kubectl apply -f k8s/15-secrets-namespace.yaml
-```
-
-#### Step 2: Create Secrets
-
-```bash
-kubectl apply -f k8s/16-service-secrets.yaml
+kubectl apply -k k8s/overlays/h2
 ```
 
 #### Secrets Available
 
-- **jwt-secret**: JWT token signing key
-- **database-credentials**: Database connection credentials (username/password)
-- **redis-credentials**: Redis authentication password
-- **kafka-credentials**: Kafka broker credentials
-- **elasticsearch-credentials**: Elasticsearch authentication
+- **jwt-secret**: JWT token signing key (the only one currently used - see the note above for why database/Redis credentials aren't secret-sourced here)
 
-#### Step 3: Verify Secrets
+#### Step 2: Verify
 
 ```bash
 # List all secrets
-kubectl get secrets -n ecommerce-secrets
+kubectl get secrets -n ecommerce
 
-# View a secret (base64 decoded)
-kubectl get secret jwt-secret -n ecommerce-secrets -o jsonpath='{.data.secret}' | base64 -d
+# View it (base64 decoded)
+kubectl get secret ecommerce-secrets -n ecommerce -o jsonpath='{.data.jwt-secret}' | base64 -d
 ```
 
 ### Environment Variables
@@ -426,14 +439,13 @@ mvn clean install
 mvn spring-boot:run
 ```
 
-### Local Kubernetes (minikube/Docker Desktop)
+### Local Kubernetes (Minikube/Kind)
 
 ```bash
-# Create secrets from YAML
-kubectl apply -f k8s/16-service-secrets.yaml
-
-# Deploy services
-kubectl apply -f k8s/
+# Creates the Secret as part of the whole base stack - see the note near
+# the top of this document for why there's no separate secrets-only step
+# anymore.
+kubectl apply -k k8s/overlays/h2
 ```
 
 ### Staging (Kubernetes with Encryption)

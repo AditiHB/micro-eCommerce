@@ -1,5 +1,14 @@
 # SSL/TLS Setup and Configuration Guide
 
+> **Note (Kubernetes rework):** the nginx manifests this guide references
+> moved to `k8s/nginx-https/` (`configmap.yaml`/`deployment.yaml`/
+> `service.yaml`, no more numeric prefixes) and are not verified working
+> end-to-end as of this pass - see that folder's own README and
+> `docs/KUBERNETES_DEPLOYMENT.md`'s "What this round didn't cover" for
+> specifics (namely: the `nginx-tls` Secret it mounts has to be created by
+> hand now that the cert-manager setup that used to produce it has been
+> removed - see `docs/MTLS_CONFIGURATION.md`'s own notice for why).
+
 ## Overview
 
 This guide covers SSL/TLS termination at the Nginx reverse proxy for the micro-ecommerce platform. All HTTPS traffic terminates at Nginx, with internal service-to-service communication using HTTP.
@@ -221,9 +230,9 @@ All services communicate via internal DNS:
 
 ### Prerequisites
 
-1. Create namespace:
+1. Deploy the base stack (creates the namespace as part of it):
 ```bash
-kubectl apply -f k8s/00-namespace.yaml
+kubectl apply -k k8s/overlays/h2
 ```
 
 2. Create TLS secret:
@@ -238,11 +247,11 @@ kubectl create secret tls nginx-tls \
 
 ```bash
 # Deploy ConfigMap with Nginx configuration
-kubectl apply -f k8s/08-nginx-configmap.yaml
+kubectl apply -f k8s/nginx-https/configmap.yaml
 
 # Deploy Nginx Deployment and Service
-kubectl apply -f k8s/09-nginx-deployment.yaml
-kubectl apply -f k8s/10-nginx-service.yaml
+kubectl apply -f k8s/nginx-https/deployment.yaml
+kubectl apply -f k8s/nginx-https/service.yaml
 ```
 
 ### Verify Deployment

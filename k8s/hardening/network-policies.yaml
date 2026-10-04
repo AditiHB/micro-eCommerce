@@ -1,0 +1,464 @@
+# Optional, zero-trust network policy layer. NOT applied by the default
+# k8s/overlays/h2 or k8s/overlays/postgres deploy - apply on top, once the
+# base stack is already up and verified working, with:
+#
+#   kubectl apply -f k8s/hardening/network-policies.yaml
+#
+# Requires a CNI that actually enforces NetworkPolicy (Kind's default CNI
+# does; plain Minikube's default CNI does not until you start it with
+# `--cni=calico` or similar - see docs/KUBERNETES_DEPLOYMENT.md). Without
+# enforcement, these objects apply cleanly but silently do nothing.
+#
+# This is a full rewrite, not the original k8s/21-network-policies.yaml with
+# labels patched - that file would have taken the whole app down if applied:
+#   - Its only rule letting anything reach api-gateway required traffic to
+#     come from a pod in a namespace labeled `name: ingress-nginx`, which
+#     doesn't exist anywhere in this project.
+#   - Its tier-based database rule needed pods labeled `tier: service` /
+#     `tier: database`; nothing in the original manifests carried those
+#     labels, so every service's path to Redis was silently dropped too.
+#   - It never had an ingress rule for discovery-server or config-server at
+#     all - under default-deny-ingress, Eureka registration (and so the
+#     gateway's lb:// routing) would have been unreachable cluster-wide,
+#     independent of every other bug.
+#   - It referenced a `vault` namespace and a `monitoring` namespace +
+#     `prometheus` pod label that don't exist anywhere in this project
+#     (Vault was dropped; the observability stack only exists in Docker
+#     Compose, never deployed to Kubernetes) - removed rather than carried
+#     forward as dead config.
+#
+# This version is built from the real dependency graph instead: the
+# Kafka-choreographed saga between order/inventory/payment-service, the two
+# direct REST calls notification-service makes (to customer-service and
+# order-service), and every service's Eureka/config-server/Kafka/Redis
+# dependencies as wired in k8s/base.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ecommerce
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: ecommerce
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+---
+# api-gateway is this app's deliberately exposed edge - reachable from
+# anywhere (the cluster's own LoadBalancer Service, kubectl port-forward,
+# or the optional nginx-https reverse proxy), not just from inside the
+# cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-api-gateway
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+  - Ingress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-gateway-egress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: api-gateway
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: discovery-server
+    ports:
+    - protocol: TCP
+      port: 8761
+  - to:
+    - podSelector:
+        matchLabels:
+          app: config-server
+    ports:
+    - protocol: TCP
+      port: 8888
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - podSelector:
+        matchLabels:
+          app: customer-service
+    ports:
+    - protocol: TCP
+      port: 8081
+  - to:
+    - podSelector:
+        matchLabels:
+          app: order-service
+    ports:
+    - protocol: TCP
+      port: 8083
+  - to:
+    - podSelector:
+        matchLabels:
+          app: inventory-service
+    ports:
+    - protocol: TCP
+      port: 8082
+  - to:
+    - podSelector:
+        matchLabels:
+          app: payment-service
+    ports:
+    - protocol: TCP
+      port: 8084
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+---
+# Every service - including discovery-server and config-server themselves,
+# for completeness - needs to reach Eureka and the config server. Expressed
+# once per direction via the shared `tier: service` label rather than
+# repeated per service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-discovery-server
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: discovery-server
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          tier: service
+    ports:
+    - protocol: TCP
+      port: 8761
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-config-server
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: config-server
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          tier: service
+    ports:
+    - protocol: TCP
+      port: 8888
+---
+# Egress for the 5 business services: Eureka, config-server, Kafka, and
+# whatever direct REST/database calls each one actually makes - not a
+# blanket tier-to-tier allow, so this stays honest about who really talks to
+# whom.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-business-service-egress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      tier: service
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: discovery-server
+    ports:
+    - protocol: TCP
+      port: 8761
+  - to:
+    - podSelector:
+        matchLabels:
+          app: config-server
+    ports:
+    - protocol: TCP
+      port: 8888
+  - to:
+    - podSelector:
+        matchLabels:
+          app: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  - to:
+    - podSelector:
+        matchLabels:
+          tier: database
+    ports:
+    - protocol: TCP
+      port: 6379  # redis
+    - protocol: TCP
+      port: 5432  # postgres (overlays/postgres only - harmless no-op under overlays/h2)
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-customer-service-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: customer-service
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    - podSelector:
+        matchLabels:
+          app: notification-service
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-order-service-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: order-service
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    - podSelector:
+        matchLabels:
+          app: notification-service
+    ports:
+    - protocol: TCP
+      port: 8083
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-inventory-service-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: inventory-service
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8082
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-payment-service-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: payment-service
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8084
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-notification-service-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: notification-service
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8086
+---
+# Kafka/Zookeeper/Redis/Postgres only ever need to hear from the app tier
+# (or, for Zookeeper, from Kafka itself) - never from each other sideways.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: kafka
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          tier: service
+    ports:
+    - protocol: TCP
+      port: 9092
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafka-egress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: kafka
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: zookeeper
+    ports:
+    - protocol: TCP
+      port: 2181
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-zookeeper-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: zookeeper
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: kafka
+    ports:
+    - protocol: TCP
+      port: 2181
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          tier: service
+    ports:
+    - protocol: TCP
+      port: 6379
+---
+# Only matches under overlays/postgres - overlays/h2 never creates a pod
+# labeled app: postgres, so this is a harmless no-op there.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          tier: service
+    ports:
+    - protocol: TCP
+      port: 5432

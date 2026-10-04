@@ -1,34 +1,40 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api-gateway
+  name: payment-service
   namespace: ecommerce
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: api-gateway
+      app: payment-service
   template:
     metadata:
       labels:
-        app: api-gateway
+        app: payment-service
+        tier: service
     spec:
+      serviceAccountName: payment-service-sa
       containers:
-      - name: api-gateway
-        image: micro-ecommerce:api-gateway
+      - name: payment-service
+        image: micro-ecommerce:payment-service
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 8080
+        - containerPort: 8084
         env:
-        - name: SERVER_PORT
-          value: "8080"
+        - name: SPRING_CONFIG_IMPORT
+          value: "optional:configserver:http://config-server:8888/"
+        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+          value: "http://discovery-server:8761/eureka/"
+        - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+          value: "true"
+        - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
         - name: JWT_SECRET
           valueFrom:
             secretKeyRef:
               name: ecommerce-secrets
               key: jwt-secret
-        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
-          value: "http://discovery-server:8761/eureka/"
         resources:
           requests:
             cpu: 250m
@@ -39,7 +45,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8080
+            port: 8084
           initialDelaySeconds: 60
           periodSeconds: 15
           timeoutSeconds: 5
@@ -47,29 +53,22 @@ spec:
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8080
+            port: 8084
           initialDelaySeconds: 45
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        volumeMounts:
-        - name: config
-          mountPath: /app/config
-      volumes:
-      - name: config
-        configMap:
-          name: api-gateway-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: api-gateway
+  name: payment-service
   namespace: ecommerce
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   selector:
-    app: api-gateway
+    app: payment-service
   ports:
-  - port: 80
-    targetPort: 8080
+  - port: 8084
+    targetPort: 8084
     protocol: TCP

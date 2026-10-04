@@ -1,27 +1,34 @@
+# No ConfigMap volume mount here (the original manifest mounted a
+# discovery-server-config ConfigMap at /app/config/application.yml) - it
+# duplicated values already baked into the image's own classpath
+# application.yml and had drifted from it in places (e.g. a hardcoded
+# ddl-auto: update elsewhere in that same pattern, fighting Flyway's own
+# schema versioning - see docs/KUBERNETES_DEPLOYMENT.md). Matching
+# docker-compose.yml's own approach instead: only override what actually
+# needs to differ per-environment, as plain env vars.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: config-server
+  name: discovery-server
   namespace: ecommerce
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: config-server
+      app: discovery-server
   template:
     metadata:
       labels:
-        app: config-server
+        app: discovery-server
+        tier: service
     spec:
+      serviceAccountName: discovery-server-sa
       containers:
-      - name: config-server
-        image: micro-ecommerce:config-server
+      - name: discovery-server
+        image: micro-ecommerce:discovery-server
         imagePullPolicy: IfNotPresent
         ports:
-        - containerPort: 8888
-        env:
-        - name: SERVER_PORT
-          value: "8888"
+        - containerPort: 8761
         resources:
           requests:
             cpu: 250m
@@ -32,7 +39,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8888
+            port: 8761
           initialDelaySeconds: 45
           periodSeconds: 10
           timeoutSeconds: 5
@@ -40,29 +47,22 @@ spec:
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8888
+            port: 8761
           initialDelaySeconds: 30
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        volumeMounts:
-        - name: config
-          mountPath: /app/config
-      volumes:
-      - name: config
-        configMap:
-          name: config-server-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: config-server
+  name: discovery-server
   namespace: ecommerce
 spec:
   type: ClusterIP
   selector:
-    app: config-server
+    app: discovery-server
   ports:
-  - port: 8888
-    targetPort: 8888
+  - port: 8761
+    targetPort: 8761
     protocol: TCP

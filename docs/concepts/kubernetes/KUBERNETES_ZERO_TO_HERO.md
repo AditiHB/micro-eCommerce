@@ -111,10 +111,12 @@ User: https://api.example.com/orders
 
 **In the Project:**
 ```
-api.example.com     → Order Service
-payment.example.com → Payment Service
-inventory.example.com → Inventory Service
-admin.example.com   → Admin Dashboard
+This project doesn't use Ingress at all - api-gateway's own Service is
+type: LoadBalancer (k8s/base/07-api-gateway.yaml), and it does the
+path-based routing itself (uri: lb://order-service, Path=/api/orders/**,
+etc. - already baked into its image). k8s/nginx-https is an optional,
+not-yet-verified alternative front door (see its own README), also not an
+Ingress resource - a plain nginx Deployment doing its own proxy_pass.
 ```
 
 ---
@@ -205,16 +207,17 @@ spec:
 
 **In the Project:**
 ```
-Deployments (Stateless):
-├─ Order Service
-├─ Payment Service
-├─ Inventory Service
-├─ Notification Service
-└─ Delivery Service
+Deployments (Stateless - k8s/base):
+├─ api-gateway, customer/order/inventory/payment/notification-service
+└─ discovery-server, config-server, zookeeper, kafka
 
-StatefulSet (Stateful):
-└─ Database (MySQL/PostgreSQL)
+StatefulSets (Stateful):
+├─ redis (k8s/base/04-redis.yaml)
+└─ postgres (k8s/overlays/postgres/postgres.yaml - only under that profile;
+   overlays/h2 has no StatefulSet at all, each service's own in-process H2
+   lives inside its stateless pod)
 ```
+No Delivery Service - that's not a real part of this project.
 
 ---
 
@@ -354,14 +357,12 @@ spec:
 
 **In the Project:**
 ```
-Jobs:
-├─ Database migration (when deploying)
-└─ Initial data seeding
-
-CronJobs:
-├─ Daily backup (2 AM)
-├─ Hourly report generation
-└─ Weekly analytics update
+No Job or CronJob objects exist in this project's k8s/ at all. Database
+migration (Flyway) isn't a separate Job here - it runs automatically as
+part of each service's own Spring Boot startup, against whichever
+datasource profile is active (H2 or Postgres - see
+docs/KUBERNETES_DEPLOYMENT.md's "Switching to Postgres"). No backup or
+reporting CronJob is deployed either.
 ```
 
 ---
@@ -660,27 +661,19 @@ subjects:
 
 **In the Project:**
 ```
-DevOps Team:
-├─ Role: Admin
-├─ Can: Everything
-└─ Namespaces: All
+No human/team RBAC exists here (no DevOps/Developer/QA Role bound to a
+User) - everything in k8s/base/02-rbac.yaml is per-service:
 
-Developers:
-├─ Role: Developer
-├─ Can: Get, list, create, update
-├─ Cannot: Delete, modify production
-└─ Namespace: staging
+customer-service-sa (and one more per service):
+├─ Role: read-ecommerce-secrets
+├─ Can: get, on Secret "ecommerce-secrets" only
+└─ Namespace: ecommerce
 
-QA Team:
-├─ Role: Viewer
-├─ Can: Get, list (read-only)
-└─ Namespaces: All
-
-Application (ServiceAccount):
-├─ Role: Limited
-├─ Can: Create pods only
-├─ Cannot: Access secrets
-└─ Namespace: production
+Worth being honest about: none of these services actually call the
+Kubernetes API themselves, so this Role doesn't change what the app can do
+- secretKeyRef env injection is resolved by the kubelet, not the pod's own
+RBAC. It's a genuine, working least-privilege example, not something this
+app's code currently exercises.
 ```
 
 ---
@@ -820,18 +813,25 @@ spec:
 
 **In the Project:**
 ```
-Lightweight services (API):
+api-gateway + all 5 business services (k8s/base):
 ├─ Request: 256Mi memory, 250m CPU
 └─ Limit: 512Mi memory, 500m CPU
 
-Medium services (Processing):
-├─ Request: 512Mi memory, 500m CPU
+kafka (k8s/base/03-messaging.yaml - the heaviest thing here):
+├─ Request: 512Mi memory, 250m CPU
 └─ Limit: 1Gi memory, 1000m CPU
 
-Heavy services (Database):
-├─ Request: 2Gi memory, 2000m CPU
-└─ Limit: 4Gi memory, 4000m CPU
+redis / zookeeper:
+├─ Request: 128-256Mi memory, 100m CPU
+└─ Limit: 512Mi memory, 500m CPU
+
+postgres (k8s/overlays/postgres only):
+├─ Request: 256Mi memory, 250m CPU
+└─ Limit: 1Gi memory, 1000m CPU
 ```
+These are what the HPA's 70%-of-request CPU target in
+k8s/base/13-hpa.yaml actually scales against - see
+docs/KUBERNETES_DEPLOYMENT.md's "Scaling" section for the real load test.
 
 ---
 
