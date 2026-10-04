@@ -40,6 +40,7 @@ Feature: Transactional rollback on constraint violation
   Scenario: Second payment for the same order is rolled back, leaving the original payment untouched
 
     * def orderId = Java.type('java.lang.System').currentTimeMillis()
+    * showcase.event('Using synthetic orderId ' + orderId + ' - no real order behind it, so there is zero race with the Kafka saga; this exercises PaymentService.processPayment in total isolation.')
 
     # First payment for this orderId: succeeds normally.
     Given path '/api/payments'
@@ -49,16 +50,19 @@ Feature: Transactional rollback on constraint violation
     And match response.status == 'PROCESSED'
     * def originalPaymentId = response.id
     * def originalAmount = response.amount
+    * showcase.event('Payment ' + originalPaymentId + ' committed normally at ' + originalAmount + ' - this INSERT actually ran and succeeded.')
     * showcase.show('Payment ' + originalPaymentId + ' for order ' + orderId + ' - first call, committed', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
     # Second payment for the SAME orderId: saveAndFlush's INSERT hits the
     # unique constraint mid-transaction. The whole method rolls back and
     # throws a BusinessException instead of leaving a half-applied row.
+    * showcase.event('Sending a SECOND payment (999.99) for the SAME orderId - saveAndFlush will force this INSERT to run immediately and hit the unique constraint, inside this very request.')
     Given path '/api/payments'
     And request { orderId: '#(orderId)', amount: 999.99 }
     When method post
     Then status 400
     And match response.errorCode == 'PAYMENT_ALREADY_EXISTS'
+    * showcase.event('Rejected cleanly with 400 PAYMENT_ALREADY_EXISTS, not a 500 - the whole @Transactional method rolled back the instant the constraint fired.')
 
     # Atomicity check: the original payment must be completely unchanged -
     # not overwritten with the second call's amount/PROCESSING status
@@ -70,4 +74,5 @@ Feature: Transactional rollback on constraint violation
     Then status 200
     And match response.amount == originalAmount
     And match response.status == 'PROCESSED'
+    * showcase.event('Atomicity confirmed: amount is still ' + originalAmount + ', not 999.99 - the rolled-back transaction left zero trace behind, not a half-applied row.')
     * showcase.show('Payments for order ' + orderId + ' - still exactly one row, unchanged', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)

@@ -66,6 +66,18 @@ public class DataShowcase {
         System.out.println("\n----- " + label + " -----\n" + content);
     }
 
+    /**
+     * Narrates a significant moment in the scenario as it happens - what
+     * just occurred and why it matters (a saga step firing, a race being
+     * resolved, a compensating transaction kicking in) - as distinct from
+     * {@link #show}'s raw data snapshots. Point of this: someone reading a
+     * run's console/report output should be able to follow the story
+     * without already knowing the production code.
+     */
+    public static void event(String message) {
+        System.out.println(">>> " + message);
+    }
+
     private static String renderTable(ResultSet rs) throws SQLException {
         ResultSetMetaData meta = rs.getMetaData();
         int columnCount = meta.getColumnCount();

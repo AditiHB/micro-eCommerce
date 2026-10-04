@@ -52,6 +52,7 @@ Feature: Gateway resilience patterns
     * def docker = Java.type('e2e.DockerControl')
     # Guaranteed to run even if an assertion below fails.
     * configure afterScenario = function(){ docker.start('payment-service') }
+    * showcase.event('Stopping payment-service to force real connection failures through the gateway - not a mock, a genuinely unreachable backend.')
     * docker.stop('payment-service')
 
     # A fresh, unique orderId - "one payment per order" is now an atomic DB
@@ -74,6 +75,7 @@ Feature: Gateway resilience patterns
     Then status 503
     And match response.circuitBreakerStatus == 'OPEN'
     And match response.error == 'Service Unavailable'
+    * showcase.event('Circuit breaker OPEN after enough failed calls - the gateway is now fast-failing every request instead of waiting on a dead backend each time.')
     * showcase.show('Payments for order ' + orderId + ' while breaker is OPEN - expect zero rows (payment-service never reached)', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
     # Recovery: restart the container, wait past waitDurationInOpenState
@@ -81,6 +83,7 @@ Feature: Gateway resilience patterns
     # (half-open -> closed) once it's actually reachable.
     * docker.start('payment-service')
     * assert docker.waitUntilHealthy('payment-service', 60)
+    * showcase.event('payment-service back up and healthy - the breaker will probe it on the next call (half-open) and close again once that succeeds.')
 
     * configure retry = { count: 20, interval: 3000 }
     Given path '/api/payments'
@@ -89,6 +92,7 @@ Feature: Gateway resilience patterns
     When method post
     Then status 201
     And match response.status == 'PROCESSED'
+    * showcase.event('Breaker transitioned OPEN -> HALF_OPEN -> CLOSED - real traffic flows normally again now that the backend is actually reachable.')
     * showcase.show('Payment for order ' + orderId + ' after recovery', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
   Scenario: Gateway rate limiter returns 429 once a route's per-minute budget is exceeded
@@ -104,8 +108,10 @@ Feature: Gateway resilience patterns
     # 429 that has nothing to do with whatever IT's testing.
     * def docker = Java.type('e2e.DockerControl')
     * configure afterScenario = function(){ docker.clearRateLimitKeys() }
+    * showcase.event('Firing 60 rapid requests at the payment route (50/min budget) - this state lives in Redis, not Postgres, so there is no SQL table to show here.')
 
     * def probe = function(){ return karate.call('classpath:e2e/rate-limit-probe.feature', { gatewayUrl: gatewayUrl, authToken: authToken }) }
     * def statuses = []
     * eval for (var i = 0; i < 60; i++) { statuses.push(probe().responseStatus) }
     * assert statuses.includes(429)
+    * showcase.event('Budget exceeded - at least one request got 429 before the loop finished, confirming the atomic INCR-based limiter actually counts every hit.')

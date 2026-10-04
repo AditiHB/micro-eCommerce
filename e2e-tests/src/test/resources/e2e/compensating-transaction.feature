@@ -57,6 +57,7 @@ Feature: Saga compensating transaction on microservice failure
     * def productId = catalogueItem.productId
     * def availableQty = catalogueItem.quantity
     * def requestedQty = availableQty + 1000000
+    * showcase.event(productId + ' has ' + availableQty + ' units on hand - requesting ' + requestedQty + ', guaranteed to exceed it.')
 
     # 2. A customer to place the order as
     * def uniqueId = Java.type('java.util.UUID').randomUUID() + ''
@@ -75,6 +76,7 @@ Feature: Saga compensating transaction on microservice failure
     Then status 201
     And match response.status == 'PENDING'
     * def orderId = response.id
+    * showcase.event('Order ' + orderId + ' created as PENDING - order-service has no idea stock is insufficient, that check happens over in InventoryEventListener once it consumes OrderCreatedEvent.')
     * showcase.show('Order ' + orderId + ' created (PENDING, quantity=' + requestedQty + ')', 'order_db', 'SELECT id, product_id, quantity, status FROM orders WHERE id=' + orderId)
 
     # 4. Poll until the saga's compensating transaction has run: order-service
@@ -85,6 +87,7 @@ Feature: Saga compensating transaction on microservice failure
     When method get
     Then status 200
     And match response.status == 'CANCELLED'
+    * showcase.event('Compensating transaction fired: InventoryEventListener published InventoryFailedEvent, and OrderEventListener.handleInventoryFailed consumed it and cancelled the order - this is the rollback of step 3.')
     * showcase.show('Order ' + orderId + ' compensated (CANCELLED)', 'order_db', 'SELECT id, status, updated_at FROM orders WHERE id=' + orderId)
 
     # 5. Confirm Inventory Service's side of the compensation: since nothing
@@ -94,6 +97,7 @@ Feature: Saga compensating transaction on microservice failure
     When method get
     Then status 200
     And match response.quantity == availableQty
+    * showcase.event('Stock confirmed untouched - nothing was ever reserved on the insufficient-stock path, so there was nothing for Inventory Service to release either.')
     * showcase.show('Inventory for ' + productId + ' - untouched', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
     * showcase.show('Payments for order ' + orderId + ' - expect zero rows', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
@@ -111,4 +115,5 @@ Feature: Saga compensating transaction on microservice failure
     And assert notificationTypes.includes('ORDER_CREATED')
     And assert !notificationTypes.includes('PAYMENT_SUCCESS')
     And assert !notificationTypes.includes('PAYMENT_FAILED')
+    * showcase.event('Saga never reached Payment Service at all - confirmed by the total absence of any payment notification, not just a payment row.')
     * showcase.show('Notifications for order ' + orderId + ' - ORDER_CREATED only', 'notification_db', 'SELECT id, type, status, subject FROM notifications WHERE order_id=' + orderId + ' ORDER BY id')

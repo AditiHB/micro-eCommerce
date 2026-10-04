@@ -18,6 +18,7 @@ Feature: Customer journey end-to-end
     Then status 200
     * def authToken = response.token
     * configure headers = { Authorization: '#("Bearer " + authToken)' }
+    * showcase.event('Authenticated as karate_admin (ADMIN) - token acquired for every call below.')
 
   Scenario: Create a customer, browse the catalogue, order, pay, get notified
 
@@ -29,6 +30,7 @@ Feature: Customer journey end-to-end
     Then status 201
     And match response.id == '#number'
     * def customerId = response.id
+    * showcase.event('Customer ' + customerId + ' created - a plain CRUD write, nothing published to Kafka yet.')
     * showcase.show('Customer ' + customerId + ' created', 'customer_db', 'SELECT id, name, email FROM customers WHERE id=' + customerId)
 
     # 2. See the product catalogue (Inventory Service - product-service
@@ -40,6 +42,7 @@ Feature: Customer journey end-to-end
     And assert response.content.length >= 1
     * def catalogueItem = response.content[0]
     * def productId = catalogueItem.productId
+    * showcase.event('Picked ' + productId + ' from the catalogue (' + catalogueItem.quantity + ' units on hand) to order against.')
 
     # 3. Create an order for a product from the catalogue
     Given path '/api/orders'
@@ -50,6 +53,7 @@ Feature: Customer journey end-to-end
     And match response.productId == productId
     And match response.status == 'PENDING'
     * def orderId = response.id
+    * showcase.event('Order ' + orderId + ' created as PENDING - order-service publishes OrderCreatedEvent. Two independent Kafka consumers react from here: InventoryEventListener (reserve stock) and NotificationEventListener (send "order received").')
     * showcase.show('Order ' + orderId + ' created (PENDING)', 'order_db', 'SELECT id, customer_id, product_id, quantity, status FROM orders WHERE id=' + orderId)
     * showcase.show('Inventory for ' + productId + ' right after order creation', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
 
@@ -69,6 +73,8 @@ Feature: Customer journey end-to-end
     When method post
     Then assert responseStatus == 201 || responseStatus == 400
     * if (responseStatus == 400 && response.errorCode != 'PAYMENT_ALREADY_EXISTS') karate.fail('unexpected 400 processing payment: ' + JSON.stringify(response))
+    * if (responseStatus == 201) showcase.event('This direct POST won the race - it created the payment itself (amount 49.99).')
+    * if (responseStatus == 400) showcase.event('PaymentEventListener\'s automatic saga payment won the race instead - this direct POST got a clean 400 PAYMENT_ALREADY_EXISTS (the DB\'s unique constraint on orderId is what actually decides it), not a double charge.')
 
     # 5. See Notification Service in action - order-created and
     # payment-processed are consumed off Kafka asynchronously, so poll until
@@ -84,6 +90,7 @@ Feature: Customer journey end-to-end
     * def notificationTypes = karate.jsonPath(orderNotifications, '$[*].type')
     And assert notificationTypes.includes('ORDER_CREATED')
     And assert notificationTypes.includes('PAYMENT_SUCCESS')
+    * showcase.event('Saga settled: both notifications delivered, so the order is confirmed paid end to end regardless of which path actually created the payment.')
 
     # Final state across every service once the saga has settled.
     * showcase.show('Order ' + orderId + ' final state', 'order_db', 'SELECT id, status, updated_at FROM orders WHERE id=' + orderId)
