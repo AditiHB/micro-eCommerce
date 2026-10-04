@@ -22,6 +22,7 @@ spec:
         app: discovery-server
         tier: service
     spec:
+      enableServiceLinks: false
       serviceAccountName: discovery-server-sa
       containers:
       - name: discovery-server

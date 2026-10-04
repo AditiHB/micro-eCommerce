@@ -18,11 +18,16 @@ data:
     #!/bin/bash
     # Creates one database per service, since the official postgres image
     # only creates the single database named by POSTGRES_DB. Reads a
-    # comma-separated list from POSTGRES_MULTIPLE_DATABASES. Same logic as
+    # comma-separated list from POSTGRES_MULTIPLE_DATABASES. Same intent as
     # infrastructure/postgres/init-multiple-postgres-databases.sh (used by
-    # docker-compose-postgres.yml), just a single-line `psql -c` instead of
-    # a heredoc - a heredoc's closing marker can't be indented with spaces
-    # the way embedding it in a YAML block scalar requires.
+    # docker-compose-postgres.yml), but a plain existence-check-then-create
+    # instead of that script's \gexec trick - confirmed live (via kubectl
+    # logs postgres-0) that \gexec is a psql-interactive-only meta-command;
+    # handed through `psql -c "...\gexec"` it isn't interpreted at all, it's
+    # sent to the server as literal SQL text, which Postgres then rejects
+    # with a syntax error - every database silently failed to get created
+    # as a result, confirmed by every business service then crash-looping
+    # with "FATAL: database ... does not exist".
     set -e
 
     if [ -n "$POSTGRES_MULTIPLE_DATABASES" ]; then
@@ -30,9 +35,14 @@ data:
         IFS=',' read -ra DATABASES <<< "$POSTGRES_MULTIPLE_DATABASES"
         for db in "${DATABASES[@]}"; do
             db="$(echo "$db" | xargs)"
-            echo "Creating database '$db' owned by '$POSTGRES_USER'"
-            psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "postgres" -c \
-              "SELECT 'CREATE DATABASE \"$db\" OWNER \"$POSTGRES_USER\"' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$db')\gexec"
+            EXISTS=$(psql -tAc "SELECT 1 FROM pg_database WHERE datname = '$db'" --username "$POSTGRES_USER" --dbname "postgres")
+            if [ "$EXISTS" = "1" ]; then
+                echo "Database '$db' already exists, skipping"
+            else
+                echo "Creating database '$db' owned by '$POSTGRES_USER'"
+                psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "postgres" \
+                  -c "CREATE DATABASE \"$db\" OWNER \"$POSTGRES_USER\""
+            fi
         done
     fi
 ---
@@ -53,6 +63,12 @@ spec:
         app: postgres
         tier: database
     spec:
+      # See k8s/base/03-messaging.yaml's kafka container for why this
+      # matters: Kubernetes auto-injects a POSTGRES_PORT env var once this
+      # Service exists, which the postgres image itself ignores, but it's
+      # the same class of foot-gun other tools do crash on - disabled
+      # uniformly across every pod in this project rather than case-by-case.
+      enableServiceLinks: false
       containers:
       - name: postgres
         image: postgres:16-alpine

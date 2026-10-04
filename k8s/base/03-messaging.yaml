@@ -25,6 +25,7 @@ spec:
         app: zookeeper
         tier: database
     spec:
+      enableServiceLinks: false
       containers:
       - name: zookeeper
         image: confluentinc/cp-zookeeper:7.3.2
@@ -85,6 +86,14 @@ spec:
         app: kafka
         tier: database
     spec:
+      # Required: Kubernetes auto-injects a KAFKA_PORT=tcp://<ip>:<port> env
+      # var into every pod once a Service named "kafka" exists (legacy
+      # Docker-links-style service discovery, on by default). cp-kafka's own
+      # entrypoint treats any set KAFKA_PORT as a deprecated legacy config
+      # var and refuses to start - confirmed live: it crash-looped with
+      # just "port is deprecated. Please use KAFKA_ADVERTISED_LISTENERS
+      # instead." and exit 1, no other output, until this was added.
+      enableServiceLinks: false
       initContainers:
       - name: wait-for-zookeeper
         image: busybox:1.36

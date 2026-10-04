@@ -23,6 +23,7 @@ spec:
         app: notification-service
         tier: service
     spec:
+      enableServiceLinks: false
       serviceAccountName: notification-service-sa
       containers:
       - name: notification-service

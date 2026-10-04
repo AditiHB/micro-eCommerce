@@ -26,6 +26,7 @@ spec:
         app: order-service
         tier: service
     spec:
+      enableServiceLinks: false
       serviceAccountName: order-service-sa
       containers:
       - name: order-service
@@ -42,6 +43,13 @@ spec:
           value: "true"
         - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
           value: "kafka:9092"
+        # Needed for RedisConfig's distributed CacheManager bean (see its
+        # own javadoc) - this service's application.yml never configures
+        # Redis connectivity at all otherwise.
+        - name: SPRING_DATA_REDIS_HOST
+          value: "redis"
+        - name: SPRING_DATA_REDIS_PORT
+          value: "6379"
         - name: JWT_SECRET
           valueFrom:
             secretKeyRef:

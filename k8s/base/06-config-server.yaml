@@ -19,6 +19,7 @@ spec:
         app: config-server
         tier: service
     spec:
+      enableServiceLinks: false
       serviceAccountName: config-server-sa
       containers:
       - name: config-server

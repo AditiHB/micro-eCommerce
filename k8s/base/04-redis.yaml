@@ -29,6 +29,7 @@ spec:
         app: redis
         tier: database
     spec:
+      enableServiceLinks: false
       containers:
       - name: redis
         image: redis:7-alpine

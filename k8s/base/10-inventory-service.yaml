@@ -18,6 +18,7 @@ spec:
         app: inventory-service
         tier: service
     spec:
+      enableServiceLinks: false
       serviceAccountName: inventory-service-sa
       containers:
       - name: inventory-service
@@ -36,6 +37,13 @@ spec:
           value: "kafka:9092"
         - name: REDIS_HOST
           value: "redis"
+        # The real property path for Spring Boot 3's autoconfigured Redis
+        # connection factory (which RedisConfig's distributed CacheManager
+        # bean depends on) - see RedisConfig's javadoc.
+        - name: SPRING_DATA_REDIS_HOST
+          value: "redis"
+        - name: SPRING_DATA_REDIS_PORT
+          value: "6379"
         - name: JWT_SECRET
           valueFrom:
             secretKeyRef:

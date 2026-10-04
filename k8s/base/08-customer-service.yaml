@@ -32,6 +32,7 @@ spec:
         app: customer-service
         tier: service
     spec:
+      enableServiceLinks: false
       serviceAccountName: customer-service-sa
       containers:
       - name: customer-service
@@ -50,6 +51,15 @@ spec:
           value: "kafka:9092"
         - name: REDIS_HOST
           value: "redis"
+        # The real property path for Spring Boot 3's autoconfigured Redis
+        # connection factory (which RedisConfig's distributed CacheManager
+        # bean depends on) - this service's own application.yml still
+        # configures the pre-Boot-3 spring.redis.* path, which nothing reads
+        # anymore. See RedisConfig's javadoc for how this was found.
+        - name: SPRING_DATA_REDIS_HOST
+          value: "redis"
+        - name: SPRING_DATA_REDIS_PORT
+          value: "6379"
         - name: JWT_SECRET
           valueFrom:
             secretKeyRef:

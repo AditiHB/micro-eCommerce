@@ -34,6 +34,7 @@ spec:
         app: api-gateway
         tier: service
     spec:
+      enableServiceLinks: false
       serviceAccountName: api-gateway-sa
       containers:
       - name: api-gateway
