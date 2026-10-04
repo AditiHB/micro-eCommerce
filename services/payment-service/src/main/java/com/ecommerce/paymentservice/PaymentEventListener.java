@@ -179,6 +179,8 @@ public class PaymentEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling order cancelled event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "order-cancelled", e);
+            ack.acknowledge();
         }
     }
 }

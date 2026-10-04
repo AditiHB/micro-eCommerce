@@ -161,12 +161,13 @@ class PaymentEventListenerTest {
     }
 
     @Test
-    @DisplayName("Should handle exception during order cancelled processing")
+    @DisplayName("Should route to DLQ and still ack when order cancelled processing throws")
     void testHandleOrderCancelledException() {
         when(repository.findByOrderId(123L)).thenThrow(new RuntimeException("Database error"));
 
         listener.handleOrderCancelled(orderCancelledEvent, acknowledgment);
 
-        verify(acknowledgment, never()).acknowledge();
+        verify(dlqPublisher).publish(eq(orderCancelledEvent), eq("order-cancelled"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
     }
 }

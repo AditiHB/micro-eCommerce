@@ -249,4 +249,24 @@ public class KafkaEventConfig {
             .replicas(replicationFactor)
             .build();
     }
+
+    // order-cancelled/refund-completed themselves have no explicit NewTopic
+    // bean (always relied on broker auto-creation) - only their DLQ topics
+    // need one here, same as every other *Dlq bean above.
+
+    @Bean
+    public NewTopic orderCancelledDlqTopic() {
+        return TopicBuilder.name("order-cancelled" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic refundCompletedDlqTopic() {
+        return TopicBuilder.name("refund-completed" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
 }

@@ -179,6 +179,17 @@ class OrderEventListenerTest {
     }
 
     @Test
+    @DisplayName("Should route to DLQ and still ack when refund completed processing throws")
+    void testHandleRefundCompletedException() {
+        when(repository.findById(123L)).thenThrow(new RuntimeException("Database error"));
+
+        listener.handleRefundCompleted(refundCompletedEvent, acknowledgment);
+
+        verify(dlqPublisher).publish(eq(refundCompletedEvent), eq("refund-completed"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
+    }
+
+    @Test
     @DisplayName("Should route to DLQ and still ack when payment processed handling throws")
     void testHandlePaymentProcessedException() {
         when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.COMPLETED))

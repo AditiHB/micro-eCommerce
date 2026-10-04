@@ -134,6 +134,8 @@ public class OrderEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling refund completed event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "refund-completed", e);
+            ack.acknowledge();
         }
     }
 }
