@@ -1,13 +1,26 @@
 version: '3.8'
 services:
+  # ---------------------------------------------------------------------------
+  # Core stack (always runs with a plain `docker compose up -d`). Sized for a
+  # resource-constrained laptop (~12GB RAM, no dedicated GPU): every JVM-based
+  # service gets both a container memory cap (mem_limit) AND an explicit heap
+  # cap (JAVA_TOOL_OPTIONS / *_HEAP_OPTS), because without the latter the JVM
+  # only auto-sizes default heap as a fraction of the container limit - still
+  # leaving it free to grow metaspace/off-heap into the rest, right up to the
+  # point the kernel OOM-kills the container instead of the JVM GC'ing cleanly.
+  # Total core budget: ~3.8GB.
+  # ---------------------------------------------------------------------------
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.2
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_HEAP_OPTS: "-Xms64m -Xmx96m"
     ports:
       - "2181:2181"
+    mem_limit: 192m
+    mem_reservation: 96m
 
   kafka:
     image: confluentinc/cp-kafka:7.3.2
@@ -23,12 +36,18 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_HEAP_OPTS: "-Xms192m -Xmx320m"
+    mem_limit: 640m
+    mem_reservation: 320m
 
   redis:
     image: redis:7-alpine
     container_name: redis
     ports:
       - "6379:6379"
+    command: redis-server --maxmemory 32mb --maxmemory-policy allkeys-lru
+    mem_limit: 64m
+    mem_reservation: 32m
 
   config-server:
     build:
@@ -41,6 +60,9 @@ services:
       - ./config-repo:/config-repo
     environment:
       - SPRING_CLOUD_CONFIG_SERVER_GIT_URI=file:///config-repo
+      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx160m
+    mem_limit: 320m
+    mem_reservation: 160m
 
   discovery-server:
     build:
@@ -53,6 +75,9 @@ services:
       - config-server
     environment:
       - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
+      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx160m
+    mem_limit: 384m
+    mem_reservation: 192m
 
   api-gateway:
     build:
@@ -74,7 +99,10 @@ services:
       # export it in your shell before running. Never used as a fallback in
       # docker-compose-production.yml / docker-compose-secrets.yml, which
       # require JWT_SECRET to be supplied and fail loudly if it isn't.
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+    mem_limit: 448m
+    mem_reservation: 224m
 
   customer-service:
     build:
@@ -94,7 +122,10 @@ services:
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_HOST=redis
       # See api-gateway's JWT_SECRET comment above - same local-dev-only default.
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+    mem_limit: 512m
+    mem_reservation: 256m
 
   inventory-service:
     build:
@@ -116,7 +147,10 @@ services:
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_HOST=redis
       # See api-gateway's JWT_SECRET comment below - same local-dev-only default.
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+    mem_limit: 512m
+    mem_reservation: 256m
 
   order-service:
     build:
@@ -135,7 +169,10 @@ services:
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_HOST=redis
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+    mem_limit: 512m
+    mem_reservation: 256m
 
   payment-service:
     build:
@@ -154,7 +191,10 @@ services:
       - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_HOST=redis
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+    mem_limit: 512m
+    mem_reservation: 256m
 
   notification-service:
     build:
@@ -175,42 +215,69 @@ services:
       - CUSTOMER_SERVICE_URL=http://customer-service:8081
       - ORDER_SERVICE_URL=http://order-service:8083
       - NOTIFICATION_CHANNEL=log
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-do-not-use-in-production}
+      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      # Slightly more heap than its sibling services: it runs 4 Kafka consumer
+      # groups (order/payment/inventory DLQ handlers + the main listener)
+      # concurrently in one JVM.
+      - JAVA_TOOL_OPTIONS=-Xms112m -Xmx224m
+    mem_limit: 640m
+    mem_reservation: 320m
 
+  # ---------------------------------------------------------------------------
+  # Observability stack (ELK + Prometheus/Grafana). NOT started by default -
+  # `docker compose up -d` skips everything below. On a 12GB laptop this is
+  # nearly as expensive as the whole application, and it's not needed to
+  # develop or test the app - only to look at logs in Kibana or dashboards in
+  # Grafana. Start it explicitly when you actually want that:
+  #   docker compose --profile observability up -d
+  # Total observability budget if enabled: ~3GB (on top of the core ~3.8GB).
+  # ---------------------------------------------------------------------------
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
     container_name: elasticsearch
+    profiles: ["observability"]
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "ES_JAVA_OPTS=-Xms384m -Xmx384m"
     ports:
       - "9200:9200"
+    mem_limit: 1024m
+    mem_reservation: 512m
 
   logstash:
     image: docker.elastic.co/logstash/logstash:8.10.2
     container_name: logstash
+    profiles: ["observability"]
     volumes:
       - ./infrastructure/logstash/pipeline/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
     ports:
       - "50000:50000"
+    environment:
+      - "LS_JAVA_OPTS=-Xms192m -Xmx256m"
     depends_on:
       - elasticsearch
+    mem_limit: 768m
+    mem_reservation: 384m
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.10.2
     container_name: kibana
+    profiles: ["observability"]
     ports:
       - "5601:5601"
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     depends_on:
       - elasticsearch
+    mem_limit: 640m
+    mem_reservation: 320m
 
   # Monitoring Stack - Prometheus
   prometheus:
     image: prom/prometheus:v2.45.0
     container_name: prometheus
+    profiles: ["observability"]
     ports:
       - "9090:9090"
     volumes:
@@ -227,11 +294,14 @@ services:
       - inventory-service
       - order-service
       - payment-service
+    mem_limit: 256m
+    mem_reservation: 128m
 
   # Monitoring Stack - Grafana
   grafana:
     image: grafana/grafana:10.0.0
     container_name: grafana
+    profiles: ["observability"]
     ports:
       - "3000:3000"
     volumes:
@@ -247,11 +317,14 @@ services:
     depends_on:
       - prometheus
       - elasticsearch
+    mem_limit: 128m
+    mem_reservation: 64m
 
   # Monitoring Stack - Alertmanager
   alertmanager:
     image: prom/alertmanager:v0.25.0
     container_name: alertmanager
+    profiles: ["observability"]
     ports:
       - "9093:9093"
     volumes:
@@ -263,11 +336,14 @@ services:
       - '--storage.path=/alertmanager'
     depends_on:
       - prometheus
+    mem_limit: 64m
+    mem_reservation: 32m
 
   # Monitoring Stack - Node Exporter for system metrics
   node-exporter:
     image: prom/node-exporter:v1.6.0
     container_name: node-exporter
+    profiles: ["observability"]
     ports:
       - "9100:9100"
     volumes:
@@ -280,11 +356,14 @@ services:
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
     expose:
       - "9100"
+    mem_limit: 32m
+    mem_reservation: 16m
 
   # Monitoring Stack - Elasticsearch Exporter
   elasticsearch-exporter:
     image: prometheuscommunity/elasticsearch-exporter:v1.5.0
     container_name: elasticsearch-exporter
+    profiles: ["observability"]
     ports:
       - "9114:9114"
     environment:
@@ -295,11 +374,14 @@ services:
       - elasticsearch
     expose:
       - "9114"
+    mem_limit: 32m
+    mem_reservation: 16m
 
   # Monitoring Stack - Loki for log aggregation
   loki:
     image: grafana/loki:2.9.0
     container_name: loki
+    profiles: ["observability"]
     ports:
       - "3100:3100"
     volumes:
@@ -308,6 +390,8 @@ services:
     command: -config.file=/etc/loki/local-config.yaml
     expose:
       - "3100"
+    mem_limit: 128m
+    mem_reservation: 64m
 
 volumes:
   prometheus-data:

@@ -5,7 +5,7 @@
 
 set -e
 
-CERT_DIR="${CERT_DIR:-.infrastructure/nginx/certs}"
+CERT_DIR="${CERT_DIR:-infrastructure/nginx/certs}"
 DOMAIN="${DOMAIN:-localhost}"
 ENVIRONMENT="${ENVIRONMENT:-local}"
 DAYS_VALID="${DAYS_VALID:-365}"

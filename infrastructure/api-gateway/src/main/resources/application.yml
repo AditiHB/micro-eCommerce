@@ -39,6 +39,20 @@ spring:
             allowed-headers: "*"
             allow-credentials: false
       routes:
+        - id: auth-service
+          uri: lb://customer-service
+          predicates:
+            - Path=/api/auth/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: authCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 150
+            - name: AuthenticationFilter
+
         - id: order-service
           uri: lb://order-service
           predicates:
@@ -52,7 +66,6 @@ spring:
               args:
                 requestsPerMinute: 100
             - name: AuthenticationFilter
-            - StripPrefix=2
 
         - id: customer-service
           uri: lb://customer-service
@@ -67,7 +80,6 @@ spring:
               args:
                 requestsPerMinute: 150
             - name: AuthenticationFilter
-            - StripPrefix=2
 
         - id: inventory-service
           uri: lb://inventory-service
@@ -82,7 +94,6 @@ spring:
               args:
                 requestsPerMinute: 200
             - name: AuthenticationFilter
-            - StripPrefix=2
 
         - id: payment-service
           uri: lb://payment-service
@@ -97,7 +108,6 @@ spring:
               args:
                 requestsPerMinute: 50
             - name: AuthenticationFilter
-            - StripPrefix=2
 
 resilience4j:
   circuitbreaker:

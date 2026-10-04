@@ -120,7 +120,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"customer@example.com\",\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"phoneNumber\": \"+1-555-0123\",\n  \"address\": \"123 Main St, Anytown, USA\",\n  \"city\": \"Anytown\",\n  \"country\": \"USA\",\n  \"postalCode\": \"12345\"\n}"
+              "raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"customer@example.com\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/customers",
@@ -146,7 +146,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"updated@example.com\",\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe Updated\"\n}"
+              "raw": "{\n  \"name\": \"John Doe Updated\",\n  \"email\": \"updated@example.com\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/customers/1",
@@ -241,7 +241,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"customerId\": 1,\n  \"items\": [\n    {\n      \"productId\": 1,\n      \"quantity\": 2\n    },\n    {\n      \"productId\": 2,\n      \"quantity\": 1\n    }\n  ],\n  \"shippingAddress\": \"123 Main St, Anytown, USA\"\n}"
+              "raw": "{\n  \"customerId\": 1,\n  \"productId\": \"PROD-001\",\n  \"quantity\": 2\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/orders",
@@ -342,7 +342,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"productId\": 1,\n  \"quantity\": 100,\n  \"reorderLevel\": 20\n}"
+              "raw": "{\n  \"productId\": \"PROD-001\",\n  \"quantity\": 100\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/inventory",
@@ -491,7 +491,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"orderId\": 1001,\n  \"amount\": 299.99,\n  \"currency\": \"USD\",\n  \"paymentMethod\": \"CREDIT_CARD\",\n  \"cardToken\": \"tok_visa\"\n}"
+              "raw": "{\n  \"orderId\": 1001,\n  \"amount\": 299.99\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/payments",
@@ -520,6 +520,288 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "Notifications",
+      "description": "Read-only API over notifications the notification-service has sent (notifications themselves are produced by reacting to Kafka events, not through this API). Not routed through the API Gateway - hit the service directly.",
+      "item": [
+        {
+          "name": "List Notifications",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notification_base_url}}/api/notifications?page=0&size=20&sortBy=createdAt",
+              "host": ["{{notification_base_url}}"],
+              "path": ["api", "notifications"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" },
+                { "key": "sortBy", "value": "createdAt" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Notification by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notification_base_url}}/api/notifications/1",
+              "host": ["{{notification_base_url}}"],
+              "path": ["api", "notifications", "1"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Notifications by Customer",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notification_base_url}}/api/notifications/customer/1?page=0&size=20",
+              "host": ["{{notification_base_url}}"],
+              "path": ["api", "notifications", "customer", "1"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Notifications by Order",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{notification_base_url}}/api/notifications/order/1001",
+              "host": ["{{notification_base_url}}"],
+              "path": ["api", "notifications", "order", "1001"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Products",
+      "description": "product-service is not wired into docker-compose.yml or the API Gateway's routes in this repo - run it separately (e.g. `mvn -pl services/product-service spring-boot:run`) and hit it directly.",
+      "item": [
+        {
+          "name": "Create Product",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Wireless Mouse\",\n  \"description\": \"Ergonomic wireless mouse\",\n  \"price\": 29.99,\n  \"sku\": \"WM-001\",\n  \"category\": \"Electronics\",\n  \"quantityAvailable\": 100\n}"
+            },
+            "url": {
+              "raw": "{{product_base_url}}/api/products",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Products",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products?page=0&size=20",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Product by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/1",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "1"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Product by SKU",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/sku/WM-001",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "sku", "WM-001"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Products by Category",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/category/Electronics?page=0&size=20",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "category", "Electronics"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Search Products",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/search?term=mouse&page=0&size=20",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "search"],
+              "query": [
+                { "key": "term", "value": "mouse" },
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Available Products",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/available?page=0&size=20",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "available"],
+              "query": [
+                { "key": "page", "value": "0" },
+                { "key": "size", "value": "20" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Low Stock Products",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/low-stock",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "low-stock"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Product",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Wireless Mouse v2\",\n  \"description\": \"Ergonomic wireless mouse, updated\",\n  \"price\": 34.99,\n  \"category\": \"Electronics\",\n  \"quantityAvailable\": 150\n}"
+            },
+            "url": {
+              "raw": "{{product_base_url}}/api/products/1",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "1"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Product",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/1",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "1"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Reserve Product Inventory",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/1/reserve?quantity=5",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "1", "reserve"],
+              "query": [{ "key": "quantity", "value": "5" }]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Release Product Inventory",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{product_base_url}}/api/products/1/release?quantity=5",
+              "host": ["{{product_base_url}}"],
+              "path": ["api", "products", "1", "release"],
+              "query": [{ "key": "quantity", "value": "5" }]
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "variable": [
@@ -527,6 +809,18 @@
       "key": "base_url",
       "value": "http://localhost:8080",
       "type": "string"
+    },
+    {
+      "key": "notification_base_url",
+      "value": "http://localhost:8086",
+      "type": "string",
+      "description": "notification-service's own port - not routed through the API Gateway"
+    },
+    {
+      "key": "product_base_url",
+      "value": "http://localhost:8085",
+      "type": "string",
+      "description": "product-service's own port - not wired into docker-compose.yml or the gateway"
     },
     {
       "key": "token",

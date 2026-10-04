@@ -57,7 +57,7 @@ eureka:
       defaultZone: http://localhost:8761/eureka/
 
 jwt:
-  secret: ${JWT_SECRET:this-is-a-default-secret-key-that-is-at-least-32-bytes-long-for-local-dev}
+  secret: ${JWT_SECRET:local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
   expiration: 86400000
 
 management:

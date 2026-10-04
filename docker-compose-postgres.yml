@@ -29,6 +29,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    mem_limit: 320m
+    mem_reservation: 160m
 
   customer-service:
     environment:
