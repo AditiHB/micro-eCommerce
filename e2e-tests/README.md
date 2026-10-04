@@ -90,6 +90,20 @@ used by this scenario (customers, orders, payments, inventory).
 
 ## Running it
 
+Run everything in one go:
+
+```bash
+mvn -f e2e-tests/pom.xml test -Dtest='*Runner'
+```
+
+Surefire's `-Dtest` wildcard matches every `*Runner` class, so this picks up
+new scenarios automatically as they're added - no need to update this list.
+Scenario order matters for `resilience.feature` internally (see its own
+header comment), but the five feature files themselves have no ordering
+dependency on each other and are safe to run together like this.
+
+Or run one feature at a time:
+
 ```bash
 mvn -f e2e-tests/pom.xml test -Dtest=CustomerJourneyRunner
 mvn -f e2e-tests/pom.xml test -Dtest=ResilienceRunner
