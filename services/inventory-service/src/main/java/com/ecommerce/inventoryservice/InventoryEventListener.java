@@ -5,6 +5,7 @@ import com.ecommerce.common.events.InventoryReservedEvent;
 import com.ecommerce.common.events.InventoryReleasedEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.EventPublisher;
 import com.ecommerce.inventoryservice.service.InventoryService;
 import lombok.RequiredArgsConstructor;
@@ -33,6 +34,7 @@ public class InventoryEventListener {
 
     private final InventoryService inventoryService;
     private final EventPublisher eventPublisher;
+    private final DlqPublisher dlqPublisher;
 
     /**
      * Forward Transaction: Reserve inventory when order is created.
@@ -72,6 +74,8 @@ public class InventoryEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling order created event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "order-created", e);
+            ack.acknowledge();
         }
     }
 
@@ -111,6 +115,8 @@ public class InventoryEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling payment failed event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "payment-failed", e);
+            ack.acknowledge();
         }
     }
 }

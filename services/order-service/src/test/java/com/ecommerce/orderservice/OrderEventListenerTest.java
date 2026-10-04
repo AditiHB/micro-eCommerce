@@ -1,6 +1,7 @@
 package com.ecommerce.orderservice;
 
 import com.ecommerce.common.enums.OrderStatus;
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.InventoryFailedEvent;
 import com.ecommerce.common.events.OrderCancelledEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
@@ -24,6 +25,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,6 +40,9 @@ class OrderEventListenerTest {
 
     @Mock
     private EventPublisher eventPublisher;
+
+    @Mock
+    private DlqPublisher dlqPublisher;
 
     @Mock
     private Acknowledgment acknowledgment;
@@ -174,24 +179,38 @@ class OrderEventListenerTest {
     }
 
     @Test
-    @DisplayName("Should handle exception during payment processed handling")
+    @DisplayName("Should route to DLQ and still ack when payment processed handling throws")
     void testHandlePaymentProcessedException() {
         when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.COMPLETED))
             .thenThrow(new RuntimeException("Database error"));
 
         listener.handlePaymentProcessed(paymentProcessedEvent, acknowledgment);
 
-        verify(acknowledgment, never()).acknowledge();
+        verify(dlqPublisher).publish(eq(paymentProcessedEvent), eq("payment-processed"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should handle exception during inventory failed processing")
+    @DisplayName("Should route to DLQ and still ack when inventory failed processing throws")
     void testHandleInventoryFailedException() {
         when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED))
             .thenThrow(new RuntimeException("Database error"));
 
         listener.handleInventoryFailed(inventoryFailedEvent, acknowledgment);
 
-        verify(acknowledgment, never()).acknowledge();
+        verify(dlqPublisher).publish(eq(inventoryFailedEvent), eq("inventory-failed"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
+    }
+
+    @Test
+    @DisplayName("Should route to DLQ and still ack when payment failed processing throws")
+    void testHandlePaymentFailedException() {
+        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED))
+            .thenThrow(new RuntimeException("Database error"));
+
+        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
+
+        verify(dlqPublisher).publish(eq(paymentFailedEvent), eq("payment-failed"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
     }
 }

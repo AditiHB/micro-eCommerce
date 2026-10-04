@@ -7,6 +7,7 @@ import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.RefundInitiatedEvent;
 import com.ecommerce.common.events.RefundCompletedEvent;
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.EventPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,7 @@ public class PaymentEventListener {
 
     private final PaymentRepository repository;
     private final EventPublisher eventPublisher;
+    private final DlqPublisher dlqPublisher;
 
     /**
      * Forward Transaction: Process payment when inventory is reserved.
@@ -104,17 +106,32 @@ public class PaymentEventListener {
         } catch (Exception e) {
             log.error("Error handling inventory reserved event for order: {}", event.getOrderId(), e);
 
-            // Include product/quantity in payment failed event for inventory compensation
-            PaymentFailedEvent failedEvent = new PaymentFailedEvent(
-                event.getOrderId(),
-                event.getProductId(),
-                event.getQuantity(),
-                "Payment processing exception: " + e.getMessage()
-            );
-            eventPublisher.publishEvent(failedEvent, "payment-failed",
-                event.getEventId(), event.getEventId());
+            try {
+                // Include product/quantity in payment failed event for inventory compensation
+                PaymentFailedEvent failedEvent = new PaymentFailedEvent(
+                    event.getOrderId(),
+                    event.getProductId(),
+                    event.getQuantity(),
+                    "Payment processing exception: " + e.getMessage()
+                );
+                eventPublisher.publishEvent(failedEvent, "payment-failed",
+                    event.getEventId(), event.getEventId());
 
-            log.warn("✗ Payment processing failed for order: {} - Triggering compensation", event.getOrderId());
+                log.warn("✗ Payment processing failed for order: {} - Triggering compensation", event.getOrderId());
+            } catch (Exception compensationFailure) {
+                // The compensating payment-failed publish itself failed - there's no
+                // further fallback within the saga, so park the original event in the
+                // DLQ for manual recovery instead of losing it silently.
+                log.error("Failed to publish compensating payment-failed event for order: {} - routing to DLQ instead",
+                    event.getOrderId(), compensationFailure);
+                dlqPublisher.publish(event, "inventory-reserved", compensationFailure);
+            }
+
+            // Ack either way: previously this catch block never acknowledged the
+            // original message at all, which - under AckMode.MANUAL - risked the
+            // same silent, permanent message loss as the other listeners fixed
+            // alongside this one (a later message's ack commits past this one).
+            ack.acknowledge();
         }
     }
 

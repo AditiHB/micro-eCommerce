@@ -6,6 +6,7 @@ import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.events.OrderCancelledEvent;
 import com.ecommerce.common.events.RefundCompletedEvent;
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.EventPublisher;
 import com.ecommerce.orderservice.service.OrderService;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,7 @@ public class OrderEventListener {
     private final OrderRepository repository;
     private final OrderService orderService;
     private final EventPublisher eventPublisher;
+    private final DlqPublisher dlqPublisher;
 
     /**
      * Happy Path: Order successfully completed after payment.
@@ -52,6 +54,8 @@ public class OrderEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling payment processed event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "payment-processed", e);
+            ack.acknowledge();
         }
     }
 
@@ -78,6 +82,8 @@ public class OrderEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling inventory failed event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "inventory-failed", e);
+            ack.acknowledge();
         }
     }
 
@@ -107,6 +113,8 @@ public class OrderEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling payment failed event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "payment-failed", e);
+            ack.acknowledge();
         }
     }
 

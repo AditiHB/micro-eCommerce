@@ -1,5 +1,6 @@
 package com.ecommerce.inventoryservice;
 
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.InventoryFailedEvent;
 import com.ecommerce.common.events.InventoryReservedEvent;
 import com.ecommerce.common.events.InventoryReleasedEvent;
@@ -22,6 +23,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -33,6 +35,9 @@ class InventoryEventListenerTest {
 
     @Mock
     private EventPublisher eventPublisher;
+
+    @Mock
+    private DlqPublisher dlqPublisher;
 
     @Mock
     private Acknowledgment acknowledgment;
@@ -139,22 +144,24 @@ class InventoryEventListenerTest {
     }
 
     @Test
-    @DisplayName("Should handle exception during order created processing")
+    @DisplayName("Should route to DLQ and still ack when order created processing throws")
     void testHandleOrderCreatedException() {
         when(inventoryService.reserveStockIfAvailable("PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(acknowledgment, never()).acknowledge();
+        verify(dlqPublisher).publish(eq(orderCreatedEvent), eq("order-created"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should handle exception during payment failed processing")
+    @DisplayName("Should route to DLQ and still ack when payment failed processing throws")
     void testHandlePaymentFailedException() {
         when(inventoryService.releaseStockIfPresent("PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
 
         listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
-        verify(acknowledgment, never()).acknowledge();
+        verify(dlqPublisher).publish(eq(paymentFailedEvent), eq("payment-failed"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
     }
 }

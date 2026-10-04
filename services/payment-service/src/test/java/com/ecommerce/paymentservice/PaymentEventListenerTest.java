@@ -6,6 +6,7 @@ import com.ecommerce.common.events.OrderCancelledEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.RefundCompletedEvent;
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.EventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -34,6 +35,9 @@ class PaymentEventListenerTest {
 
     @Mock
     private EventPublisher eventPublisher;
+
+    @Mock
+    private DlqPublisher dlqPublisher;
 
     @Mock
     private Acknowledgment acknowledgment;
@@ -90,7 +94,7 @@ class PaymentEventListenerTest {
     }
 
     @Test
-    @DisplayName("Should publish payment failed event and not ack when processing throws")
+    @DisplayName("Should publish payment failed event and ack when processing throws")
     void testHandleInventoryReservedException() {
         when(repository.findByOrderId(123L)).thenReturn(Optional.empty());
         when(repository.save(any(Payment.class))).thenThrow(new RuntimeException("Database error"));
@@ -98,7 +102,22 @@ class PaymentEventListenerTest {
         listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
 
         verify(eventPublisher).publishEvent(any(PaymentFailedEvent.class), eq("payment-failed"), anyString(), anyString());
-        verify(acknowledgment, never()).acknowledge();
+        verify(dlqPublisher, never()).publish(any(), anyString(), any());
+        verify(acknowledgment).acknowledge();
+    }
+
+    @Test
+    @DisplayName("Should route to DLQ when even the compensating payment-failed publish throws")
+    void testHandleInventoryReservedCompensationAlsoFails() {
+        when(repository.findByOrderId(123L)).thenReturn(Optional.empty());
+        when(repository.save(any(Payment.class))).thenThrow(new RuntimeException("Database error"));
+        doThrow(new RuntimeException("Kafka unavailable"))
+            .when(eventPublisher).publishEvent(any(PaymentFailedEvent.class), eq("payment-failed"), anyString(), anyString());
+
+        listener.handleInventoryReserved(inventoryReservedEvent, acknowledgment);
+
+        verify(dlqPublisher).publish(eq(inventoryReservedEvent), eq("inventory-reserved"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
     }
 
     @Test
