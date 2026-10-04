@@ -1,11 +1,14 @@
 package com.ecommerce.inventoryservice;
 
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.InventoryFailedEvent;
 import com.ecommerce.common.events.InventoryReservedEvent;
 import com.ecommerce.common.events.InventoryReleasedEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.EventPublisher;
+import com.ecommerce.inventoryservice.dto.InventoryResponse;
+import com.ecommerce.inventoryservice.service.InventoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +23,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -27,10 +31,13 @@ import static org.mockito.Mockito.*;
 class InventoryEventListenerTest {
 
     @Mock
-    private InventoryRepository repository;
+    private InventoryService inventoryService;
 
     @Mock
     private EventPublisher eventPublisher;
+
+    @Mock
+    private DlqPublisher dlqPublisher;
 
     @Mock
     private Acknowledgment acknowledgment;
@@ -40,7 +47,7 @@ class InventoryEventListenerTest {
 
     private OrderCreatedEvent orderCreatedEvent;
     private PaymentFailedEvent paymentFailedEvent;
-    private Inventory inventory;
+    private InventoryResponse inventoryResponse;
 
     @BeforeEach
     void setUp() {
@@ -57,23 +64,21 @@ class InventoryEventListenerTest {
         paymentFailedEvent.setProductId(productId);
         paymentFailedEvent.setQuantity(5);
 
-        inventory = Inventory.builder()
+        inventoryResponse = InventoryResponse.builder()
             .id(1L)
             .productId(productId)
-            .quantity(100)
+            .quantity(95)
             .build();
     }
 
     @Test
     @DisplayName("Should reserve inventory when order is created")
     void testHandleOrderCreatedSuccess() {
-        when(repository.findByProductId("PROD-001")).thenReturn(Optional.of(inventory));
-        when(repository.save(any())).thenReturn(inventory);
+        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.of(inventoryResponse));
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(repository).findByProductId("PROD-001");
-        verify(repository).save(any(Inventory.class));
+        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
         verify(eventPublisher).publishEvent(any(InventoryReservedEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -81,13 +86,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should publish failure event when insufficient inventory")
     void testHandleOrderCreatedInsufficientStock() {
-        inventory.setQuantity(2); // Less than requested 5
-        when(repository.findByProductId("PROD-001")).thenReturn(Optional.of(inventory));
+        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.empty());
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(repository).findByProductId("PROD-001");
-        verify(repository, never()).save(any());
+        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
         verify(eventPublisher).publishEvent(any(InventoryFailedEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -95,12 +98,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should publish failure event when product not found")
     void testHandleOrderCreatedProductNotFound() {
-        when(repository.findByProductId("PROD-001")).thenReturn(Optional.empty());
+        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.empty());
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(repository).findByProductId("PROD-001");
-        verify(repository, never()).save(any());
+        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
         verify(eventPublisher).publishEvent(any(InventoryFailedEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -108,13 +110,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should release inventory when payment fails")
     void testHandlePaymentFailedSuccess() {
-        when(repository.findByProductId("PROD-001")).thenReturn(Optional.of(inventory));
-        when(repository.save(any())).thenReturn(inventory);
+        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenReturn(Optional.of(inventoryResponse));
 
         listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
-        verify(repository).findByProductId("PROD-001");
-        verify(repository).save(any(Inventory.class));
+        verify(inventoryService).releaseStockIfPresent(123L, "PROD-001", 5);
         verify(eventPublisher).publishEvent(any(InventoryReleasedEvent.class), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -122,12 +122,11 @@ class InventoryEventListenerTest {
     @Test
     @DisplayName("Should handle payment failed when inventory not found")
     void testHandlePaymentFailedInventoryNotFound() {
-        when(repository.findByProductId("PROD-001")).thenReturn(Optional.empty());
+        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenReturn(Optional.empty());
 
         listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
-        verify(repository).findByProductId("PROD-001");
-        verify(repository, never()).save(any());
+        verify(inventoryService).releaseStockIfPresent(123L, "PROD-001", 5);
         verify(eventPublisher, never()).publishEvent(any(), anyString(), anyString(), anyString());
         verify(acknowledgment).acknowledge();
     }
@@ -140,27 +139,29 @@ class InventoryEventListenerTest {
 
         listener.handlePaymentFailed(event, acknowledgment);
 
-        verify(repository, never()).findByProductId(anyString());
+        verify(inventoryService, never()).releaseStockIfPresent(any(), anyString(), any());
         verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should handle exception during order created processing")
+    @DisplayName("Should route to DLQ and still ack when order created processing throws")
     void testHandleOrderCreatedException() {
-        when(repository.findByProductId("PROD-001")).thenThrow(new RuntimeException("Database error"));
+        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
 
         listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
 
-        verify(acknowledgment, never()).acknowledge();
+        verify(dlqPublisher).publish(eq(orderCreatedEvent), eq("order-created"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
     }
 
     @Test
-    @DisplayName("Should handle exception during payment failed processing")
+    @DisplayName("Should route to DLQ and still ack when payment failed processing throws")
     void testHandlePaymentFailedException() {
-        when(repository.findByProductId("PROD-001")).thenThrow(new RuntimeException("Database error"));
+        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
 
         listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
 
-        verify(acknowledgment, never()).acknowledge();
+        verify(dlqPublisher).publish(eq(paymentFailedEvent), eq("payment-failed"), any(RuntimeException.class));
+        verify(acknowledgment).acknowledge();
     }
 }

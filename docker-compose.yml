@@ -1,4 +1,31 @@
-version: '3.8'
+# ===============================================================================
+# Single Compose file for ALL local scenarios - switch behavior with profiles
+# and environment variables instead of maintaining separate compose files.
+# This project is local-only (Docker Compose here, Kubernetes manifests under
+# k8s/ for a cluster-based local run); there is no separate "production"
+# compose file to keep in sync.
+#
+#   1) Entire core stack, H2 in-memory DB (fastest to start, default):
+#        docker compose up -d
+#
+#   2) Only H2 (no extra flags needed - H2 is already the default above)
+#
+#   3) Real PostgreSQL instead of H2:
+#        docker compose --profile postgres --env-file .env.postgres up -d
+#
+#   4) HTTPS locally via nginx + self-signed cert (see SETUP_AND_DEPLOYMENT.md
+#      for generating the cert first):
+#        docker compose --profile https up -d
+#
+#   5) Full stack - Postgres + HTTPS + observability (ELK/Prometheus/Grafana):
+#        docker compose --profile postgres --profile https --profile observability --env-file .env.postgres up -d
+#
+#   6) Compact stack for low-memory machines, no logs/ELK/metrics (same as #1 -
+#      observability is opt-in, never started unless you pass --profile observability):
+#        docker compose up -d
+#
+# See SETUP_AND_DEPLOYMENT.md for the full matrix of scenarios.
+# ===============================================================================
 services:
   # ---------------------------------------------------------------------------
   # Core stack (always runs with a plain `docker compose up -d`). Sized for a
@@ -8,7 +35,8 @@ services:
   # only auto-sizes default heap as a fraction of the container limit - still
   # leaving it free to grow metaspace/off-heap into the rest, right up to the
   # point the kernel OOM-kills the container instead of the JVM GC'ing cleanly.
-  # Total core budget: ~3.8GB.
+  # Total core budget: ~3.8GB. Uses in-memory H2 by default; set SPRING_PROFILES_ACTIVE
+  # and DB_HOST (e.g. via .env.postgres and --profile postgres below) to switch to Postgres.
   # ---------------------------------------------------------------------------
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.2
@@ -96,9 +124,7 @@ services:
       - REDIS_HOST=redis
       # Local-dev-only default so this compose file boots without extra setup.
       # Override with a real secret via `JWT_SECRET=... docker compose up`, or
-      # export it in your shell before running. Never used as a fallback in
-      # docker-compose-production.yml / docker-compose-secrets.yml, which
-      # require JWT_SECRET to be supplied and fail loudly if it isn't.
+      # export it in your shell / put it in a `.env` file before running.
       - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
       - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
     mem_limit: 448m
@@ -123,6 +149,9 @@ services:
       - REDIS_HOST=redis
       # See api-gateway's JWT_SECRET comment above - same local-dev-only default.
       - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      # Blank by default (H2). Set via .env.postgres + `--profile postgres` to switch to Postgres.
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
+      - DB_HOST=${DB_HOST:-}
       - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
     mem_limit: 512m
     mem_reservation: 256m
@@ -148,6 +177,8 @@ services:
       - REDIS_HOST=redis
       # See api-gateway's JWT_SECRET comment below - same local-dev-only default.
       - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
+      - DB_HOST=${DB_HOST:-}
       - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
     mem_limit: 512m
     mem_reservation: 256m
@@ -170,6 +201,8 @@ services:
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_HOST=redis
       - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
+      - DB_HOST=${DB_HOST:-}
       - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
     mem_limit: 512m
     mem_reservation: 256m
@@ -192,6 +225,8 @@ services:
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - REDIS_HOST=redis
       - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
+      - DB_HOST=${DB_HOST:-}
       - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
     mem_limit: 512m
     mem_reservation: 256m
@@ -216,12 +251,73 @@ services:
       - ORDER_SERVICE_URL=http://order-service:8083
       - NOTIFICATION_CHANNEL=log
       - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
+      - DB_HOST=${DB_HOST:-}
       # Slightly more heap than its sibling services: it runs 4 Kafka consumer
       # groups (order/payment/inventory DLQ handlers + the main listener)
       # concurrently in one JVM.
       - JAVA_TOOL_OPTIONS=-Xms112m -Xmx224m
     mem_limit: 640m
     mem_reservation: 320m
+
+  # ---------------------------------------------------------------------------
+  # Postgres (opt-in). Replaces each service's default in-memory H2 with a real
+  # database - one schema per service (matching each application-postgres.yml),
+  # reachable at localhost:5432 as ecommerce_user/ecommerce_password. Flyway
+  # runs automatically against it on service startup; there is no separate
+  # manual "migrate" command.
+  #   docker compose --profile postgres --env-file .env.postgres up -d
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: ecommerce_user
+      POSTGRES_PASSWORD: ecommerce_password
+      POSTGRES_MULTIPLE_DATABASES: customer_db,inventory_db,order_db,payment_db,notification_db,product_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-multiple-postgres-databases.sh:/docker-entrypoint-initdb.d/init-multiple-postgres-databases.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    mem_limit: 320m
+    mem_reservation: 160m
+
+  # ---------------------------------------------------------------------------
+  # Nginx HTTPS termination (opt-in). Terminates TLS with a self-signed local
+  # cert and forwards /api/ to the gateway - see SETUP_AND_DEPLOYMENT.md to
+  # generate the certs first (infrastructure/scripts/setup-certificates.sh).
+  #   docker compose --profile https up -d
+  # ---------------------------------------------------------------------------
+  nginx:
+    build:
+      context: ./infrastructure/nginx
+      dockerfile: Dockerfile
+    container_name: nginx
+    profiles: ["https"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infrastructure/nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - api-gateway
+      - config-server
+      - discovery-server
+    mem_limit: 64m
+    mem_reservation: 32m
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   # ---------------------------------------------------------------------------
   # Observability stack (ELK + Prometheus/Grafana). NOT started by default -
@@ -307,7 +403,11 @@ services:
     volumes:
       - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
       - ./monitoring/grafana-dashboards-provisioning.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
-      - ./monitoring/grafana-dashboards:/etc/grafana/provisioning/dashboards
+      # Dashboard JSONs live under a separate path from the provider config
+      # above - mounting both a file AND the whole directory at
+      # /etc/grafana/provisioning/dashboards causes Docker to create a stray
+      # empty dashboards.yml on the host due to the overlapping bind mounts.
+      - ./monitoring/grafana-dashboards:/var/lib/grafana/dashboards
       - grafana-data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
@@ -394,6 +494,8 @@ services:
     mem_reservation: 64m
 
 volumes:
+  postgres-data:
+    driver: local
   prometheus-data:
     driver: local
   grafana-data:

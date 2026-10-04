@@ -65,14 +65,14 @@ bash infrastructure/scripts/setup-certificates.sh
 ### 2. Docker Development with Nginx
 
 ```bash
-# Build and start with Nginx
-docker-compose -f docker-compose-production.yml up -d
+# Build and start with Nginx (the https profile, on top of the core stack)
+docker compose --profile https up -d
 
 # Test HTTPS connection
 curl -k https://localhost/health
 
 # View logs
-docker-compose -f docker-compose-production.yml logs -f nginx
+docker compose logs -f nginx
 ```
 
 ### 3. Run SSL Tests
@@ -189,18 +189,17 @@ Configured in order of preference:
 
 ## Docker Deployment
 
-### Production Docker Compose
+### HTTPS via the `https` Compose profile
 
-Run with Nginx reverse proxy:
+Run with the Nginx reverse proxy (see [SETUP_AND_DEPLOYMENT.md](SETUP_AND_DEPLOYMENT.md#https-setup)):
 ```bash
-docker-compose -f docker-compose-production.yml up -d
+docker compose --profile https up -d
 ```
 
 Key features:
 - Nginx handles SSL/TLS termination
 - All services use internal HTTP
 - X-Forwarded-* headers for origin information
-- Network isolation via custom bridge network
 - Health checks for all services
 
 ### Docker Networking
@@ -314,7 +313,7 @@ bash infrastructure/scripts/setup-certificates.sh
 docker ps | grep nginx
 
 # Check Nginx logs
-docker-compose -f docker-compose-production.yml logs nginx
+docker compose logs nginx
 
 # Verify certificate files exist
 ls -la infrastructure/nginx/certs/

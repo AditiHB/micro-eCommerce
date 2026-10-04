@@ -14,6 +14,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 
+import java.util.concurrent.TimeUnit;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -43,7 +45,7 @@ class RateLimitingFilterTest {
     @Test
     @DisplayName("Should allow request within rate limit")
     void testAllowRequestWithinLimit() {
-        when(valueOps.get(anyString())).thenReturn("5");
+        when(valueOps.increment(anyString())).thenReturn(6L);
 
         MockServerHttpRequest request = MockServerHttpRequest.get("/test").build();
         MockServerWebExchange exchange = MockServerWebExchange.from(request);
@@ -54,13 +56,13 @@ class RateLimitingFilterTest {
             return null;
         });
 
-        verify(redisTemplate, times(2)).opsForValue();
+        verify(valueOps).increment(anyString());
     }
 
     @Test
     @DisplayName("Should reject request exceeding rate limit")
     void testRejectRequestExceedingLimit() {
-        when(valueOps.get(anyString())).thenReturn("10");
+        when(valueOps.increment(anyString())).thenReturn(11L);
 
         MockServerHttpRequest request = MockServerHttpRequest.get("/test").build();
         MockServerWebExchange exchange = MockServerWebExchange.from(request);
@@ -72,9 +74,9 @@ class RateLimitingFilterTest {
     }
 
     @Test
-    @DisplayName("Should increment request count on successful request")
+    @DisplayName("Should increment request count on every request, atomically")
     void testIncrementRequestCount() {
-        when(valueOps.get(anyString())).thenReturn("0");
+        when(valueOps.increment(anyString())).thenReturn(1L);
 
         MockServerHttpRequest request = MockServerHttpRequest.get("/test").build();
         MockServerWebExchange exchange = MockServerWebExchange.from(request);
@@ -82,14 +84,28 @@ class RateLimitingFilterTest {
         GatewayFilter gatewayFilter = filter.apply(config);
         gatewayFilter.filter(exchange, chain -> null);
 
-        verify(redisTemplate, times(2)).opsForValue();
         verify(valueOps).increment(anyString());
+        verify(redisTemplate).expire(anyString(), eq(60L), eq(TimeUnit.SECONDS));
+    }
+
+    @Test
+    @DisplayName("Should not reset the window TTL on requests after the first")
+    void testDoesNotRenewTtlAfterFirstRequest() {
+        when(valueOps.increment(anyString())).thenReturn(2L);
+
+        MockServerHttpRequest request = MockServerHttpRequest.get("/test").build();
+        MockServerWebExchange exchange = MockServerWebExchange.from(request);
+
+        GatewayFilter gatewayFilter = filter.apply(config);
+        gatewayFilter.filter(exchange, chain -> null);
+
+        verify(redisTemplate, never()).expire(anyString(), anyLong(), any());
     }
 
     @Test
     @DisplayName("Should set rate limit headers")
     void testSetRateLimitHeaders() {
-        when(valueOps.get(anyString())).thenReturn("3");
+        when(valueOps.increment(anyString())).thenReturn(4L);
 
         MockServerHttpRequest request = MockServerHttpRequest.get("/test").build();
         MockServerWebExchange exchange = MockServerWebExchange.from(request);
@@ -105,7 +121,7 @@ class RateLimitingFilterTest {
     @DisplayName("Should use default rate limit when config not set")
     void testDefaultRateLimit() {
         config.setRequestsPerMinute(0);
-        when(valueOps.get(anyString())).thenReturn("0");
+        when(valueOps.increment(anyString())).thenReturn(1L);
 
         MockServerHttpRequest request = MockServerHttpRequest.get("/test").build();
         MockServerWebExchange exchange = MockServerWebExchange.from(request);

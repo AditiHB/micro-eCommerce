@@ -7,12 +7,15 @@ import com.ecommerce.common.exception.BusinessException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.inventoryservice.Inventory;
 import com.ecommerce.inventoryservice.InventoryRepository;
+import com.ecommerce.inventoryservice.InventoryReservation;
+import com.ecommerce.inventoryservice.InventoryReservationRepository;
 import com.ecommerce.inventoryservice.dto.CreateInventoryRequest;
 import com.ecommerce.inventoryservice.dto.InventoryResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -21,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -29,6 +33,7 @@ import java.util.List;
 public class InventoryService {
 
     private final InventoryRepository inventoryRepository;
+    private final InventoryReservationRepository reservationRepository;
 
     /**
      * Creates new inventory for a product.
@@ -168,6 +173,109 @@ public class InventoryService {
 
         log.info("Inventory updated successfully");
         return mapToResponse(updatedInventory);
+    }
+
+    /**
+     * Reserves stock for a product if it exists and has enough quantity on
+     * hand; empty otherwise. For the saga's Kafka listener
+     * (InventoryEventListener.handleOrderCreated), which previously wrote
+     * straight to InventoryRepository - bypassing this class and its
+     * @CacheEvict, so a reservation was invisible to GET /api/inventory for
+     * as long as that item stayed cached from an earlier read (same bug/fix
+     * as OrderService.updateOrderStatusIfPresent in order-service).
+     *
+     * Idempotent against Kafka redelivery of the same order-created event
+     * (a normal occurrence under AckMode.MANUAL, not a failure - see
+     * InventoryEventListener's javadoc): orderId is inserted into
+     * inventory_reservations FIRST, inside this same transaction, with a
+     * unique constraint on order_id - the same "insert as the atomic
+     * gatekeeper, catch the constraint violation" pattern already used by
+     * payment_service's one-payment-per-order constraint. A second
+     * delivery for an order already reserved hits that constraint and
+     * returns the current state without decrementing again; the first
+     * delivery's own reservation row is what makes that possible. If the
+     * stock check then fails (insufficient/not found), the just-inserted
+     * reservation row is removed - its existence must mean "stock was
+     * actually decremented for this order", nothing else.
+     *
+     * @param orderId the order this reservation is for - the idempotency key
+     * @param productId the product to reserve stock for
+     * @param quantity the quantity requested
+     * @return the updated inventory response, or empty if the product
+     *         doesn't exist or doesn't have enough stock
+     */
+    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
+    public Optional<InventoryResponse> reserveStockIfAvailable(Long orderId, String productId, Integer quantity) {
+        log.info("Reserving {} units of product {} for order {} (if available)", quantity, productId, orderId);
+
+        InventoryReservation reservation = InventoryReservation.builder()
+            .orderId(orderId)
+            .productId(productId)
+            .quantity(quantity)
+            .build();
+        try {
+            reservationRepository.saveAndFlush(reservation);
+        } catch (DataIntegrityViolationException dup) {
+            log.info("Reservation already exists for order {} - redelivery of an already-processed event, skipping decrement",
+                orderId);
+            return inventoryRepository.findByProductId(productId).map(this::mapToResponse);
+        }
+
+        Optional<InventoryResponse> result = inventoryRepository.findByProductId(productId)
+            .filter(inventory -> inventory.getQuantity() >= quantity)
+            .map(inventory -> {
+                inventory.setQuantity(inventory.getQuantity() - quantity);
+                return mapToResponse(inventoryRepository.save(inventory));
+            });
+
+        if (result.isEmpty()) {
+            // Nothing was actually reserved - this reservation row would otherwise
+            // be a false record of a decrement that never happened.
+            reservationRepository.delete(reservation);
+        }
+
+        return result;
+    }
+
+    /**
+     * Releases previously reserved stock for an order if a reservation
+     * exists for it; no-op otherwise (same rationale as
+     * reserveStockIfAvailable above).
+     *
+     * Idempotent against Kafka redelivery of the same payment-failed event
+     * the same way: markReleased's conditional UPDATE is the atomic
+     * gatekeeper (only one concurrent caller can ever see
+     * {@code updated == 1}), so a second delivery increments the stock back
+     * at most once per order, no matter how many times the event is
+     * redelivered.
+     *
+     * @param orderId the order whose reservation should be released
+     * @param productId the product to release stock back to
+     * @param quantity the quantity to add back
+     * @return the updated inventory response, or empty if no reservation
+     *         exists for this order (nothing to release) or the product
+     *         itself no longer exists
+     */
+    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
+    public Optional<InventoryResponse> releaseStockIfPresent(Long orderId, String productId, Integer quantity) {
+        log.info("Releasing {} units of product {} for order {} (if present)", quantity, productId, orderId);
+
+        if (reservationRepository.findByOrderId(orderId).isEmpty()) {
+            log.warn("No reservation found for order {} - nothing to release", orderId);
+            return Optional.empty();
+        }
+
+        if (reservationRepository.markReleased(orderId) == 0) {
+            log.info("Reservation for order {} already released - redelivery of an already-processed event, skipping increment",
+                orderId);
+            return inventoryRepository.findByProductId(productId).map(this::mapToResponse);
+        }
+
+        return inventoryRepository.findByProductId(productId)
+            .map(inventory -> {
+                inventory.setQuantity(inventory.getQuantity() + quantity);
+                return mapToResponse(inventoryRepository.save(inventory));
+            });
     }
 
     private InventoryResponse mapToResponse(Inventory inventory) {

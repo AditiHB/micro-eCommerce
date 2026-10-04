@@ -17,6 +17,17 @@
         <module>infrastructure</module>
         <module>services</module>
     </modules>
+    <!--
+        e2e-tests is NOT listed here on purpose: every Dockerfile.* does a
+        sparse `COPY` of only the exact files/dirs each service's image needs
+        (for build-layer caching) plus this root pom.xml - and Maven's
+        reactor validates that every listed <module> directory exists in
+        whatever context it's invoked from before it can filter with -pl/-am.
+        Listing e2e-tests here breaks every one of those Docker builds, since
+        none of them copy e2e-tests/. It's built/run as its own standalone
+        Maven project instead - see e2e-tests/README.md.
+    -->
+
 
     <properties>
         <java.version>17</java.version>

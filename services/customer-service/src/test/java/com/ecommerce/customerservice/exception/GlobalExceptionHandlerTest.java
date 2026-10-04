@@ -11,6 +11,7 @@ import org.mockito.InjectMocks;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.context.request.WebRequest;
 
 import static org.assertj.core.api.Assertions.*;
@@ -53,6 +54,20 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getMessage()).contains("Invalid customer data");
+    }
+
+    @Test
+    @DisplayName("Should handle a failed login (AuthenticationException) as a clean 400, not a 500")
+    void testHandleAuthenticationException() {
+        BadCredentialsException exception = new BadCredentialsException("Bad credentials");
+
+        ResponseEntity<ErrorResponse> response = exceptionHandler.handleAuthenticationException(exception, webRequest);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getErrorCode()).isEqualTo("INVALID_CREDENTIALS");
+        // Deliberately generic - must not reveal whether the username exists.
+        assertThat(response.getBody().getMessage()).doesNotContain("Bad credentials");
     }
 
     @Test

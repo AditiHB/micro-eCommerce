@@ -13,6 +13,7 @@ A production-ready **E-Commerce Microservices Architecture** built with **Java 1
 - [Docker Deployment](#docker-deployment)
 - [API Documentation](#api-documentation)
 - [Key Features](#key-features)
+- [Documentation](#-documentation)
 
 ---
 
@@ -146,10 +147,14 @@ This project implements a cloud-native microservices architecture for an e-comme
 ```
 micro-eCommerce/
 ├── README.md                                    # Project documentation
+├── DOCUMENTATION_INDEX.md                       # Guided index into docs/
 ├── pom.xml                                      # Parent Maven POM
-├── docker-compose.yml                           # Docker Compose configuration
-├── micro-ecommerce-postman-collection.json     # API test collection
-├── ecommerce-microservices-plan.md             # Detailed architecture plan
+├── docker-compose.yml                           # Single Compose file for ALL local scenarios (see docs/SETUP_AND_DEPLOYMENT.md)
+├── .env.postgres                                # Env flags to switch the stack to Postgres
+├── postman-collection.json                     # API test collection
+├── postman_environment_http.json               # Postman/Insomnia env (HTTP)
+├── postman_environment_https.json              # Postman/Insomnia env (HTTPS)
+├── docs/                                        # All project documentation (architecture, setup, security, concepts)
 │
 ├── common/                                      # Shared utilities and models
 │   └── src/
@@ -175,10 +180,15 @@ micro-eCommerce/
 │   ├── payment-service/                        # Payment processing
 │   │   ├── pom.xml
 │   │   └── src/
+│   ├── notification-service/                   # Customer/order notifications
+│   │   ├── pom.xml
+│   │   └── src/
 │   └── product-service/                        # Product catalog management
 │       ├── pom.xml
 │       └── src/
 │
+├── e2e-tests/                                    # Karate end-to-end tests (see e2e-tests/README.md)
+├── k8s/                                         # Kubernetes manifests (see docs/KUBERNETES_DEPLOYMENT.md)
 └── config-repo/                                 # Centralized configuration files
 ```
 
@@ -262,21 +272,28 @@ mvn spring-boot:run
 
 ### Quick Start with Docker Compose
 
-The project includes a complete `docker-compose.yml` that orchestrates all services:
+A single `docker-compose.yml` covers every local scenario (H2, Postgres, HTTPS, full observability stack) via Compose **profiles** - no separate compose files to maintain. This is a local-only project (Docker Compose here, or the Kubernetes manifests under `k8s/` if you'd rather run it in a cluster); there is no distinct "production" compose variant.
 
 ```bash
-# Start all services
-docker-compose up -d
+# Default: core stack, in-memory H2 (fastest to start)
+docker compose up -d
 
-# Check service status
-docker-compose ps
+# Real PostgreSQL instead of H2
+docker compose --profile postgres --env-file .env.postgres up -d
 
-# View logs
-docker-compose logs -f
+# HTTPS locally via nginx + self-signed cert
+docker compose --profile https up -d
 
-# Stop all services
-docker-compose down
+# Full stack: Postgres + HTTPS + observability (ELK/Prometheus/Grafana)
+docker compose --profile postgres --profile https --profile observability --env-file .env.postgres up -d
+
+# Check service status / logs / stop
+docker compose ps
+docker compose logs -f
+docker compose down
 ```
+
+See **[docs/SETUP_AND_DEPLOYMENT.md](docs/SETUP_AND_DEPLOYMENT.md)** for the full scenario matrix, memory budget per profile, and HTTPS certificate setup.
 
 ### Service Access via Docker Compose
 
@@ -306,11 +323,11 @@ docker build -t customer-service:1.0 .
 
 ### Postman Collection
 
-A complete Postman collection is provided: `micro-ecommerce-postman-collection.json`
+A complete Postman collection is provided: `postman-collection.json` (also importable into Insomnia). Two environments are included - `postman_environment_http.json` for the default HTTP setup and `postman_environment_https.json` for the `--profile https` nginx setup.
 
 **Import steps:**
-1. Open Postman
-2. Click **Import** → Select the JSON file
+1. Open Postman (or Insomnia)
+2. Click **Import** → select `postman-collection.json` and the environment file matching your setup
 3. Explore available endpoints for all microservices
 
 ### Base URL
@@ -382,15 +399,9 @@ http://localhost:8080/api
 
 ## 📖 Development Phases
 
-The project follows a structured development approach:
+The project follows a structured, 13-phase development approach (infrastructure, security, resilience, observability, Kubernetes, CI/CD, and more).
 
-1. **Phase 1:** Infrastructure & Scaffolding (✅ Complete)
-2. **Phase 2:** Core Microservices Development (✅ Complete)
-3. **Phase 3:** Event-Driven Communication & SAGA (✅ Complete)
-4. **Phase 4:** Resilience & Load Balancing (In Progress)
-5. **Phase 5:** Testing, Containerization & Deployment (In Progress)
-
-See `ecommerce-microservices-plan.md` for detailed architecture documentation.
+See **[docs/PHASES_GUIDE.md](docs/PHASES_GUIDE.md)** for the phase-by-phase breakdown and **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the overall system design.
 
 ---
 
@@ -490,6 +501,20 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## 📧 Contact & Support
 
 For questions or support, please open an issue in the repository.
+
+---
+
+## 📚 Documentation
+
+All project documentation lives under [`docs/`](docs/). Start with **[DOCUMENTATION_INDEX.md](DOCUMENTATION_INDEX.md)** for a guided learning path, or jump straight to:
+
+- **[docs/SETUP_AND_DEPLOYMENT.md](docs/SETUP_AND_DEPLOYMENT.md)** - every local setup scenario (H2, Postgres, HTTPS, full/compact stack), Kubernetes, testing, troubleshooting
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - system design overview
+- **[docs/PHASES_GUIDE.md](docs/PHASES_GUIDE.md)** - phase-by-phase implementation walkthrough
+- **[docs/CONCEPTS_EXPLAINED.md](docs/CONCEPTS_EXPLAINED.md)** - distributed systems concepts used in this project
+- **[docs/SAGA_PATTERN_GUIDE.md](docs/SAGA_PATTERN_GUIDE.md)**, **[docs/DATABASE_MIGRATIONS.md](docs/DATABASE_MIGRATIONS.md)**, **[docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md)**, **[docs/KUBERNETES_DEPLOYMENT.md](docs/KUBERNETES_DEPLOYMENT.md)**
+- **[docs/SSL_TLS_SETUP.md](docs/SSL_TLS_SETUP.md)**, **[docs/SECRETS_MANAGEMENT.md](docs/SECRETS_MANAGEMENT.md)**, **[docs/MTLS_CONFIGURATION.md](docs/MTLS_CONFIGURATION.md)**, **[docs/COMPLIANCE_MONITORING.md](docs/COMPLIANCE_MONITORING.md)** - security deep dives
+- **[docs/concepts/](docs/concepts/)** - beginner-friendly explainers for Docker, Kafka, Kubernetes, microservices, and transactions
 
 ---
 

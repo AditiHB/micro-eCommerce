@@ -7,9 +7,11 @@ import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.RefundInitiatedEvent;
 import com.ecommerce.common.events.RefundCompletedEvent;
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.EventPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.messaging.handler.annotation.Payload;
@@ -37,6 +39,7 @@ public class PaymentEventListener {
 
     private final PaymentRepository repository;
     private final EventPublisher eventPublisher;
+    private final DlqPublisher dlqPublisher;
 
     /**
      * Forward Transaction: Process payment when inventory is reserved.
@@ -45,13 +48,48 @@ public class PaymentEventListener {
     @KafkaListener(topics = "inventory-reserved", groupId = "payment-group")
     public void handleInventoryReserved(@Payload InventoryReservedEvent event, Acknowledgment ack) {
         try {
+            // A payment for this order may already exist - e.g. a client
+            // called POST /api/payments directly instead of waiting for the
+            // saga, which this event-driven path has no way to know about.
+            // Without this guard, both paths can race to create a payment
+            // for the same order, double-charging it (confirmed happening:
+            // e2e-tests/customer-journey.feature intermittently saw two
+            // PAYMENT_SUCCESS notifications per order - one from this
+            // listener's hardcoded $99.99, one from the real REST amount).
+            //
+            // This check alone is still a check-then-act race - the REST
+            // API's save() can land between this check and this listener's
+            // own save() below. The unique constraint on orderId (see
+            // V7__Enforce_One_Payment_Per_Order.sql) is what actually
+            // closes the race atomically; this check is just a fast path
+            // that skips the wasted round trip in the common, non-racing
+            // case.
+            if (repository.findByOrderId(event.getOrderId()).isPresent()) {
+                log.info("Payment already exists for order: {} - skipping (likely created via the REST API)",
+                    event.getOrderId());
+                ack.acknowledge();
+                return;
+            }
+
             log.info("Handling inventory reserved event for order: {} - Processing payment", event.getOrderId());
 
             Payment payment = new Payment();
             payment.setOrderId(event.getOrderId());
             payment.setAmount(new BigDecimal("99.99"));
             payment.setStatus(PaymentStatus.PROCESSED);
-            Payment savedPayment = repository.save(payment);
+
+            Payment savedPayment;
+            try {
+                savedPayment = repository.save(payment);
+            } catch (DataIntegrityViolationException dup) {
+                // Lost the race to another writer (see the comment above) -
+                // a payment exists now, which is the desired end state.
+                // Nothing went wrong; don't publish payment-failed.
+                log.info("Payment already exists for order: {} (lost the race to another writer) - skipping",
+                    event.getOrderId());
+                ack.acknowledge();
+                return;
+            }
 
             PaymentProcessedEvent processedEvent = new PaymentProcessedEvent(
                 savedPayment.getId(),
@@ -68,17 +106,32 @@ public class PaymentEventListener {
         } catch (Exception e) {
             log.error("Error handling inventory reserved event for order: {}", event.getOrderId(), e);
 
-            // Include product/quantity in payment failed event for inventory compensation
-            PaymentFailedEvent failedEvent = new PaymentFailedEvent(
-                event.getOrderId(),
-                event.getProductId(),
-                event.getQuantity(),
-                "Payment processing exception: " + e.getMessage()
-            );
-            eventPublisher.publishEvent(failedEvent, "payment-failed",
-                event.getEventId(), event.getEventId());
+            try {
+                // Include product/quantity in payment failed event for inventory compensation
+                PaymentFailedEvent failedEvent = new PaymentFailedEvent(
+                    event.getOrderId(),
+                    event.getProductId(),
+                    event.getQuantity(),
+                    "Payment processing exception: " + e.getMessage()
+                );
+                eventPublisher.publishEvent(failedEvent, "payment-failed",
+                    event.getEventId(), event.getEventId());
 
-            log.warn("✗ Payment processing failed for order: {} - Triggering compensation", event.getOrderId());
+                log.warn("✗ Payment processing failed for order: {} - Triggering compensation", event.getOrderId());
+            } catch (Exception compensationFailure) {
+                // The compensating payment-failed publish itself failed - there's no
+                // further fallback within the saga, so park the original event in the
+                // DLQ for manual recovery instead of losing it silently.
+                log.error("Failed to publish compensating payment-failed event for order: {} - routing to DLQ instead",
+                    event.getOrderId(), compensationFailure);
+                dlqPublisher.publish(event, "inventory-reserved", compensationFailure);
+            }
+
+            // Ack either way: previously this catch block never acknowledged the
+            // original message at all, which - under AckMode.MANUAL - risked the
+            // same silent, permanent message loss as the other listeners fixed
+            // alongside this one (a later message's ack commits past this one).
+            ack.acknowledge();
         }
     }
 
@@ -126,6 +179,8 @@ public class PaymentEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling order cancelled event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "order-cancelled", e);
+            ack.acknowledge();
         }
     }
 }

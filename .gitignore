@@ -30,6 +30,7 @@ Dockerfile
 # IDE
 .vscode/
 .idea/
+*.iml
 .classpath
 .project
 .settings/
@@ -37,16 +38,8 @@ Dockerfile
 # Maven
 target/
 
-# Environment Variables (NEVER commit real secrets)
-.env
-.env.local
-.env.*.local
-
-# Secret rotation logs
-infrastructure/scripts/*.log
-infrastructure/scripts/*.audit.json
-
-# Environment Variables (NEVER commit real secrets)
+# Environment Variables (NEVER commit real secrets; .env.postgres has no
+# secrets - just profile-switching flags - so it is intentionally tracked)
 .env
 .env.local
 .env.*.local

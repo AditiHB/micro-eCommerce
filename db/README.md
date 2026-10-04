@@ -22,17 +22,35 @@ Each service's migration directory has a subfolder per database vendor - `h2/`, 
 **Automatically, every time a service starts.** Flyway runs before Hibernate/JPA touches the schema (`spring.jpa.hibernate.ddl-auto: validate` - JPA only validates against what Flyway already created, it never creates or alters tables itself).
 
 - **Default (H2 in-memory):** every service boots against its own throwaway H2 database with no setup required. Flyway creates the schema fresh each time the container starts.
-- **Against real PostgreSQL:** start Postgres and the services together so Flyway runs against it instead:
+- **Against real PostgreSQL:** start the stack with the `postgres` profile so Flyway runs against it instead:
   ```bash
-  docker compose -f docker-compose.yml -f docker-compose-postgres.yml up -d
+  docker compose --profile postgres --env-file .env.postgres up -d
   ```
-  See [docker-compose-postgres.yml](../docker-compose-postgres.yml) and [LOCAL_INFRASTRUCTURE_SETUP.md](../LOCAL_INFRASTRUCTURE_SETUP.md) for details. If you only need the bare database (e.g. to inspect it, no services), run `docker compose -f docker-compose-postgres.yml up -d postgres` instead.
+  See [docs/SETUP_AND_DEPLOYMENT.md](../docs/SETUP_AND_DEPLOYMENT.md) for details. If you only need the bare database (e.g. to inspect it, no services), run `docker compose --profile postgres --env-file .env.postgres up -d postgres` instead.
 
 If you need to run Flyway outside of starting the whole application (e.g. to preview pending migrations), use the Maven plugin from the specific service module:
 ```bash
 mvn -pl services/customer-service flyway:info
 mvn -pl services/customer-service flyway:migrate
 ```
+
+## Seeded test users (JWT auth)
+
+`POST /api/auth/login` authenticates against a `users` table that each
+service keeps as its own local copy (same database-per-service pattern as
+everything else) - there's no shared/central user store, and no
+self-service registration endpoint. Two accounts are seeded by Flyway for
+local/test use:
+
+| Username | Role | Seeded into | Purpose |
+|---|---|---|---|
+| `karate_admin` | ADMIN | customer, inventory, order, payment, notification | Logging in as a real user - e.g. [e2e-tests](../e2e-tests) |
+| `notification-service-account` | USER | customer, order | notification-service's own outbound calls to `GET /api/customers/{id}` and `GET /api/orders/{id}` (service-to-service - see `CustomerClient`/`OrderClient`), which are role-protected endpoints like any other |
+
+Password hashes are bcrypt; see each service's `V*__Seed_Test_Users.sql` /
+`V*__Seed_Service_Account.sql` migration. Since every service validates a
+JWT by loading the username from its *own* local table, a new seeded
+username needs the same row added to every service it will call into.
 
 ## Verifying migrations
 

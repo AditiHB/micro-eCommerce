@@ -5,15 +5,15 @@ import com.ecommerce.common.events.InventoryReservedEvent;
 import com.ecommerce.common.events.InventoryReleasedEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
+import com.ecommerce.common.events.DlqPublisher;
 import com.ecommerce.common.events.EventPublisher;
+import com.ecommerce.inventoryservice.service.InventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
-
-import java.util.Optional;
 
 /**
  * Inventory Event Listener - Handles Saga Pattern with Compensating Transactions
@@ -26,14 +26,22 @@ import java.util.Optional;
  *
  * This implements choreography-based Saga pattern where services emit events
  * and other services listen and react, including compensating actions on failure.
+ *
+ * Both handlers are idempotent against Kafka redelivery of the same event -
+ * a normal occurrence under AckMode.MANUAL (consumer restart/rebalance
+ * before acking), not a failure. See InventoryService.reserveStockIfAvailable/
+ * releaseStockIfPresent's javadoc: an inventory_reservations row per orderId
+ * (unique constraint) is what makes a second delivery a safe no-op instead
+ * of decrementing/incrementing the same order's stock twice.
  */
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class InventoryEventListener {
 
-    private final InventoryRepository repository;
+    private final InventoryService inventoryService;
     private final EventPublisher eventPublisher;
+    private final DlqPublisher dlqPublisher;
 
     /**
      * Forward Transaction: Reserve inventory when order is created.
@@ -45,13 +53,11 @@ public class InventoryEventListener {
             log.info("Handling order created event for order: {} - Reserving inventory for product: {}, quantity: {}",
                 event.getOrderId(), event.getProductId(), event.getQuantity());
 
-            Optional<Inventory> inventoryOpt = repository.findByProductId(event.getProductId());
+            boolean reserved = inventoryService
+                .reserveStockIfAvailable(event.getOrderId(), event.getProductId(), event.getQuantity())
+                .isPresent();
 
-            if (inventoryOpt.isPresent() && inventoryOpt.get().getQuantity() >= event.getQuantity()) {
-                Inventory inventory = inventoryOpt.get();
-                inventory.setQuantity(inventory.getQuantity() - event.getQuantity());
-                repository.save(inventory);
-
+            if (reserved) {
                 // Include product and quantity in reserved event for potential compensation
                 InventoryReservedEvent reservedEvent = new InventoryReservedEvent(
                     event.getOrderId(),
@@ -75,6 +81,8 @@ public class InventoryEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling order created event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "order-created", e);
+            ack.acknowledge();
         }
     }
 
@@ -89,14 +97,11 @@ public class InventoryEventListener {
                 event.getOrderId());
 
             if (event.getProductId() != null && event.getQuantity() != null) {
-                Optional<Inventory> inventoryOpt = repository.findByProductId(event.getProductId());
+                boolean released = inventoryService
+                    .releaseStockIfPresent(event.getOrderId(), event.getProductId(), event.getQuantity())
+                    .isPresent();
 
-                if (inventoryOpt.isPresent()) {
-                    Inventory inventory = inventoryOpt.get();
-                    // Release (add back) the reserved quantity
-                    inventory.setQuantity(inventory.getQuantity() + event.getQuantity());
-                    repository.save(inventory);
-
+                if (released) {
                     InventoryReleasedEvent releasedEvent = new InventoryReleasedEvent(
                         event.getOrderId(),
                         event.getProductId(),
@@ -117,6 +122,8 @@ public class InventoryEventListener {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling payment failed event for order: {}", event.getOrderId(), e);
+            dlqPublisher.publish(event, "payment-failed", e);
+            ack.acknowledge();
         }
     }
 }

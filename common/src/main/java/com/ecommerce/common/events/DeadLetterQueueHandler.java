@@ -14,7 +14,28 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class DeadLetterQueueHandler {
 
-    @KafkaListener(topics = "${kafka.dlq.pattern:.*-dlq$}",
+    /**
+     * Consumes every {@code *-dlq} topic (order-created-dlq,
+     * payment-processed-dlq, payment-failed-dlq, inventory-reserved-dlq,
+     * inventory-failed-dlq - see KafkaEventConfig's NewTopic beans) that
+     * DlqPublisher routes a saga listener's failed event to.
+     *
+     * TODO (known gap, fixed from a worse one): this was previously
+     * {@code @KafkaListener(topics = "${kafka.dlq.pattern:.*-dlq$}", ...)} -
+     * `topics` takes literal topic names, not a regex, so Kafka rejected
+     * ".*-dlq$" as an invalid topic on every poll (visible as a continuous
+     * InvalidTopicException/"Consumer exception" loop in any service
+     * scanning this class). `topicPattern` is the attribute that actually
+     * matches topics by regex. This single listener replaces three
+     * near-identical ones that each subscribed to one literal DLQ topic
+     * name (now redundant since this pattern covers all of them, including
+     * payment-failed-dlq and inventory-failed-dlq, which never had a
+     * listener here at all).
+     *
+     * Currently logs only - there's no reprocessing/alerting here yet, so
+     * these messages still need manual inspection/replay.
+     */
+    @KafkaListener(topicPattern = "${kafka.dlq.pattern:.*-dlq$}",
                    groupId = "dlq-handler-group",
                    containerFactory = "dlqKafkaListenerContainerFactory")
     public void handleFailedEvent(@Payload String message,
@@ -32,48 +53,6 @@ public class DeadLetterQueueHandler {
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling DLQ message from topic: {}", topic, e);
-        }
-    }
-
-    @KafkaListener(topics = "order-created-dlq",
-                   groupId = "order-dlq-handler",
-                   containerFactory = "dlqKafkaListenerContainerFactory")
-    public void handleOrderCreatedDlq(@Payload String message,
-                                     @Header(value = KafkaHeaders.RECEIVED_TOPIC) String topic,
-                                     Acknowledgment ack) {
-        try {
-            log.error("Order created DLQ event: {}", message);
-            ack.acknowledge();
-        } catch (Exception e) {
-            log.error("Error handling order created DLQ", e);
-        }
-    }
-
-    @KafkaListener(topics = "payment-processed-dlq",
-                   groupId = "payment-dlq-handler",
-                   containerFactory = "dlqKafkaListenerContainerFactory")
-    public void handlePaymentProcessedDlq(@Payload String message,
-                                         @Header(value = KafkaHeaders.RECEIVED_TOPIC) String topic,
-                                         Acknowledgment ack) {
-        try {
-            log.error("Payment processed DLQ event: {}", message);
-            ack.acknowledge();
-        } catch (Exception e) {
-            log.error("Error handling payment processed DLQ", e);
-        }
-    }
-
-    @KafkaListener(topics = "inventory-reserved-dlq",
-                   groupId = "inventory-dlq-handler",
-                   containerFactory = "dlqKafkaListenerContainerFactory")
-    public void handleInventoryReservedDlq(@Payload String message,
-                                          @Header(value = KafkaHeaders.RECEIVED_TOPIC) String topic,
-                                          Acknowledgment ack) {
-        try {
-            log.error("Inventory reserved DLQ event: {}", message);
-            ack.acknowledge();
-        } catch (Exception e) {
-            log.error("Error handling inventory reserved DLQ", e);
         }
     }
 }

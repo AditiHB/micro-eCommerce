@@ -81,7 +81,12 @@ public class KafkaEventConfig {
         configProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, producerMaxBlockMs);
         configProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, producerRequestTimeoutMs);
         configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, producerDeliveryTimeoutMs);
-        configProps.put(JsonSerializer.ADD_TYPE_INFO_HEADERS, false);
+        // Type headers ON (the default): the consumer side's JsonDeserializer has no usable
+        // default type to fall back to (DomainEvent is abstract - every concrete *Event class
+        // is a different shape on a different topic), so it relies entirely on this header to
+        // know which concrete class to deserialize into. Turning this off makes every consumer
+        // fail with "No type information in headers and no default type provided" and silently
+        // never process a single event - this shared factory is used for every topic.
         return new DefaultKafkaProducerFactory<>(configProps);
     }
 
@@ -117,11 +122,48 @@ public class KafkaEventConfig {
         return factory;
     }
 
+    // DLQ topics carry a plain JSON string (the failed event, serialized by
+    // DlqPublisher) rather than a typed DomainEvent - a dead-letter queue
+    // needs to tolerate whatever got written there, including a payload
+    // that doesn't cleanly deserialize. Deliberately separate producer/
+    // consumer stack from the main event one above (plain String (de)
+    // serializers, no type headers), matching DeadLetterQueueHandler's
+    // own `@Payload String message` listener signature.
+
+    @Bean
+    public ProducerFactory<String, String> dlqProducerFactory() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        configProps.put(ProducerConfig.ACKS_CONFIG, "all");
+        configProps.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, producerMaxBlockMs);
+        configProps.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, producerRequestTimeoutMs);
+        configProps.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, producerDeliveryTimeoutMs);
+        return new DefaultKafkaProducerFactory<>(configProps);
+    }
+
+    @Bean
+    public KafkaTemplate<String, String> dlqKafkaTemplate() {
+        return new KafkaTemplate<>(dlqProducerFactory());
+    }
+
+    @Bean
+    public ConsumerFactory<String, String> dlqConsumerFactory() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        configProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        return new DefaultKafkaConsumerFactory<>(configProps);
+    }
+
     @Bean("dlqKafkaListenerContainerFactory")
-    public KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<String, Object>> dlqKafkaListenerContainerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, Object> factory =
+    public KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<String, String>> dlqKafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory =
             new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(consumerFactory());
+        factory.setConsumerFactory(dlqConsumerFactory());
         factory.setConcurrency(1);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL);
         factory.setAutoStartup(listenerAutoStartup);
@@ -203,6 +245,26 @@ public class KafkaEventConfig {
     @Bean
     public NewTopic inventoryFailedDlqTopic() {
         return TopicBuilder.name("inventory-failed" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    // order-cancelled/refund-completed themselves have no explicit NewTopic
+    // bean (always relied on broker auto-creation) - only their DLQ topics
+    // need one here, same as every other *Dlq bean above.
+
+    @Bean
+    public NewTopic orderCancelledDlqTopic() {
+        return TopicBuilder.name("order-cancelled" + dlqSuffix)
+            .partitions(1)
+            .replicas(replicationFactor)
+            .build();
+    }
+
+    @Bean
+    public NewTopic refundCompletedDlqTopic() {
+        return TopicBuilder.name("refund-completed" + dlqSuffix)
             .partitions(1)
             .replicas(replicationFactor)
             .build();
