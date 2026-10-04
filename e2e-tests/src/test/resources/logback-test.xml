@@ -1,0 +1,18 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Logback falls back to its noisy DEBUG-everything default when no
+         config is present at all - that's the Thymeleaf template-engine
+         dump and other framework chatter on every run. Keep Karate's own
+         logging (HTTP calls, step failures) since that's the genuinely
+         useful part; silence everything else. -->
+    <root level="WARN">
+        <appender-ref ref="STDOUT" />
+    </root>
+
+    <logger name="com.intuit.karate" level="INFO" />
+</configuration>

@@ -20,6 +20,21 @@ public class DockerControl {
         return run("docker", "start", containerName);
     }
 
+    /**
+     * Deletes every rate_limit:* key in the gateway's Redis. The rate-limit
+     * scenario in resilience.feature deliberately exhausts its own
+     * client-IP counter (that's the point of the test), and that counter
+     * is shared across every route for 60s - without this cleanup, any
+     * other feature run within that window that happens to hit the same
+     * route gets a false 429 that has nothing to do with whatever it's
+     * actually testing. Call this at the end of that scenario (via
+     * configure afterScenario, so it runs even if an assertion fails).
+     */
+    public static void clearRateLimitKeys() {
+        run("docker", "exec", "redis", "redis-cli", "eval",
+            "for _,k in ipairs(redis.call('keys','rate_limit:*')) do redis.call('del',k) end", "0");
+    }
+
     public static boolean waitUntilHealthy(String containerName, int timeoutSeconds) {
         long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
         while (System.currentTimeMillis() < deadline) {

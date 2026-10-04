@@ -93,6 +93,15 @@ Feature: Gateway resilience patterns
     # infrastructure/api-gateway/src/main/resources/application.yml) and the
     # counter is a sliding 60s TTL that renews on every hit, so firing enough
     # requests in a tight loop reliably exceeds it well within 60 seconds.
+    #
+    # This deliberately leaves the shared per-client-IP counter exhausted
+    # for up to 60s afterward (every route shares one counter - see
+    # RateLimitingFilter) - clean it up even if an assertion below fails,
+    # so a different feature run within that window doesn't get a false
+    # 429 that has nothing to do with whatever IT's testing.
+    * def docker = Java.type('e2e.DockerControl')
+    * configure afterScenario = function(){ docker.clearRateLimitKeys() }
+
     * def probe = function(){ return karate.call('classpath:e2e/rate-limit-probe.feature', { gatewayUrl: gatewayUrl, authToken: authToken }) }
     * def statuses = []
     * eval for (var i = 0; i < 60; i++) { statuses.push(probe().responseStatus) }
