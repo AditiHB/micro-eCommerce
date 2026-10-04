@@ -232,6 +232,13 @@ kubectl run load-generator -n ecommerce --image=busybox:1.36 --restart=Never -- 
   /bin/sh -c "for i in $(seq 1 20); do (while true; do wget -q -O- http://customer-service:8081/api/customers >/dev/null; done) & done; wait"
 ```
 
+On Windows with Git Bash specifically: prefix the command with
+`MSYS_NO_PATHCONV=1` - confirmed live, without it Git Bash silently
+rewrites `/bin/sh` into a host Windows path before it ever reaches
+`kubectl`, and the pod fails with `StartError` / `exec: "C:/Program
+Files/Git/usr/bin/sh": no such file or directory` - nothing to do with
+Kubernetes itself.
+
 Watch it react, in another terminal:
 
 ```bash
@@ -384,6 +391,48 @@ reproduced in full here):
   `audit.k8s.io/v1 Policy` object, which isn't `kubectl apply`-able at all.
   Replaced with a working per-service ServiceAccount+Role+RoleBinding set
   in `k8s/base/02-rbac.yaml`.
+
+All of the above was checked by reading manifests and rendering them with
+`kubectl kustomize` - no live cluster. A second pass actually deployed both
+overlays to a real Kind cluster and exercised the saga end to end, which
+caught four more bugs no amount of static review would have found:
+
+- **Kafka crash-looped on every start** with `port is deprecated. Please
+  use KAFKA_ADVERTISED_LISTENERS instead.` and exit 1, no other output.
+  Root cause: Kubernetes auto-injects legacy Docker-links-style env vars
+  for every Service into every pod in the namespace - naming the Service
+  `kafka` means every pod gets a `KAFKA_PORT=tcp://<ip>:9092` var, and
+  cp-kafka's own entrypoint treats any set `KAFKA_PORT` as a deprecated
+  config attempt and refuses to start. Fixed with `enableServiceLinks:
+  false` on every pod in `k8s/base` (and the postgres/nginx-https pods,
+  same risk class).
+- **The postgres overlay's init script never actually created a single
+  database** - confirmed via `kubectl logs postgres-0`: every `CREATE
+  DATABASE` attempt failed with a Postgres syntax error, because `\gexec`
+  is a psql-interactive-only meta-command and the YAML-safe rewrite of the
+  original heredoc (needed to keep a bash heredoc terminator valid inside
+  a YAML block scalar) sent it to the server as literal SQL text instead.
+  Every business service then crash-looped with `FATAL: database ... does
+  not exist`. Fixed with a plain existence-check-then-`CREATE` instead of
+  relying on `\gexec` at all - see `k8s/overlays/postgres/postgres.yaml`.
+- **`CacheConfig` vs. `RedisConfig` - fixing the database layer wasn't
+  enough.** With Postgres shared and 2 replicas, polling the same order
+  through the gateway still alternated between the right answer and a
+  stale one: one replica's Kafka listener completed the order and evicted
+  only its own local in-process cache, while the other replica's identical
+  local cache never got the memo. Swapped customer/order/inventory/
+  payment-service onto `RedisConfig`'s distributed cache instead - see its
+  javadoc for the full story, including two more serialization bugs that
+  swap surfaced (not `Serializable`, then a broken polymorphic-typing
+  workaround) and how they were fixed by reading the actual Spring Data
+  Redis source rather than guessing twice.
+
+Verified afterward: both order-service replicas return identical,
+identical-timestamped `COMPLETED` orders, and a load generator drove
+`customer-service`'s HPA from 2 to 5 replicas (199% CPU against the 70%
+target) and back down to 2 within the configured 60s window once the load
+stopped - the exact scale-up/scale-down cycle this guide's own
+[Scaling](#scaling) section walks through.
 
 ## What this round didn't cover
 
