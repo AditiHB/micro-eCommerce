@@ -37,6 +37,17 @@ error, and the original payment left completely untouched rather than
 partially overwritten. Uses a synthetic orderId so it's fully isolated from
 the Kafka saga (no race with PaymentEventListener's own automatic payment).
 
+[`dlq-routing.feature`](src/test/resources/e2e/dlq-routing.feature): the
+saga listeners' Dead Letter Queue safety net (DlqPublisher). Publishes a
+hand-crafted, deliberately malformed event straight onto a main topic via
+[KafkaFaultInjector](src/test/java/e2e/KafkaFaultInjector.java) (a raw
+Kafka client, bypassing every service's own producer), making the real
+`@KafkaListener` method throw in its actual business logic, then confirms
+the event lands in that topic's `<topic>-dlq` instead of being silently
+dropped. Covers 5 of the saga's 8 listener methods - the other 3 are
+guarded against this kind of data-only fault injection by design (see the
+feature file's own header for which, and why).
+
 ## Prerequisites
 
 Start the stack first (see [docs/SETUP_AND_DEPLOYMENT.md](../docs/SETUP_AND_DEPLOYMENT.md)):
@@ -60,6 +71,7 @@ mvn -f e2e-tests/pom.xml test -Dtest=CustomerJourneyRunner
 mvn -f e2e-tests/pom.xml test -Dtest=ResilienceRunner
 mvn -f e2e-tests/pom.xml test -Dtest=CompensatingTransactionRunner
 mvn -f e2e-tests/pom.xml test -Dtest=TransactionalRollbackRunner
+mvn -f e2e-tests/pom.xml test -Dtest=DlqRoutingRunner
 ```
 
 This module is **not** wired into the root reactor (`pom.xml`'s `<modules>`)

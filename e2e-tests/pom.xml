@@ -53,6 +53,19 @@
             <version>1.9.3</version>
             <scope>test</scope>
         </dependency>
+        <!-- KafkaFaultInjector talks to the broker directly (bypassing every
+             service's own producer) so dlq-routing.feature can craft events
+             with field values the normal REST-validated flow could never
+             produce. Version pinned to match what the services themselves
+             use (see common/pom.xml's spring-kafka -> kafka-clients, 3.6.2)
+             so the wire protocol is guaranteed compatible with this stack's
+             broker. -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>3.6.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
