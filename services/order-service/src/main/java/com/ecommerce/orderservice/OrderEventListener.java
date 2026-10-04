@@ -7,6 +7,7 @@ import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.events.OrderCancelledEvent;
 import com.ecommerce.common.events.RefundCompletedEvent;
 import com.ecommerce.common.events.EventPublisher;
+import com.ecommerce.orderservice.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -35,6 +36,7 @@ import org.springframework.stereotype.Component;
 public class OrderEventListener {
 
     private final OrderRepository repository;
+    private final OrderService orderService;
     private final EventPublisher eventPublisher;
 
     /**
@@ -44,12 +46,9 @@ public class OrderEventListener {
     public void handlePaymentProcessed(@Payload PaymentProcessedEvent event, Acknowledgment ack) {
         try {
             log.info("Handling payment processed event for order: {} - Saga moving to COMPLETED state", event.getOrderId());
-            repository.findById(event.getOrderId()).ifPresent(order -> {
-                order.setStatus(OrderStatus.COMPLETED);
-                repository.save(order);
-                log.info("✓ Order {} successfully COMPLETED - Payment processed for amount: {}",
-                    order.getId(), event.getAmount());
-            });
+            orderService.updateOrderStatusIfPresent(event.getOrderId(), OrderStatus.COMPLETED)
+                .ifPresent(order -> log.info("✓ Order {} successfully COMPLETED - Payment processed for amount: {}",
+                    order.getId(), event.getAmount()));
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling payment processed event for order: {}", event.getOrderId(), e);
@@ -64,20 +63,18 @@ public class OrderEventListener {
     public void handleInventoryFailed(@Payload InventoryFailedEvent event, Acknowledgment ack) {
         try {
             log.info("Handling inventory failed event for order: {} - Saga triggered CANCELLATION", event.getOrderId());
-            repository.findById(event.getOrderId()).ifPresent(order -> {
-                order.setStatus(OrderStatus.CANCELLED);
-                repository.save(order);
+            orderService.updateOrderStatusIfPresent(event.getOrderId(), OrderStatus.CANCELLED)
+                .ifPresent(order -> {
+                    // Publish OrderCancelledEvent to trigger compensating transactions
+                    OrderCancelledEvent cancelledEvent = new OrderCancelledEvent(
+                        order.getId(),
+                        "Inventory reservation failed"
+                    );
+                    eventPublisher.publishEvent(cancelledEvent, "order-cancelled",
+                        event.getEventId(), event.getEventId());
 
-                // Publish OrderCancelledEvent to trigger compensating transactions
-                OrderCancelledEvent cancelledEvent = new OrderCancelledEvent(
-                    order.getId(),
-                    "Inventory reservation failed"
-                );
-                eventPublisher.publishEvent(cancelledEvent, "order-cancelled",
-                    event.getEventId(), event.getEventId());
-
-                log.warn("✗ Order {} CANCELLED due to inventory failure - Compensating transactions triggered", order.getId());
-            });
+                    log.warn("✗ Order {} CANCELLED due to inventory failure - Compensating transactions triggered", order.getId());
+                });
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling inventory failed event for order: {}", event.getOrderId(), e);
@@ -94,21 +91,19 @@ public class OrderEventListener {
         try {
             log.info("Handling payment failed event for order: {} - Saga triggered CANCELLATION (Compensating Transactions)",
                 event.getOrderId());
-            repository.findById(event.getOrderId()).ifPresent(order -> {
-                order.setStatus(OrderStatus.CANCELLED);
-                repository.save(order);
+            orderService.updateOrderStatusIfPresent(event.getOrderId(), OrderStatus.CANCELLED)
+                .ifPresent(order -> {
+                    // Publish OrderCancelledEvent to trigger compensating transactions
+                    OrderCancelledEvent cancelledEvent = new OrderCancelledEvent(
+                        order.getId(),
+                        event.getReason() != null ? event.getReason() : "Payment processing failed"
+                    );
+                    eventPublisher.publishEvent(cancelledEvent, "order-cancelled",
+                        event.getEventId(), event.getEventId());
 
-                // Publish OrderCancelledEvent to trigger compensating transactions
-                OrderCancelledEvent cancelledEvent = new OrderCancelledEvent(
-                    order.getId(),
-                    event.getReason() != null ? event.getReason() : "Payment processing failed"
-                );
-                eventPublisher.publishEvent(cancelledEvent, "order-cancelled",
-                    event.getEventId(), event.getEventId());
-
-                log.warn("✗ Order {} CANCELLED due to payment failure - Compensating transactions triggered: " +
-                    "Payment refund + Inventory release", order.getId());
-            });
+                    log.warn("✗ Order {} CANCELLED due to payment failure - Compensating transactions triggered: " +
+                        "Payment refund + Inventory release", order.getId());
+                });
             ack.acknowledge();
         } catch (Exception e) {
             log.error("Error handling payment failed event for order: {}", event.getOrderId(), e);

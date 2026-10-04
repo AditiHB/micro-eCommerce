@@ -1,10 +1,10 @@
 # E2E Tests (Karate)
 
-A single Karate feature exercising the full customer journey against the
-**already-running** Docker Compose stack over real HTTP - no mocks, no
-Spring context, nothing started by this module itself.
+Karate features exercising the live, **already-running** Docker Compose
+stack over real HTTP - no mocks, no Spring context, nothing started by this
+module itself.
 
-## Scenario
+## Scenarios
 
 [`customer-journey.feature`](src/test/resources/e2e/customer-journey.feature):
 
@@ -15,6 +15,27 @@ Spring context, nothing started by this module itself.
 5. Invoke the Payment Service for that order
 6. Poll Notification Service until it shows both the order-created and
    payment-processed notifications it reacted to over Kafka
+
+[`resilience.feature`](src/test/resources/e2e/resilience.feature): the
+gateway's circuit breaker (stop/restart payment-service, confirm it opens
+then recovers) and rate limiter (burst past a route's per-minute budget).
+Needs `docker` on PATH - see [DockerControl](src/test/java/e2e/DockerControl.java).
+
+[`compensating-transaction.feature`](src/test/resources/e2e/compensating-transaction.feature):
+the choreography saga's rollback path. Orders more stock than Inventory
+Service has on hand, which fails the forward transaction mid-saga, then
+confirms the compensating transaction actually undoes the order that was
+already created - CANCELLED status, inventory left untouched (nothing was
+ever reserved), and Payment Service never reached.
+
+[`transactional-rollback.feature`](src/test/resources/e2e/transactional-rollback.feature):
+a single service's own `@Transactional` rollback, as opposed to the
+cross-service saga rollback above. A second payment for the same order
+hits a DB unique constraint partway through `PaymentService.processPayment`,
+and the whole transaction must roll back cleanly - a clean 400 business
+error, and the original payment left completely untouched rather than
+partially overwritten. Uses a synthetic orderId so it's fully isolated from
+the Kafka saga (no race with PaymentEventListener's own automatic payment).
 
 ## Prerequisites
 
@@ -36,13 +57,16 @@ used by this scenario (customers, orders, payments, inventory).
 
 ```bash
 mvn -f e2e-tests/pom.xml test -Dtest=CustomerJourneyRunner
+mvn -f e2e-tests/pom.xml test -Dtest=ResilienceRunner
+mvn -f e2e-tests/pom.xml test -Dtest=CompensatingTransactionRunner
+mvn -f e2e-tests/pom.xml test -Dtest=TransactionalRollbackRunner
 ```
 
 This module is **not** wired into the root reactor (`pom.xml`'s `<modules>`)
-and `CustomerJourneyRunner` is deliberately *not* named `*Test`/`*IT` - so it
-never runs as a side effect of `mvn clean install` or any other normal build,
-here or in any other service's Dockerfile. Run it explicitly, after the
-stack is up, exactly as above.
+and none of the `*Runner` classes are named `*Test`/`*IT` - so none of them
+run as a side effect of `mvn clean install` or any other normal build, here
+or in any other service's Dockerfile. Run them explicitly, after the stack
+is up, exactly as above.
 
 ## Notes
 

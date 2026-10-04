@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -168,6 +169,51 @@ public class InventoryService {
 
         log.info("Inventory updated successfully");
         return mapToResponse(updatedInventory);
+    }
+
+    /**
+     * Reserves stock for a product if it exists and has enough quantity on
+     * hand; empty otherwise. For the saga's Kafka listener
+     * (InventoryEventListener.handleOrderCreated), which previously wrote
+     * straight to InventoryRepository - bypassing this class and its
+     * @CacheEvict, so a reservation was invisible to GET /api/inventory for
+     * as long as that item stayed cached from an earlier read (same bug/fix
+     * as OrderService.updateOrderStatusIfPresent in order-service).
+     *
+     * @param productId the product to reserve stock for
+     * @param quantity the quantity requested
+     * @return the updated inventory response, or empty if the product
+     *         doesn't exist or doesn't have enough stock
+     */
+    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
+    public Optional<InventoryResponse> reserveStockIfAvailable(String productId, Integer quantity) {
+        log.info("Reserving {} units of product {} (if available)", quantity, productId);
+
+        return inventoryRepository.findByProductId(productId)
+            .filter(inventory -> inventory.getQuantity() >= quantity)
+            .map(inventory -> {
+                inventory.setQuantity(inventory.getQuantity() - quantity);
+                return mapToResponse(inventoryRepository.save(inventory));
+            });
+    }
+
+    /**
+     * Releases previously reserved stock for a product if it exists; no-op
+     * otherwise (same rationale as reserveStockIfAvailable above).
+     *
+     * @param productId the product to release stock back to
+     * @param quantity the quantity to add back
+     * @return the updated inventory response, or empty if the product doesn't exist
+     */
+    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
+    public Optional<InventoryResponse> releaseStockIfPresent(String productId, Integer quantity) {
+        log.info("Releasing {} units of product {} (if present)", quantity, productId);
+
+        return inventoryRepository.findByProductId(productId)
+            .map(inventory -> {
+                inventory.setQuantity(inventory.getQuantity() + quantity);
+                return mapToResponse(inventoryRepository.save(inventory));
+            });
     }
 
     private InventoryResponse mapToResponse(Inventory inventory) {

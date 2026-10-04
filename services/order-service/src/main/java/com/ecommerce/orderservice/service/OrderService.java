@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -127,6 +128,32 @@ public class OrderService {
 
         log.info("Order status updated successfully");
         return mapToResponse(updatedOrder);
+    }
+
+    /**
+     * Updates order status if the order exists, no-op otherwise. For the
+     * saga's Kafka listeners (OrderEventListener), which previously wrote
+     * status changes straight to OrderRepository - bypassing this class
+     * entirely, and with it the @CacheEvict above, so a CANCELLED/COMPLETED
+     * transition was invisible to GET /api/orders/{id} for as long as that
+     * order stayed cached from an earlier read. Returns Optional instead of
+     * throwing when the order is missing, matching the listeners'
+     * findById(...).ifPresent(...) semantics - an event referencing an
+     * order that's gone is a no-op, not an error.
+     *
+     * @param id the order ID
+     * @param status the new status
+     * @return the updated order response, or empty if no such order exists
+     */
+    @CacheEvict(value = CacheConfig.ORDERS_CACHE, allEntries = true)
+    public Optional<OrderResponse> updateOrderStatusIfPresent(Long id, OrderStatus status) {
+        log.info("Updating order {} status to {} (if present)", id, status);
+
+        return orderRepository.findById(id).map(order -> {
+            order.setStatus(status);
+            Order updatedOrder = orderRepository.save(order);
+            return mapToResponse(updatedOrder);
+        });
     }
 
     /**

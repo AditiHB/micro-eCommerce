@@ -6,14 +6,13 @@ import com.ecommerce.common.events.InventoryReleasedEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.EventPublisher;
+import com.ecommerce.inventoryservice.service.InventoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
-
-import java.util.Optional;
 
 /**
  * Inventory Event Listener - Handles Saga Pattern with Compensating Transactions
@@ -32,7 +31,7 @@ import java.util.Optional;
 @Slf4j
 public class InventoryEventListener {
 
-    private final InventoryRepository repository;
+    private final InventoryService inventoryService;
     private final EventPublisher eventPublisher;
 
     /**
@@ -45,13 +44,11 @@ public class InventoryEventListener {
             log.info("Handling order created event for order: {} - Reserving inventory for product: {}, quantity: {}",
                 event.getOrderId(), event.getProductId(), event.getQuantity());
 
-            Optional<Inventory> inventoryOpt = repository.findByProductId(event.getProductId());
+            boolean reserved = inventoryService
+                .reserveStockIfAvailable(event.getProductId(), event.getQuantity())
+                .isPresent();
 
-            if (inventoryOpt.isPresent() && inventoryOpt.get().getQuantity() >= event.getQuantity()) {
-                Inventory inventory = inventoryOpt.get();
-                inventory.setQuantity(inventory.getQuantity() - event.getQuantity());
-                repository.save(inventory);
-
+            if (reserved) {
                 // Include product and quantity in reserved event for potential compensation
                 InventoryReservedEvent reservedEvent = new InventoryReservedEvent(
                     event.getOrderId(),
@@ -89,14 +86,11 @@ public class InventoryEventListener {
                 event.getOrderId());
 
             if (event.getProductId() != null && event.getQuantity() != null) {
-                Optional<Inventory> inventoryOpt = repository.findByProductId(event.getProductId());
+                boolean released = inventoryService
+                    .releaseStockIfPresent(event.getProductId(), event.getQuantity())
+                    .isPresent();
 
-                if (inventoryOpt.isPresent()) {
-                    Inventory inventory = inventoryOpt.get();
-                    // Release (add back) the reserved quantity
-                    inventory.setQuantity(inventory.getQuantity() + event.getQuantity());
-                    repository.save(inventory);
-
+                if (released) {
                     InventoryReleasedEvent releasedEvent = new InventoryReleasedEvent(
                         event.getOrderId(),
                         event.getProductId(),
