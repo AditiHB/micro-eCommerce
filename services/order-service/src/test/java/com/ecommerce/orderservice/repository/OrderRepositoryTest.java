@@ -1,208 +1,146 @@
 package com.ecommerce.orderservice.repository;
 
 import com.ecommerce.common.enums.OrderStatus;
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
 import com.ecommerce.orderservice.Order;
+import com.ecommerce.orderservice.OrderLine;
 import com.ecommerce.orderservice.OrderRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.jdbc.core.JdbcTemplate;
 
-import static org.assertj.core.api.Assertions.*;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataJpaTest
-@ActiveProfiles("test")
-@DisplayName("Order Repository Unit Tests")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@PostgresIntegrationTest
+@DisplayName("OrderRepository (PostgreSQL)")
 class OrderRepositoryTest {
 
     @Autowired
-    private OrderRepository orderRepository;
+    private OrderRepository orders;
+    @Autowired
+    private EntityManager entityManager;
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @BeforeEach
     void setUp() {
-        orderRepository.deleteAll();
+        orders.deleteAll();
+    }
+
+    private Order newOrder(Long customerId, String sku, int quantity, String price) {
+        return Order.place(customerId, "USD", List.of(
+                OrderLine.builder().productId(sku).quantity(quantity).unitPrice(new BigDecimal(price)).build()));
+    }
+
+    private void flushAndClear() {
+        entityManager.flush();
+        entityManager.clear();
     }
 
     @Test
-    @DisplayName("Should save and retrieve order successfully")
-    void testSaveOrder() {
-        Order order = Order.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.PENDING)
-            .build();
+    @DisplayName("an order is stored with its lines, total, version and timestamps")
+    void roundTrip() {
+        Order saved = orders.save(newOrder(1L, "SKU-001", 3, "10.50"));
+        flushAndClear();
 
-        Order savedOrder = orderRepository.save(order);
-
-        assertThat(savedOrder).isNotNull();
-        assertThat(savedOrder.getId()).isNotNull();
-        assertThat(savedOrder.getCustomerId()).isEqualTo(1L);
-        assertThat(savedOrder.getProductId()).isEqualTo("PROD-001");
-        assertThat(savedOrder.getQuantity()).isEqualTo(5);
-        assertThat(savedOrder.getStatus()).isEqualTo(OrderStatus.PENDING);
+        Order found = orders.findById(saved.getId()).orElseThrow();
+        assertThat(found.getStatus()).isEqualTo(OrderStatus.PENDING);
+        assertThat(found.getTotalAmount()).isEqualByComparingTo("31.50");
+        assertThat(found.getCurrency()).isEqualTo("USD");
+        assertThat(found.getVersion()).isZero();
+        assertThat(found.getCreatedAt()).isNotNull();
+        assertThat(found.getLines()).singleElement().satisfies(l -> {
+            assertThat(l.getProductId()).isEqualTo("SKU-001");
+            assertThat(l.getQuantity()).isEqualTo(3);
+            assertThat(l.getUnitPrice()).isEqualByComparingTo("10.50");
+        });
     }
 
     @Test
-    @DisplayName("Should find order by ID")
-    void testFindOrderById() {
-        Order order = Order.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.PENDING)
-            .build();
-        Order savedOrder = orderRepository.save(order);
+    @DisplayName("each customer's orders are returned separately, paged and sorted")
+    void findByCustomer() {
+        orders.save(newOrder(1L, "SKU-001", 1, "1.00"));
+        orders.save(newOrder(1L, "SKU-002", 1, "2.00"));
+        orders.save(newOrder(2L, "SKU-003", 1, "3.00"));
+        flushAndClear();
 
-        Order foundOrder = orderRepository.findById(savedOrder.getId()).orElse(null);
+        assertThat(orders.findByCustomerId(1L, PageRequest.of(0, 10, Sort.by("totalAmount").descending())).getContent())
+                .extracting(o -> o.getTotalAmount().intValue()).containsExactly(2, 1);
+        assertThat(orders.findByCustomerId(2L, PageRequest.of(0, 10)).getTotalElements()).isEqualTo(1);
+        assertThat(orders.findByCustomerId(3L, PageRequest.of(0, 10)).getContent()).isEmpty();
+    }
 
-        assertThat(foundOrder).isNotNull();
-        assertThat(foundOrder.getId()).isEqualTo(savedOrder.getId());
-        assertThat(foundOrder.getCustomerId()).isEqualTo(1L);
+    // PostgreSQL aborts the whole transaction on a constraint violation, so each rule gets its own test.
+
+    @Test
+    @DisplayName("the database itself refuses an unknown order status")
+    void statusConstraint() {
+        Order saved = orders.saveAndFlush(newOrder(1L, "SKU-001", 1, "1.00"));
+
+        assertThatThrownBy(() -> jdbc.update("UPDATE orders SET status = 'SHIPPED' WHERE id = ?", saved.getId()))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    @DisplayName("Should return empty when order not found")
-    void testFindOrderByIdNotFound() {
-        var result = orderRepository.findById(999L);
+    @DisplayName("the database itself refuses a zero quantity")
+    void quantityConstraint() {
+        Order saved = orders.saveAndFlush(newOrder(1L, "SKU-001", 1, "1.00"));
 
-        assertThat(result).isEmpty();
+        assertThatThrownBy(() -> jdbc.update("UPDATE order_lines SET quantity = 0 WHERE order_id = ?", saved.getId()))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    @DisplayName("Should update order status successfully")
-    void testUpdateOrderStatus() {
-        Order order = Order.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.PENDING)
-            .build();
-        Order savedOrder = orderRepository.save(order);
+    @DisplayName("the database itself refuses a negative price")
+    void priceConstraint() {
+        Order saved = orders.saveAndFlush(newOrder(1L, "SKU-001", 1, "1.00"));
 
-        savedOrder.setStatus(OrderStatus.INVENTORY_RESERVED);
-        orderRepository.save(savedOrder);
-
-        Order updatedOrder = orderRepository.findById(savedOrder.getId()).orElse(null);
-
-        assertThat(updatedOrder).isNotNull();
-        assertThat(updatedOrder.getStatus()).isEqualTo(OrderStatus.INVENTORY_RESERVED);
+        assertThatThrownBy(() -> jdbc.update("UPDATE order_lines SET unit_price = -1 WHERE order_id = ?", saved.getId()))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    @DisplayName("Should delete order successfully")
-    void testDeleteOrder() {
-        Order order = Order.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.PENDING)
-            .build();
-        Order savedOrder = orderRepository.save(order);
+    @DisplayName("deleting an order deletes its lines")
+    void cascade() {
+        Order saved = orders.saveAndFlush(newOrder(1L, "SKU-001", 1, "1.00"));
 
-        orderRepository.deleteById(savedOrder.getId());
+        orders.delete(saved);
+        orders.flush();
 
-        var result = orderRepository.findById(savedOrder.getId());
-
-        assertThat(result).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM order_lines", Long.class)).isZero();
     }
 
     @Test
-    @DisplayName("Should check if order exists")
-    void testExistsById() {
-        Order order = Order.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.PENDING)
-            .build();
-        Order savedOrder = orderRepository.save(order);
+    @DisplayName("the saga deadline finds only open orders that have not changed since the cutoff, oldest first")
+    void staleOpenOrders() {
+        Order stale = orders.saveAndFlush(newOrder(1L, "SKU-001", 1, "1.00"));
+        Order fresh = orders.saveAndFlush(newOrder(1L, "SKU-002", 1, "1.00"));
+        Order doneButOld = newOrder(1L, "SKU-003", 1, "1.00");
+        doneButOld.transitionTo(OrderStatus.COMPLETED);
+        doneButOld = orders.saveAndFlush(doneButOld);
+        // updated_at is maintained by a database trigger on every UPDATE; switch it off just to back-date rows.
+        jdbc.execute("ALTER TABLE orders DISABLE TRIGGER orders_update_timestamp");
+        jdbc.update("UPDATE orders SET updated_at = now() - interval '10 minutes' WHERE id IN (?, ?)", stale.getId(), doneButOld.getId());
+        jdbc.execute("ALTER TABLE orders ENABLE TRIGGER orders_update_timestamp");
+        flushAndClear();
 
-        assertThat(orderRepository.existsById(savedOrder.getId())).isTrue();
-        assertThat(orderRepository.existsById(999L)).isFalse();
-    }
+        List<Long> ids = orders.findStaleOpenOrderIds(OrderStatus.open(), LocalDateTime.now().minusMinutes(5), PageRequest.of(0, 10));
 
-    @Test
-    @DisplayName("Should count all orders")
-    void testCountOrders() {
-        for (int i = 1; i <= 5; i++) {
-            Order order = Order.builder()
-                .customerId((long) i)
-                .productId("PROD-" + i)
-                .quantity(i)
-                .status(OrderStatus.PENDING)
-                .build();
-            orderRepository.save(order);
-        }
-
-        long count = orderRepository.count();
-
-        assertThat(count).isEqualTo(5);
-    }
-
-    @Test
-    @DisplayName("Should return all orders")
-    void testFindAllOrders() {
-        for (int i = 1; i <= 3; i++) {
-            Order order = Order.builder()
-                .customerId((long) i)
-                .productId("PROD-" + i)
-                .quantity(i)
-                .status(OrderStatus.PENDING)
-                .build();
-            orderRepository.save(order);
-        }
-
-        var orders = orderRepository.findAll();
-
-        assertThat(orders).hasSize(3);
-    }
-
-    @Test
-    @DisplayName("Should persist timestamps on save")
-    void testTimestampPersistence() {
-        Order order = Order.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.PENDING)
-            .build();
-
-        Order savedOrder = orderRepository.save(order);
-
-        assertThat(savedOrder.getCreatedAt()).isNotNull();
-        assertThat(savedOrder.getUpdatedAt()).isNotNull();
-    }
-
-    @Test
-    @DisplayName("Should handle order with COMPLETED status")
-    void testOrderWithCompletedStatus() {
-        Order order = Order.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.COMPLETED)
-            .build();
-
-        Order savedOrder = orderRepository.save(order);
-
-        assertThat(savedOrder.getStatus()).isEqualTo(OrderStatus.COMPLETED);
-    }
-
-    @Test
-    @DisplayName("Should handle order with CANCELLED status")
-    void testOrderWithCancelledStatus() {
-        Order order = Order.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.CANCELLED)
-            .build();
-
-        Order savedOrder = orderRepository.save(order);
-
-        assertThat(savedOrder.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(ids).containsExactly(stale.getId()).doesNotContain(fresh.getId(), doneButOld.getId());
     }
 }

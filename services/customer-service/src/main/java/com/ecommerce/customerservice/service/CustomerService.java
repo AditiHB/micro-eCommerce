@@ -1,14 +1,18 @@
 package com.ecommerce.customerservice.service;
 
-import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.config.CacheConfig;
+import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
+import com.ecommerce.common.exception.BusinessException;
+import com.ecommerce.common.exception.ConflictException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.common.metrics.ApplicationMetrics;
+import com.ecommerce.common.web.EntityTags;
 import com.ecommerce.customerservice.Customer;
 import com.ecommerce.customerservice.CustomerRepository;
 import com.ecommerce.customerservice.dto.CreateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
+import com.ecommerce.customerservice.dto.UpdateCustomerRequest;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,129 +26,92 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Set;
 
+/**
+ * Customer profiles. A customer's profile is reference data - read far more than it changes - so a single
+ * customer read by id is cached (one entry per customer, evicted by key when that customer changes, and only
+ * after the change has committed). Lists are not cached: there is no sensible way to evict them per key, and
+ * evicting everything on every write is what made the old cache useless under load.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 @Transactional
 public class CustomerService {
 
+    static final Set<String> SORTABLE_FIELDS = Set.of("id", "name", "email", "createdAt", "updatedAt");
+
     private final CustomerRepository customerRepository;
     private final ApplicationMetrics applicationMetrics;
 
-    /**
-     * Creates a new customer.
-     *
-     * @param request the customer creation request
-     * @return the created customer response
-     */
-    @CacheEvict(value = CacheConfig.CUSTOMERS_CACHE, allEntries = true)
     public CustomerResponse createCustomer(CreateCustomerRequest request) {
-        log.info("Creating customer with email: {}", request.getEmail());
+        log.info("Creating customer");
         Timer.Sample sample = applicationMetrics.recordCustomerCreationTime();
+        if (customerRepository.existsByEmail(request.getEmail())) {
+            throw new ConflictException("A customer with this email already exists", "CUSTOMER_EMAIL_EXISTS");
+        }
 
-        Customer customer = Customer.builder()
+        Customer saved = customerRepository.saveAndFlush(Customer.builder()
             .name(request.getName())
             .email(request.getEmail())
-            .build();
-
-        Customer savedCustomer = customerRepository.save(customer);
+            .build());
         applicationMetrics.recordCustomerCreated();
         applicationMetrics.stopCustomerCreationTimer(sample);
-        log.info("Customer created successfully with ID: {}", savedCustomer.getId());
-
-        return mapToResponse(savedCustomer);
+        log.info("Customer created with ID: {}", saved.getId());
+        return mapToResponse(saved);
     }
 
-    /**
-     * Retrieves a customer by ID.
-     *
-     * @param id the customer ID
-     * @return the customer response
-     * @throws ResourceNotFoundException if customer not found
-     */
     @Transactional(readOnly = true)
     @Cacheable(value = CacheConfig.CUSTOMERS_CACHE, key = "#id")
     public CustomerResponse getCustomer(Long id) {
-        log.info("Fetching customer with ID: {}", id);
-        Timer.Sample sample = applicationMetrics.recordCustomerCreationTime();
-
-        Customer customer = customerRepository.findById(id)
-            .orElseThrow(() -> new ResourceNotFoundException("Customer", id));
-
-        applicationMetrics.stopCustomerCreationTimer(sample);
-        return mapToResponse(customer);
+        log.debug("Reading customer {} from the database", id);
+        return mapToResponse(customerRepository.findById(id)
+            .orElseThrow(() -> new ResourceNotFoundException("Customer", id)));
     }
 
-    /**
-     * Retrieves all customers with pagination.
-     *
-     * @param pageNumber the page number (0-indexed)
-     * @param pageSize the page size
-     * @param sortBy the field to sort by
-     * @return paged customer responses
-     */
     @Transactional(readOnly = true)
-    @Cacheable(value = CacheConfig.CUSTOMERS_CACHE, key = "'all:' + #pageNumber + ':' + #pageSize + ':' + #sortBy")
     public PagedResponse<CustomerResponse> getAllCustomers(int pageNumber, int pageSize, String sortBy) {
-        log.info("Fetching customers - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
-
-        // Validate pagination parameters
-        pageSize = Math.min(pageSize, ApiConstants.MAX_PAGE_SIZE);
-
-        Pageable pageable = PageRequest.of(pageNumber, pageSize, Sort.by(sortBy).ascending());
+        if (!SORTABLE_FIELDS.contains(sortBy)) {
+            throw new BusinessException("Cannot sort by '" + sortBy + "'. Allowed: " + SORTABLE_FIELDS, "INVALID_SORT_FIELD");
+        }
+        int size = Math.min(Math.max(pageSize, 1), ApiConstants.MAX_PAGE_SIZE);
+        Pageable pageable = PageRequest.of(Math.max(pageNumber, 0), size, Sort.by(sortBy).ascending());
         Page<Customer> page = customerRepository.findAll(pageable);
-
-        List<CustomerResponse> responses = page.getContent()
-            .stream()
-            .map(this::mapToResponse)
-            .toList();
-
-        return PagedResponse.of(responses, pageNumber, pageSize, page.getTotalElements());
+        List<CustomerResponse> responses = page.getContent().stream().map(this::mapToResponse).toList();
+        return PagedResponse.of(responses, pageNumber, size, page.getTotalElements());
     }
 
     /**
-     * Updates a customer.
-     *
-     * @param id the customer ID
-     * @param request the update request
-     * @return the updated customer response
-     * @throws ResourceNotFoundException if customer not found
+     * Replaces the customer's details. If the caller sends the {@code If-Match} they got when they read the
+     * customer, the update only applies if nobody changed it since (412 otherwise); the entity's version is the
+     * second line of defence if two updates race.
      */
-    @CacheEvict(value = CacheConfig.CUSTOMERS_CACHE, allEntries = true)
-    public CustomerResponse updateCustomer(Long id, CreateCustomerRequest request) {
-        log.info("Updating customer with ID: {}", id);
+    @CacheEvict(value = CacheConfig.CUSTOMERS_CACHE, key = "#id")
+    public CustomerResponse updateCustomer(Long id, UpdateCustomerRequest request, String ifMatch) {
+        log.info("Updating customer {}", id);
         Timer.Sample sample = applicationMetrics.recordCustomerCreationTime();
-
         Customer customer = customerRepository.findById(id)
             .orElseThrow(() -> new ResourceNotFoundException("Customer", id));
+        EntityTags.verifyIfMatch(ifMatch, customer.getVersion());
+        if (customerRepository.existsByEmailAndIdNot(request.getEmail(), id)) {
+            throw new ConflictException("A customer with this email already exists", "CUSTOMER_EMAIL_EXISTS");
+        }
 
         customer.setName(request.getName());
         customer.setEmail(request.getEmail());
-
-        Customer updatedCustomer = customerRepository.save(customer);
+        Customer updated = customerRepository.saveAndFlush(customer);
         applicationMetrics.stopCustomerCreationTimer(sample);
-        log.info("Customer updated successfully with ID: {}", id);
-
-        return mapToResponse(updatedCustomer);
+        return mapToResponse(updated);
     }
 
-    /**
-     * Deletes a customer.
-     *
-     * @param id the customer ID
-     * @throws ResourceNotFoundException if customer not found
-     */
-    @CacheEvict(value = CacheConfig.CUSTOMERS_CACHE, allEntries = true)
+    @CacheEvict(value = CacheConfig.CUSTOMERS_CACHE, key = "#id")
     public void deleteCustomer(Long id) {
-        log.info("Deleting customer with ID: {}", id);
-
+        log.info("Deleting customer {}", id);
         if (!customerRepository.existsById(id)) {
             throw new ResourceNotFoundException("Customer", id);
         }
-
         customerRepository.deleteById(id);
-        log.info("Customer deleted successfully with ID: {}", id);
     }
 
     private CustomerResponse mapToResponse(Customer customer) {
@@ -152,6 +119,7 @@ public class CustomerService {
             .id(customer.getId())
             .name(customer.getName())
             .email(customer.getEmail())
+            .version(customer.getVersion())
             .createdAt(customer.getCreatedAt())
             .updatedAt(customer.getUpdatedAt())
             .build();

@@ -1,78 +1,64 @@
 package com.ecommerce.inventoryservice.exception;
 
-import com.ecommerce.common.dto.ErrorResponse;
+import com.ecommerce.common.exception.ConflictException;
+import com.ecommerce.common.exception.ProblemDetailsAdvice;
 import com.ecommerce.common.exception.ResourceNotFoundException;
-import com.ecommerce.common.exception.ValidationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.context.request.WebRequest;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@ExtendWith(MockitoExtension.class)
-@DisplayName("GlobalExceptionHandler Unit Tests")
+@DisplayName("Inventory service error handling")
 class GlobalExceptionHandlerTest {
 
-    @InjectMocks
-    private GlobalExceptionHandler exceptionHandler;
-
-    private WebRequest webRequest;
+    private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        webRequest = mock(WebRequest.class);
-        when(webRequest.getDescription(false)).thenReturn("uri=/api/test");
+        mvc = MockMvcBuilders.standaloneSetup(new Thrower()).setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 
     @Test
-    @DisplayName("Should handle ResourceNotFoundException")
-    void testHandleResourceNotFoundException() {
-        ResourceNotFoundException exception = new ResourceNotFoundException("Inventory", 1L);
-
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleResourceNotFound(exception, webRequest);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getMessage()).contains("not found");
+    @DisplayName("it is the shared Problem Details advice")
+    void isTheSharedAdvice() {
+        assertThat(new GlobalExceptionHandler()).isInstanceOf(ProblemDetailsAdvice.class);
     }
 
     @Test
-    @DisplayName("Should handle ValidationException")
-    void testHandleValidationException() {
-        ValidationException exception = new ValidationException("Invalid inventory data");
-
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleBusinessException(exception, webRequest);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getMessage()).contains("Invalid inventory data");
+    @DisplayName("insufficient stock is a 409 problem with its own code")
+    void insufficientStock() throws Exception {
+        mvc.perform(get("/stock"))
+                .andExpect(status().isConflict())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_STOCK"));
     }
 
     @Test
-    @DisplayName("Should handle general Exception")
-    void testHandleGeneralException() {
-        Exception exception = new RuntimeException("Internal error");
-
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleGenericException(exception, webRequest);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(response.getBody()).isNotNull();
+    @DisplayName("a missing inventory item is a 404 problem")
+    void notFound() throws Exception {
+        mvc.perform(get("/missing")).andExpect(status().isNotFound()).andExpect(jsonPath("$.errorCode").value("RESOURCE_NOT_FOUND"));
     }
 
-    @Test
-    @DisplayName("Should include error path in response")
-    void testErrorResponseIncludesPath() {
-        ValidationException exception = new ValidationException("Test error");
+    @RestController
+    static class Thrower {
+        @GetMapping("/stock")
+        String stock() {
+            throw new ConflictException("Insufficient stock. Available: 1, Requested: 5", "INSUFFICIENT_STOCK");
+        }
 
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleBusinessException(exception, webRequest);
-
-        assertThat(response.getBody()).isNotNull();
+        @GetMapping("/missing")
+        String missing() {
+            throw new ResourceNotFoundException("Inventory", 9L);
+        }
     }
 }

@@ -266,3 +266,74 @@ groups:
         annotations:
           summary: "Database connection pool running low"
           description: "Available connections: {{ $value | humanizePercentage }} for {{ $labels.datasource }}"
+
+  # ---------------------------------------------------------------------------
+  # Messaging: the signals that an event is stuck or lost. Every service writes its events to a local outbox
+  # and relays them to Kafka; every consumer retries and then parks what it cannot process. If either backs up,
+  # the saga is stalling - these alerts are how a human finds out before a customer does.
+  # ---------------------------------------------------------------------------
+  - name: messaging
+    interval: 30s
+    rules:
+      # Events written but not reaching Kafka (broker down, network, a stuck relay).
+      - alert: OutboxBacklog
+        expr: ecommerce_outbox_oldest_pending_age_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+          type: messaging
+        annotations:
+          summary: "{{ $labels.application }}: events are not leaving the outbox"
+          description: "The oldest unpublished event of {{ $labels.application }} is {{ $value | humanizeDuration }} old. Check the Kafka brokers and the relay's logs."
+
+      - alert: OutboxBacklogCritical
+        expr: ecommerce_outbox_oldest_pending_age_seconds > 600
+        for: 1m
+        labels:
+          severity: critical
+          type: messaging
+        annotations:
+          summary: "{{ $labels.application }}: outbox backlog older than 10 minutes"
+          description: "Orders are stalling: events are written but not delivered. Saga deadlines will start cancelling orders."
+
+      # An event exhausted its delivery attempts: it will not be retried again without a human.
+      - alert: OutboxEventDead
+        expr: ecommerce_outbox_dead > 0
+        for: 1m
+        labels:
+          severity: critical
+          type: messaging
+        annotations:
+          summary: "{{ $labels.application }} has {{ $value }} dead outbox event(s)"
+          description: "Events that could not be delivered after every attempt. Inspect outbox_event WHERE status = 'DEAD'."
+
+      - alert: OutboxPublishFailures
+        expr: rate(ecommerce_outbox_failures_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          type: messaging
+        annotations:
+          summary: "{{ $labels.application }}: the outbox relay keeps failing to publish"
+          description: "{{ $value | humanize }} failed publish attempts per second."
+
+      # A message a consumer could not process even after retries is parked in the service's dead-letter table.
+      - alert: DeadLettersParked
+        expr: ecommerce_dlq_parked > 0
+        for: 1m
+        labels:
+          severity: critical
+          type: messaging
+        annotations:
+          summary: "{{ $labels.application }} has {{ $value }} dead letter(s)"
+          description: "Messages that exhausted their retries. List them with GET /api/v1/admin/<service>/dead-letters, fix the cause, then replay (POST .../{id}/replay)."
+
+      - alert: NotificationBacklog
+        expr: ecommerce_notifications_pending > 50
+        for: 10m
+        labels:
+          severity: warning
+          type: messaging
+        annotations:
+          summary: "Notifications are piling up undelivered"
+          description: "{{ $value }} notifications are waiting; the mail server may be down."

@@ -1,25 +1,24 @@
 package com.ecommerce.inventoryservice;
 
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-import java.util.Optional;
+import java.util.List;
 
 public interface InventoryReservationRepository extends JpaRepository<InventoryReservation, Long> {
-    Optional<InventoryReservation> findByOrderId(Long orderId);
+
+    List<InventoryReservation> findByOrderId(Long orderId);
+
+    boolean existsByOrderId(Long orderId);
 
     /**
-     * Atomically transitions one order's reservation from active to
-     * released - the conditional WHERE is what makes this safe against two
-     * concurrent redeliveries of the same payment-failed event: only one
-     * can ever affect a row, so only one will see {@code updated == 1} and
-     * actually increment the stock back.
-     *
-     * @return 1 if this call released it, 0 if it was already released (or didn't exist)
+     * The order's reservations that still hold stock, locked so that two replicas handling the same
+     * cancellation cannot both give the stock back.
      */
-    @Modifying
-    @Query("UPDATE InventoryReservation r SET r.releasedAt = CURRENT_TIMESTAMP WHERE r.orderId = :orderId AND r.releasedAt IS NULL")
-    int markReleased(@Param("orderId") Long orderId);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM InventoryReservation r WHERE r.orderId = :orderId AND r.releasedAt IS NULL ORDER BY r.productId")
+    List<InventoryReservation> lockActiveByOrderId(@Param("orderId") Long orderId);
 }

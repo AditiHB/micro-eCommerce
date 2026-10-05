@@ -76,6 +76,11 @@ for service in discovery-server config-server api-gateway customer-service order
 done
 
 echo ""
+echo "Generating the cluster Secret and Keycloak ConfigMap inputs from your .env (git-ignored)..."
+[ -f .env ] || scripts/gen-env.sh
+scripts/gen-k8s-secrets.sh
+
+echo ""
 echo "Deploying to Kind cluster ($PROFILE profile)..."
 
 # Switch to Kind cluster context
@@ -104,7 +109,12 @@ echo "HPA Status (TARGETS stays <unknown> for a minute or two after metrics-serv
 kubectl get hpa -n ecommerce
 
 echo ""
-echo "To access API Gateway:"
-echo "  kubectl port-forward -n ecommerce svc/api-gateway 8080:80"
-echo "  curl http://localhost:8080/api/customers"
+echo "To access the platform (tokens come from Keycloak, whose public URL must be localhost:8180):"
+echo "  kubectl port-forward -n ecommerce svc/keycloak 8180:8080 &"
+echo "  kubectl port-forward -n ecommerce svc/api-gateway 8080:80 &"
+echo "  set -a; . ./.env; set +a"
+echo "  TOKEN=\$(curl -s localhost:8180/realms/ecommerce/protocol/openid-connect/token -d grant_type=password \\"
+echo "      -d client_id=ecommerce-e2e -d client_secret=\$E2E_CLIENT_SECRET -d username=karate_admin -d password=\$E2E_ADMIN_PASSWORD \\"
+echo "      | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"access_token\"])')"
+echo "  curl -H \"Authorization: Bearer \$TOKEN\" http://localhost:8080/api/customers"
 echo ""

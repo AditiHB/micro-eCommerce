@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 
@@ -35,7 +36,7 @@ public class EventSourcingService {
                 .eventType(event.getEventType())
                 .eventData(eventData)
                 .version(event.getVersion())
-                .occurredAt(event.getOccurredAt())
+                .occurredAt(LocalDateTime.ofInstant(event.getOccurredAt(), ZoneOffset.UTC))
                 .correlationId(correlationId)
                 .causationId(causationId)
                 .build();

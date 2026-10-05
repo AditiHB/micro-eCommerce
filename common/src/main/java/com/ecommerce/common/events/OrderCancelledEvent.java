@@ -1,25 +1,29 @@
 package com.ecommerce.common.events;
 
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
 /**
- * Event published when an order is cancelled (triggers compensating transactions).
- * Published by OrderService when a failure event is received.
+ * An order was cancelled - by the customer, by back office, by a failed saga step or by the saga deadline.
+ * This is the single trigger for every compensation: inventory releases its reservation and payment refunds
+ * a captured charge. Both are idempotent, so the order service may publish it again if a late saga event
+ * shows that a compensation was missed.
  */
+@Getter
+@Setter
+@NoArgsConstructor
+@EventSchema(type = "order.cancelled", topic = Topics.ORDER_CANCELLED)
 public class OrderCancelledEvent extends DomainEvent {
+
     private Long orderId;
+    private Long customerId;
     private String reason;
 
-    public OrderCancelledEvent() {
-        super();
-    }
-
-    public OrderCancelledEvent(Long orderId, String reason) {
+    public OrderCancelledEvent(Long orderId, Long customerId, String reason) {
         super(String.valueOf(orderId), "Order");
         this.orderId = orderId;
+        this.customerId = customerId;
         this.reason = reason;
     }
-
-    public Long getOrderId() { return orderId; }
-    public void setOrderId(Long orderId) { this.orderId = orderId; }
-    public String getReason() { return reason; }
-    public void setReason(String reason) { this.reason = reason; }
 }

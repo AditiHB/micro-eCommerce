@@ -1,78 +1,93 @@
-Feature: Transactional rollback on constraint violation
-  Exercises PaymentService.processPayment's @Transactional behavior against
-  the live stack: a second payment for an order that already has one hits
-  the database's unique constraint on orderId
-  (V7__Enforce_One_Payment_Per_Order.sql) partway through the method, and
-  the whole @Transactional method must roll back cleanly - leaving the
-  original payment completely untouched and surfacing a clean 400 business
-  error instead of a 500 or a silently corrupted row.
-
-  This specifically exercises the flush-vs-save distinction already fixed
-  once in this method (see commit 0c4f488, "Fix double-payment race"):
-  PaymentService is @Transactional at the class level, so a plain save()
-  only queues the INSERT past this method's return/commit - Hibernate
-  wouldn't actually run it, and so wouldn't hit the unique constraint,
-  until well after this request has already returned. saveAndFlush is what
-  forces the INSERT (and therefore the constraint check) to happen
-  synchronously, inside this very call, so the resulting
-  DataIntegrityViolationException can be caught and converted to a clean
-  BusinessException here instead of surfacing later as an untraceable 500.
-
-  Uses a synthetic orderId (not a real order created via order-service) so
-  this runs in total isolation from the Kafka saga - no order-created/
-  inventory-reserved event ever fires for it, so there's no race with
-  PaymentEventListener's own automatic payment creation (see
-  customer-journey.feature and resilience.feature for saga-path coverage).
-  PaymentService.processPayment never validates the order/inventory side of
-  an orderId, so this is a faithful, fully deterministic way to exercise
-  this transaction in isolation.
+Feature: Atomicity and idempotency of placing an order
+  An order is one atomic write of the order, its lines, its idempotency key and its order.created event. A request
+  that fails validation or refers to something that does not exist leaves nothing behind, and a retried request with
+  the same Idempotency-Key returns the original order instead of creating a second one.
 
   Background:
     * url gatewayUrl
     * def showcase = Java.type('e2e.DataShowcase')
-    Given path '/api/auth/login'
-    And request { username: '#(testUsername)', password: '#(testPassword)' }
+    * def docker = Java.type('e2e.DockerControl')
+    * eval docker.clearRateLimitKeys()
+    * def login = call read('classpath:e2e/auth.feature') { username: '#(testUsername)', password: '#(testPassword)' }
+    * def token = login.accessToken
+    * configure headers = { Authorization: '#("Bearer " + token)' }
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    * def customerId = customer.customerId
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 20.00, stock: 100 }
+    * def sku = product.sku
+
+  Scenario: A request that is rejected leaves no order behind
+
+    # unknown product -> 422 with a code, nothing created
+    Given path '/api/v1/orders'
+    And request { customerId: '#(customerId)', items: [{ productId: 'NO-SUCH-PRODUCT', quantity: 1 }] }
     When method post
-    Then status 200
-    * def authToken = response.token
-    * configure headers = { Authorization: '#("Bearer " + authToken)' }
+    Then status 422
+    And match response.errorCode == 'PRODUCT_NOT_FOUND'
+    And match response.detail contains 'NO-SUCH-PRODUCT'
 
-  Scenario: Second payment for the same order is rolled back, leaving the original payment untouched
-
-    * def orderId = Java.type('java.lang.System').currentTimeMillis()
-    * showcase.event('Using synthetic orderId ' + orderId + ' - no real order behind it, so there is zero race with the Kafka saga; this exercises PaymentService.processPayment in total isolation.')
-
-    # First payment for this orderId: succeeds normally.
-    Given path '/api/payments'
-    And request { orderId: '#(orderId)', amount: 49.99 }
+    # unknown customer -> 422
+    Given path '/api/v1/orders'
+    And request { customerId: 999999999, items: [{ productId: '#(sku)', quantity: 1 }] }
     When method post
-    Then status 201
-    And match response.status == 'PROCESSED'
-    * def originalPaymentId = response.id
-    * def originalAmount = response.amount
-    * showcase.event('Payment ' + originalPaymentId + ' committed normally at ' + originalAmount + ' - this INSERT actually ran and succeeded.')
-    * showcase.show('Payment ' + originalPaymentId + ' for order ' + orderId + ' - first call, committed', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
+    Then status 422
+    And match response.errorCode == 'CUSTOMER_NOT_FOUND'
 
-    # Second payment for the SAME orderId: saveAndFlush's INSERT hits the
-    # unique constraint mid-transaction. The whole method rolls back and
-    # throws a BusinessException instead of leaving a half-applied row.
-    * showcase.event('Sending a SECOND payment (999.99) for the SAME orderId - saveAndFlush will force this INSERT to run immediately and hit the unique constraint, inside this very request.')
-    Given path '/api/payments'
-    And request { orderId: '#(orderId)', amount: 999.99 }
+    # invalid body -> 400 with the offending fields
+    Given path '/api/v1/orders'
+    And request { customerId: '#(customerId)', items: [{ productId: '#(sku)', quantity: -3 }] }
     When method post
     Then status 400
-    And match response.errorCode == 'PAYMENT_ALREADY_EXISTS'
-    * showcase.event('Rejected cleanly with 400 PAYMENT_ALREADY_EXISTS, not a 500 - the whole @Transactional method rolled back the instant the constraint fired.')
+    And match response.errorCode == 'VALIDATION_FAILED'
 
-    # Atomicity check: the original payment must be completely unchanged -
-    # not overwritten with the second call's amount/PROCESSING status
-    # before the constraint fired and the transaction rolled everything
-    # back. If the rollback didn't work, this would show 999.99 or a
-    # PROCESSING status left behind by the failed second call.
-    Given path '/api/payments', originalPaymentId
-    When method get
-    Then status 200
-    And match response.amount == originalAmount
-    And match response.status == 'PROCESSED'
-    * showcase.event('Atomicity confirmed: amount is still ' + originalAmount + ', not 999.99 - the rolled-back transaction left zero trace behind, not a half-applied row.')
-    * showcase.show('Payments for order ' + orderId + ' - still exactly one row, unchanged', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
+    # a client cannot choose the price
+    Given path '/api/v1/orders'
+    And request { customerId: '#(customerId)', items: [{ productId: '#(sku)', quantity: 1, unitPrice: 0.01 }], totalAmount: 0.01 }
+    When method post
+    Then status 400
+
+    # ... and not one of those left a trace
+    * def noOrders = call read('classpath:e2e/helpers/count-orders.feature') { token: '#(token)', customerId: '#(customerId)' }
+    * match noOrders.total == 0
+    * showcase.event('Four rejected requests, zero orders and zero events for customer ' + customerId + '.')
+
+  Scenario: The same Idempotency-Key returns the same order - a retry can never create a second one
+
+    * def key = 'karate-' + java.util.UUID.randomUUID()
+    Given path '/api/v1/orders'
+    And header Idempotency-Key = key
+    And request { customerId: '#(customerId)', items: [{ productId: '#(sku)', quantity: 2 }] }
+    When method post
+    Then status 201
+    * def firstId = response.id
+    * def firstLocation = responseHeaders['Location'][0]
+
+    # the client never saw the response (timeout) and simply retries
+    Given path '/api/v1/orders'
+    And header Idempotency-Key = key
+    And request { customerId: '#(customerId)', items: [{ productId: '#(sku)', quantity: 2 }] }
+    When method post
+    Then status 201
+    And match response.id == firstId
+    And match responseHeaders['Idempotent-Replayed'][0] == 'true'
+    And match responseHeaders['Location'][0] == firstLocation
+
+    # the same key for a DIFFERENT request is an error, not a silent replay
+    Given path '/api/v1/orders'
+    And header Idempotency-Key = key
+    And request { customerId: '#(customerId)', items: [{ productId: '#(sku)', quantity: 9 }] }
+    When method post
+    Then status 422
+    And match response.errorCode == 'IDEMPOTENCY_KEY_REUSED'
+
+    * def orders = call read('classpath:e2e/helpers/count-orders.feature') { token: '#(token)', customerId: '#(customerId)' }
+    * match orders.total == 1
+    * showcase.show('One order, one order.created event', 'order_db', "SELECT event_type, status FROM outbox_event WHERE aggregate_id='" + firstId + "'")
+
+  Scenario: Many retries with one key still create exactly one order (concurrent duplicates are covered by the Java integration tests)
+
+    * def key = 'karate-race-' + java.util.UUID.randomUUID()
+    * def results = karate.repeat(8, function(i){ return karate.call('classpath:e2e/helpers/place-order.feature', { token: token, customerId: customerId, items: [{ productId: sku, quantity: 1 }], idempotencyKey: key }).orderId })
+    * match each results == results[0]
+    * def orders = call read('classpath:e2e/helpers/count-orders.feature') { token: '#(token)', customerId: '#(customerId)' }
+    * match orders.total == 1

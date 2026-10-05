@@ -1,123 +1,102 @@
 package com.ecommerce.productservice.service;
 
+import com.ecommerce.common.config.CacheConfig;
+import com.ecommerce.common.web.EntityTags;
+import com.ecommerce.common.web.SortGuard;
 import com.ecommerce.productservice.dto.CreateProductRequest;
 import com.ecommerce.productservice.dto.ProductDTO;
 import com.ecommerce.productservice.dto.UpdateProductRequest;
 import com.ecommerce.productservice.entity.Product;
-import com.ecommerce.productservice.event.ProductCreatedEvent;
-import com.ecommerce.productservice.event.ProductDeletedEvent;
-import com.ecommerce.productservice.event.ProductUpdatedEvent;
 import com.ecommerce.productservice.exception.DuplicateSkuException;
 import com.ecommerce.productservice.exception.ProductNotFoundException;
 import com.ecommerce.productservice.repository.ProductRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
+/**
+ * The catalogue. Catalogue entries are reference data - read on every order, changed rarely - so a single
+ * product read by id or by SKU is cached, one entry per key, and evicted by key (after the change commits) when
+ * that product changes. Stock is not here: inventory-service owns it.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class ProductService {
+
+    static final Set<String> SORTABLE_FIELDS = Set.of("id", "name", "price", "sku", "category", "createdAt", "updatedAt");
+
     private final ProductRepository productRepository;
     private final ProductEventPublisher eventPublisher;
+    private final CacheManager cacheManager;
 
     @Transactional
     public ProductDTO createProduct(CreateProductRequest request) {
-        log.info("Creating new product with SKU: {}", request.getSku());
-
+        log.info("Creating product with SKU: {}", request.getSku());
         if (productRepository.existsBySku(request.getSku())) {
             throw new DuplicateSkuException(request.getSku());
         }
-
-        Product product = Product.builder()
+        Product saved = productRepository.saveAndFlush(Product.builder()
                 .name(request.getName())
                 .description(request.getDescription())
                 .price(request.getPrice())
+                .currency(request.getCurrency() == null ? "USD" : request.getCurrency())
                 .sku(request.getSku())
                 .category(request.getCategory())
-                .quantityAvailable(request.getQuantityAvailable())
-                .build();
-
-        Product savedProduct = productRepository.save(product);
-        log.info("Product created successfully with id: {}", savedProduct.getId());
-
-        eventPublisher.publishProductCreatedEvent(ProductCreatedEvent.builder()
-                .productId(savedProduct.getId())
-                .name(savedProduct.getName())
-                .sku(savedProduct.getSku())
-                .price(savedProduct.getPrice())
-                .category(savedProduct.getCategory())
-                .quantityAvailable(savedProduct.getQuantityAvailable())
-                .eventTime(LocalDateTime.now())
                 .build());
-
-        return convertToDTO(savedProduct);
+        eventPublisher.created(saved);
+        return convertToDTO(saved);
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.PRODUCTS_CACHE, key = "'id:' + #id")
     public ProductDTO getProductById(Long id) {
-        log.info("Fetching product with id: {}", id);
-        Product product = productRepository.findById(id)
-                .orElseThrow(() -> new ProductNotFoundException(id));
-        return convertToDTO(product);
+        return convertToDTO(productRepository.findById(id).orElseThrow(() -> new ProductNotFoundException(id)));
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(value = CacheConfig.PRODUCTS_CACHE, key = "'sku:' + #sku")
     public ProductDTO getProductBySku(String sku) {
-        log.info("Fetching product with SKU: {}", sku);
-        Product product = productRepository.findBySku(sku)
-                .orElseThrow(() -> new ProductNotFoundException("Product with SKU " + sku + " not found"));
-        return convertToDTO(product);
+        return convertToDTO(productRepository.findBySku(sku)
+                .orElseThrow(() -> new ProductNotFoundException("Product with SKU " + sku + " not found")));
+    }
+
+    /** The products that exist among the given SKUs (unknown SKUs are simply absent): one query, for pricing an order. */
+    @Transactional(readOnly = true)
+    public List<ProductDTO> lookupBySkus(Collection<String> skus) {
+        return productRepository.findBySkuIn(skus).stream().map(this::convertToDTO).toList();
     }
 
     @Transactional(readOnly = true)
     public Page<ProductDTO> getAllProducts(Pageable pageable) {
-        log.info("Fetching all products with pagination");
-        return productRepository.findAll(pageable)
-                .map(this::convertToDTO);
+        return productRepository.findAll(SortGuard.requireSortableBy(pageable, SORTABLE_FIELDS)).map(this::convertToDTO);
     }
 
     @Transactional(readOnly = true)
     public Page<ProductDTO> getProductsByCategory(String category, Pageable pageable) {
-        log.info("Fetching products by category: {}", category);
-        return productRepository.findByCategory(category, pageable)
-                .map(this::convertToDTO);
+        return productRepository.findByCategory(category, SortGuard.requireSortableBy(pageable, SORTABLE_FIELDS)).map(this::convertToDTO);
     }
 
     @Transactional(readOnly = true)
     public Page<ProductDTO> searchProducts(String searchTerm, Pageable pageable) {
-        log.info("Searching products with term: {}", searchTerm);
-        return productRepository.searchByName(searchTerm, pageable)
-                .map(this::convertToDTO);
+        return productRepository.searchByName(searchTerm, SortGuard.requireSortableBy(pageable, SORTABLE_FIELDS)).map(this::convertToDTO);
     }
 
-    @Transactional(readOnly = true)
-    public Page<ProductDTO> getAvailableProducts(Pageable pageable) {
-        log.info("Fetching available products");
-        return productRepository.findAvailableProducts(pageable)
-                .map(this::convertToDTO);
-    }
-
-    @Transactional(readOnly = true)
-    public List<ProductDTO> getLowStockProducts() {
-        log.info("Fetching low stock products");
-        return productRepository.findLowStockProducts()
-                .stream()
-                .map(this::convertToDTO)
-                .toList();
-    }
-
+    /** Partial update: only the fields that are sent change. {@code If-Match} refuses a stale update (412). */
     @Transactional
-    public ProductDTO updateProduct(Long id, UpdateProductRequest request) {
-        log.info("Updating product with id: {}", id);
-        Product product = productRepository.findById(id)
-                .orElseThrow(() -> new ProductNotFoundException(id));
+    public ProductDTO updateProduct(Long id, UpdateProductRequest request, String ifMatch) {
+        Product product = productRepository.findById(id).orElseThrow(() -> new ProductNotFoundException(id));
+        EntityTags.verifyIfMatch(ifMatch, product.getVersion());
 
         if (request.getName() != null) {
             product.setName(request.getName());
@@ -128,76 +107,35 @@ public class ProductService {
         if (request.getPrice() != null) {
             product.setPrice(request.getPrice());
         }
+        if (request.getCurrency() != null) {
+            product.setCurrency(request.getCurrency());
+        }
         if (request.getCategory() != null) {
             product.setCategory(request.getCategory());
         }
-        if (request.getQuantityAvailable() != null) {
-            product.setQuantityAvailable(request.getQuantityAvailable());
-        }
 
-        Product updatedProduct = productRepository.save(product);
-        log.info("Product updated successfully with id: {}", updatedProduct.getId());
-
-        eventPublisher.publishProductUpdatedEvent(ProductUpdatedEvent.builder()
-                .productId(updatedProduct.getId())
-                .name(updatedProduct.getName())
-                .price(updatedProduct.getPrice())
-                .category(updatedProduct.getCategory())
-                .quantityAvailable(updatedProduct.getQuantityAvailable())
-                .eventTime(LocalDateTime.now())
-                .build());
-
-        return convertToDTO(updatedProduct);
+        Product updated = productRepository.saveAndFlush(product);
+        evict(updated.getId(), updated.getSku());
+        eventPublisher.updated(updated);
+        return convertToDTO(updated);
     }
 
     @Transactional
     public void deleteProduct(Long id) {
-        log.info("Deleting product with id: {}", id);
-        Product product = productRepository.findById(id)
-                .orElseThrow(() -> new ProductNotFoundException(id));
-
-        String sku = product.getSku();
-        productRepository.deleteById(id);
-        log.info("Product deleted successfully with id: {}", id);
-
-        eventPublisher.publishProductDeletedEvent(ProductDeletedEvent.builder()
-                .productId(id)
-                .sku(sku)
-                .eventTime(LocalDateTime.now())
-                .build());
+        Product product = productRepository.findById(id).orElseThrow(() -> new ProductNotFoundException(id));
+        productRepository.delete(product);
+        productRepository.flush();
+        evict(id, product.getSku());
+        eventPublisher.deleted(id, product.getSku());
     }
 
-    /**
-     * Adjusts this catalog entry's own stock counter (REST-triggered only).
-     * NOTE: this is NOT wired into the order/inventory/payment Kafka saga -
-     * inventory-service keeps its own separate stock ledger (see
-     * InventoryService.reserveStock), keyed by a product code rather than
-     * this entity's id. The two are independent sources of truth today.
-     */
-    @Transactional
-    public void reserveInventory(Long productId, Integer quantityToReserve) {
-        log.info("Reserving inventory for product: {}, quantity: {}", productId, quantityToReserve);
-        Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new ProductNotFoundException(productId));
-
-        if (product.getQuantityAvailable() < quantityToReserve) {
-            throw new IllegalArgumentException("Insufficient inventory for product: " + productId);
+    /** Evicts both cache entries of one product (by id and by SKU). Runs after the transaction commits. */
+    private void evict(Long id, String sku) {
+        Cache cache = cacheManager.getCache(CacheConfig.PRODUCTS_CACHE);
+        if (cache != null) {
+            cache.evict("id:" + id);
+            cache.evict("sku:" + sku);
         }
-
-        product.setQuantityAvailable(product.getQuantityAvailable() - quantityToReserve);
-        productRepository.save(product);
-        log.info("Inventory reserved successfully for product: {}", productId);
-    }
-
-    @Transactional
-    public void releaseInventory(Long productId, Integer quantityToRelease) {
-        log.info("Releasing inventory for product: {}, quantity: {}", productId, quantityToRelease);
-        Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new ProductNotFoundException(productId));
-
-        product.setQuantityAvailable(product.getQuantityAvailable() + quantityToRelease);
-        productRepository.save(product);
-        log.info("Inventory released successfully for product: {}", productId);
     }
 
     private ProductDTO convertToDTO(Product product) {
@@ -206,9 +144,10 @@ public class ProductService {
                 .name(product.getName())
                 .description(product.getDescription())
                 .price(product.getPrice())
+                .currency(product.getCurrency())
                 .sku(product.getSku())
                 .category(product.getCategory())
-                .quantityAvailable(product.getQuantityAvailable())
+                .version(product.getVersion())
                 .createdAt(product.getCreatedAt())
                 .updatedAt(product.getUpdatedAt())
                 .build();

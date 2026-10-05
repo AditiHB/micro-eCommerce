@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,11 +23,8 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
     @Query("SELECT p FROM Product p WHERE LOWER(p.name) LIKE LOWER(CONCAT('%', :searchTerm, '%'))")
     Page<Product> searchByName(@Param("searchTerm") String searchTerm, Pageable pageable);
 
-    @Query("SELECT p FROM Product p WHERE p.quantityAvailable > 0")
-    Page<Product> findAvailableProducts(Pageable pageable);
-
-    @Query("SELECT p FROM Product p WHERE p.quantityAvailable <= 10")
-    List<Product> findLowStockProducts();
+    /** Several products by SKU in one query - what an order uses to price its lines. */
+    List<Product> findBySkuIn(Collection<String> skus);
 
     boolean existsBySku(String sku);
 }

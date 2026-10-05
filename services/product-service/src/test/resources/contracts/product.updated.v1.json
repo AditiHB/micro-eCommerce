@@ -1,0 +1,14 @@
+{
+  "eventId" : "evt-product.updated",
+  "occurredAt" : "2026-01-01T10:15:30Z",
+  "aggregateId" : "7",
+  "aggregateType" : "Product",
+  "version" : 1,
+  "productId" : 7,
+  "name" : "Headphones",
+  "sku" : "SKU-001",
+  "price" : 89.99,
+  "currency" : "USD",
+  "category" : "Electronics",
+  "eventType" : "product.updated"
+}

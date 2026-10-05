@@ -20,17 +20,36 @@ spec:
     spec:
       enableServiceLinks: false
       serviceAccountName: inventory-service-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: inventory-service
         image: micro-ecommerce:inventory-service
         imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 8082
+        - containerPort: 9082
+          name: management
         env:
+        - name: EUREKA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: eureka-password
         - name: SPRING_CONFIG_IMPORT
           value: "optional:configserver:http://config-server:8888/"
         - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
-          value: "http://discovery-server:8761/eureka/"
+          value: "http://eureka:$(EUREKA_PASSWORD)@discovery-server:8761/eureka/"
         - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
           value: "true"
         - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
@@ -44,11 +63,17 @@ spec:
           value: "redis"
         - name: SPRING_DATA_REDIS_PORT
           value: "6379"
-        - name: JWT_SECRET
+        - name: SECURITY_ISSUER
+          value: "http://localhost:8180/realms/ecommerce"
+        - name: SECURITY_JWK_SET_URI
+          value: "http://keycloak:8080/realms/ecommerce/protocol/openid-connect/certs"
+        - name: SECURITY_AUDIENCE
+          value: "ecommerce-api"
+        - name: SPRING_DATA_REDIS_PASSWORD
           valueFrom:
             secretKeyRef:
               name: ecommerce-secrets
-              key: jwt-secret
+              key: redis-password
         resources:
           requests:
             cpu: 250m
@@ -59,7 +84,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8082
+            port: 9082
           initialDelaySeconds: 60
           periodSeconds: 15
           timeoutSeconds: 5
@@ -67,11 +92,17 @@ spec:
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8082
+            port: 9082
           initialDelaySeconds: 45
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

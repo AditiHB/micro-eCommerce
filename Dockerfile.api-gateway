@@ -32,7 +32,17 @@ EXPOSE 8080
 
 ENV SERVER_PORT=8080
 
+# Probes use the management port: it is internal-only (not published, not routed by the gateway), so
+# liveness/readiness and metrics never share a port with - or need credentials on - the public API.
+ENV MANAGEMENT_SERVER_PORT=9080
+
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8080/actuator/health/readiness || exit 1
+  CMD curl -f http://localhost:9080/actuator/health/readiness || exit 1
+
+# Run as an unprivileged user: a compromised JVM must not be root inside the container.
+RUN groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+ && chown -R app:app /app
+USER 10001:10001
 
 ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -1,48 +1,38 @@
 package com.ecommerce.inventoryservice;
 
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 
-@DisplayName("Inventory Entity Unit Tests")
+@DisplayName("Inventory entity")
 class InventoryEntityTest {
 
-    @Test
-    @DisplayName("Should create inventory entity")
-    void testInventoryCreation() {
-        Inventory inventory = Inventory.builder()
-            .id(1L)
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
+    private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
 
-        assertThat(inventory.getId()).isEqualTo(1L);
-        assertThat(inventory.getProductId()).isEqualTo("PROD-001");
-        assertThat(inventory.getQuantity()).isEqualTo(100);
+    private Inventory stock(Integer quantity) {
+        return Inventory.builder().productId("SKU-001").quantity(quantity).build();
     }
 
     @Test
-    @DisplayName("Should update inventory quantity")
-    void testUpdateInventoryQuantity() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-
-        inventory.setQuantity(75);
-
-        assertThat(inventory.getQuantity()).isEqualTo(75);
+    @DisplayName("stock may be exactly zero - the last unit is sellable and a sold-out item is a real state")
+    void zeroIsValid() {
+        assertThat(validator.validate(stock(0))).isEmpty();
+        assertThat(validator.validate(stock(5))).isEmpty();
     }
 
     @Test
-    @DisplayName("Should handle zero quantity")
-    void testZeroQuantity() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(0)
-            .build();
+    @DisplayName("stock can never be negative")
+    void negativeIsInvalid() {
+        assertThat(validator.validate(stock(-1))).isNotEmpty();
+    }
 
-        assertThat(inventory.getQuantity()).isEqualTo(0);
+    @Test
+    @DisplayName("a product id and a quantity are required")
+    void requiredFields() {
+        assertThat(validator.validate(stock(null))).isNotEmpty();
+        assertThat(validator.validate(Inventory.builder().productId(" ").quantity(1).build())).isNotEmpty();
     }
 }

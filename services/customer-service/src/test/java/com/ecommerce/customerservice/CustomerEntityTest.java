@@ -1,64 +1,39 @@
 package com.ecommerce.customerservice;
 
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.time.LocalDateTime;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import static org.assertj.core.api.Assertions.*;
-
-@DisplayName("Customer Entity Unit Tests")
+@DisplayName("Customer entity")
 class CustomerEntityTest {
 
-    @Test
-    @DisplayName("Should create customer entity")
-    void testCustomerCreation() {
-        Customer customer = Customer.builder()
-            .id(1L)
-            .name("John Doe")
-            .email("john@example.com")
-            .createdAt(LocalDateTime.now())
-            .updatedAt(LocalDateTime.now())
-            .build();
+    private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
 
-        assertThat(customer.getId()).isEqualTo(1L);
-        assertThat(customer.getName()).isEqualTo("John Doe");
-        assertThat(customer.getEmail()).isEqualTo("john@example.com");
+    private Customer customer(String name, String email) {
+        return Customer.builder().name(name).email(email).build();
     }
 
     @Test
-    @DisplayName("Should update customer name")
-    void testUpdateCustomerName() {
-        Customer customer = Customer.builder()
-            .name("John Doe")
-            .email("john@example.com")
-            .build();
-
-        customer.setName("Jane Doe");
-
-        assertThat(customer.getName()).isEqualTo("Jane Doe");
+    @DisplayName("a customer with a name and a valid email is valid")
+    void valid() {
+        assertThat(validator.validate(customer("John Doe", "john@example.com"))).isEmpty();
     }
 
     @Test
-    @DisplayName("Should update customer email")
-    void testUpdateCustomerEmail() {
-        Customer customer = Customer.builder()
-            .name("John Doe")
-            .email("john@example.com")
-            .build();
-
-        customer.setEmail("jane@example.com");
-
-        assertThat(customer.getEmail()).isEqualTo("jane@example.com");
+    @DisplayName("a missing or malformed name or email is not")
+    void invalid() {
+        assertThat(validator.validate(customer("", "john@example.com"))).isNotEmpty();
+        assertThat(validator.validate(customer("J", "john@example.com"))).isNotEmpty();
+        assertThat(validator.validate(customer("John Doe", "not-an-email"))).isNotEmpty();
+        assertThat(validator.validate(customer("John Doe", null))).isNotEmpty();
     }
 
     @Test
-    @DisplayName("Should handle empty customer")
-    void testEmptyCustomer() {
-        Customer customer = new Customer();
-
-        assertThat(customer.getId()).isNull();
-        assertThat(customer.getName()).isNull();
-        assertThat(customer.getEmail()).isNull();
+    @DisplayName("customers are the same when their ids are the same")
+    void equality() {
+        assertThat(Customer.builder().id(5L).name("A").build()).isEqualTo(Customer.builder().id(5L).name("B").build());
     }
 }

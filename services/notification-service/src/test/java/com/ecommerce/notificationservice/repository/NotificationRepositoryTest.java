@@ -2,91 +2,94 @@ package com.ecommerce.notificationservice.repository;
 
 import com.ecommerce.common.enums.NotificationStatus;
 import com.ecommerce.common.enums.NotificationType;
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
 import com.ecommerce.notificationservice.Notification;
 import com.ecommerce.notificationservice.NotificationRepository;
+import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.test.context.ActiveProfiles;
 
+import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataJpaTest
-@ActiveProfiles("test")
-@DisplayName("NotificationRepository Tests")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@PostgresIntegrationTest
+@DisplayName("NotificationRepository (PostgreSQL)")
 class NotificationRepositoryTest {
 
     @Autowired
     private NotificationRepository repository;
+    @Autowired
+    private EntityManager entityManager;
 
-    private Notification newNotification(Long customerId, Long orderId, String sourceEventId) {
-        return Notification.builder()
-            .customerId(customerId)
-            .orderId(orderId)
-            .type(NotificationType.ORDER_CREATED)
-            .recipient("customer@example.com")
-            .subject("Subject")
-            .message("Message")
-            .status(NotificationStatus.SENT)
-            .sourceEventId(sourceEventId)
-            .build();
+    @BeforeEach
+    void setUp() {
+        repository.deleteAllInBatch();
+    }
+
+    private Notification notification(String eventId, Long customerId, Long orderId, NotificationStatus status, Instant due) {
+        return Notification.builder().customerId(customerId).orderId(orderId).type(NotificationType.ORDER_CREATED)
+                .recipient("jane@example.com").subject("Subject").message("Body").status(status)
+                .sourceEventId(eventId).nextAttemptAt(due).build();
     }
 
     @Test
-    @DisplayName("Should find notifications by customer id")
-    void testFindByCustomerId() {
-        repository.save(newNotification(1L, 100L, "evt-1"));
-        repository.save(newNotification(1L, 101L, "evt-2"));
-        repository.save(newNotification(2L, 102L, "evt-3"));
+    @DisplayName("notifications are found by customer (paged) and by order")
+    void queries() {
+        repository.save(notification("evt-1", 1L, 100L, NotificationStatus.SENT, null));
+        repository.save(notification("evt-2", 1L, 101L, NotificationStatus.SENT, null));
+        repository.save(notification("evt-3", 2L, 102L, NotificationStatus.SENT, null));
 
-        Pageable pageable = PageRequest.of(0, 10);
-        var page = repository.findByCustomerId(1L, pageable);
-
-        assertThat(page.getTotalElements()).isEqualTo(2);
+        assertThat(repository.findByCustomerId(1L, PageRequest.of(0, 10)).getTotalElements()).isEqualTo(2);
+        assertThat(repository.findByOrderId(102L)).hasSize(1);
+        assertThat(repository.existsBySourceEventId("evt-1")).isTrue();
+        assertThat(repository.existsBySourceEventId("nope")).isFalse();
     }
 
     @Test
-    @DisplayName("Should find notifications by order id")
-    void testFindByOrderId() {
-        repository.save(newNotification(1L, 100L, "evt-1"));
+    @DisplayName("the same source event cannot be recorded twice: the database enforces idempotency")
+    void sourceEventIsUnique() {
+        repository.saveAndFlush(notification("evt-1", 1L, 100L, NotificationStatus.PENDING, Instant.now()));
 
-        List<Notification> notifications = repository.findByOrderId(100L);
-
-        assertThat(notifications).hasSize(1);
-        assertThat(notifications.get(0).getOrderId()).isEqualTo(100L);
+        assertThatThrownBy(() -> repository.saveAndFlush(notification("evt-1", 2L, 200L, NotificationStatus.PENDING, Instant.now())))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    @DisplayName("Should find a notification by source event id")
-    void testFindBySourceEventId() {
-        repository.save(newNotification(1L, 100L, "evt-unique"));
+    @DisplayName("only PENDING notifications that are due are locked for delivery, oldest first")
+    void lockDue() {
+        Instant now = Instant.now();
+        repository.save(notification("due-late", 1L, 1L, NotificationStatus.PENDING, now.minusSeconds(10)));
+        repository.save(notification("due-early", 1L, 2L, NotificationStatus.PENDING, now.minusSeconds(60)));
+        repository.save(notification("future", 1L, 3L, NotificationStatus.PENDING, now.plusSeconds(600)));
+        repository.save(notification("sent", 1L, 4L, NotificationStatus.SENT, now.minusSeconds(60)));
+        repository.save(notification("failed", 1L, 5L, NotificationStatus.FAILED, now.minusSeconds(60)));
+        entityManager.flush();
+        entityManager.clear();
 
-        Optional<Notification> found = repository.findBySourceEventId("evt-unique");
+        List<Notification> due = repository.lockDue(now, 10);
 
-        assertThat(found).isPresent();
+        assertThat(due).extracting(Notification::getSourceEventId).containsExactly("due-early", "due-late");
     }
 
     @Test
-    @DisplayName("Should report existence by source event id")
-    void testExistsBySourceEventId() {
-        repository.save(newNotification(1L, 100L, "evt-exists"));
+    @DisplayName("the delivery attempt counters round-trip")
+    void attempts() {
+        Notification saved = repository.saveAndFlush(notification("evt-1", 1L, 1L, NotificationStatus.PENDING, Instant.now()));
+        saved.setAttempts(3);
+        repository.saveAndFlush(saved);
+        entityManager.clear();
 
-        assertThat(repository.existsBySourceEventId("evt-exists")).isTrue();
-        assertThat(repository.existsBySourceEventId("evt-missing")).isFalse();
-    }
-
-    @Test
-    @DisplayName("Should enforce uniqueness of source event id")
-    void testSourceEventIdUnique() {
-        repository.saveAndFlush(newNotification(1L, 100L, "evt-dup"));
-
-        org.junit.jupiter.api.Assertions.assertThrows(Exception.class, () ->
-            repository.saveAndFlush(newNotification(2L, 200L, "evt-dup")));
+        assertThat(repository.findById(saved.getId()).orElseThrow().getAttempts()).isEqualTo(3);
     }
 }

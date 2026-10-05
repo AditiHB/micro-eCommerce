@@ -1,23 +1,14 @@
 package com.ecommerce.orderservice.config;
 
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.context.annotation.Bean;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.client.RestTemplate;
 
-import java.time.Duration;
-
+/**
+ * Order-service's own configuration: switches on {@link OrderProperties}. (The outbound HTTP clients are built
+ * where they are used - see {@code CatalogClient} and {@code CustomerDirectoryClient} - each with explicit,
+ * short timeouts; there is no shared, generously-timed HTTP client.)
+ */
 @Configuration
-@Slf4j
+@EnableConfigurationProperties(OrderProperties.class)
 public class RestClientConfig {
-
-    @Bean
-    public RestTemplate restTemplate(RestTemplateBuilder builder) {
-        log.info("Initializing RestTemplate");
-        return builder
-            .setConnectTimeout(Duration.ofSeconds(10))
-            .setReadTimeout(Duration.ofSeconds(30))
-            .build();
-    }
 }

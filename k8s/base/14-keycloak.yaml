@@ -1,0 +1,207 @@
+# Keycloak: the platform's identity provider. Issues every access token (RS256); the gateway and
+# every service only verify them against its published keys (JWKS), so no signing secret is shared.
+#
+# Local-cluster form: `start-dev` with an in-pod H2 database, so users and sessions do not survive a
+# pod restart - the realm (roles, clients, mappers) is re-imported on every start and the development
+# users are re-created by the keycloak-seed Job below. A real deployment runs `start --optimized` on
+# Postgres behind TLS with the realm managed as code (see docs/KEYCLOAK_IDENTITY.md).
+#
+# KC_HOSTNAME is the PUBLIC url stamped into tokens as the issuer. It is localhost:8180 because that
+# is how you reach this Keycloak from your machine:
+#     kubectl -n ecommerce port-forward svc/keycloak 8180:8080
+# Services reach it in-cluster at http://keycloak:8080 for keys (backchannel hostname is dynamic).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: ecommerce
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+        tier: identity
+    spec:
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 0
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: keycloak
+        image: quay.io/keycloak/keycloak:26.4
+        args: ["start-dev", "--import-realm"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 9000
+          name: management
+        env:
+        - name: KC_BOOTSTRAP_ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: kc-bootstrap-admin-username
+        - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: kc-bootstrap-admin-password
+        # Substituted into realm-ecommerce.json at import time.
+        - name: NOTIFICATION_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: notification-client-secret
+        - name: KC_HOSTNAME
+          value: "http://localhost:8180"
+        - name: KC_HOSTNAME_BACKCHANNEL_DYNAMIC
+          value: "true"
+        - name: KC_HTTP_ENABLED
+          value: "true"
+        - name: KC_HEALTH_ENABLED
+          value: "true"
+        - name: JAVA_OPTS_KC_HEAP
+          value: "-Xms128m -Xmx512m"
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 9000
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 20
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 9000
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 6
+        volumeMounts:
+        - name: data
+          mountPath: /opt/keycloak/data
+        - name: realm
+          mountPath: /opt/keycloak/data/import
+          readOnly: true
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: realm
+        configMap:
+          name: keycloak-realm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: ecommerce
+spec:
+  type: ClusterIP
+  selector:
+    app: keycloak
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+---
+# One-shot: development-only users (one per role) and a password-grant test client, for scripts and the
+# Karate suite. Never part of the realm file, so it cannot leak into a real deployment. Delete this Job
+# (and the e2e-* keys in the Secret) outside a local cluster.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-seed
+  namespace: ecommerce
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: keycloak-seed
+    spec:
+      restartPolicy: OnFailure
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: seed
+        image: quay.io/keycloak/keycloak:26.4
+        command: ["/bin/bash", "/seed/seed-dev.sh"]
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        env:
+        - name: KEYCLOAK_URL
+          value: "http://keycloak:8080"
+        - name: KC_BOOTSTRAP_ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: kc-bootstrap-admin-username
+        - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: kc-bootstrap-admin-password
+        - name: E2E_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: e2e-client-secret
+        - name: E2E_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: e2e-admin-password
+        - name: E2E_MANAGER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: e2e-manager-password
+        - name: E2E_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: e2e-user-password
+        volumeMounts:
+        - name: seed
+          mountPath: /seed
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: seed
+        configMap:
+          name: keycloak-seed-script
+          defaultMode: 0555
+      - name: tmp
+        emptyDir: {}

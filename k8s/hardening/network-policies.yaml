@@ -111,6 +111,13 @@ spec:
   - to:
     - podSelector:
         matchLabels:
+          app: keycloak
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to:
+    - podSelector:
+        matchLabels:
           app: redis
     ports:
     - protocol: TCP
@@ -227,6 +234,13 @@ spec:
     ports:
     - protocol: TCP
       port: 8888
+  - to:
+    - podSelector:
+        matchLabels:
+          app: keycloak
+    ports:
+    - protocol: TCP
+      port: 8080
   - to:
     - podSelector:
         matchLabels:
@@ -462,3 +476,59 @@ spec:
     ports:
     - protocol: TCP
       port: 5432
+---
+# Keycloak is the platform's identity provider: the gateway and every service fetch its signing keys
+# (JWKS) and the notification service requests its client-credentials token. Only the app tier may
+# reach it, and only on its HTTP port; browsers/Postman reach it through `kubectl port-forward`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak-ingress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          tier: service
+    - podSelector:
+        matchLabels:
+          app: keycloak-seed
+    ports:
+    - protocol: TCP
+      port: 8080
+---
+# The one-shot job that creates development-only users and a test client talks to Keycloak and nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak-seed-egress
+  namespace: ecommerce
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak-seed
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: keycloak
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53

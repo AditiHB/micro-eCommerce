@@ -31,7 +31,12 @@ public class DockerControl {
      * configure afterScenario, so it runs even if an assertion fails).
      */
     public static void clearRateLimitKeys() {
-        run("docker", "exec", "redis", "redis-cli", "eval",
+        // Redis requires a password: it comes from the environment (source the git-ignored .env).
+        String password = System.getenv("REDIS_PASSWORD");
+        if (password == null || password.isBlank()) {
+            return; // best effort: without the password the limiter simply is not reset
+        }
+        run("docker", "exec", "redis", "redis-cli", "-a", password, "--no-auth-warning", "eval",
             "for _,k in ipairs(redis.call('keys','rate_limit:*')) do redis.call('del',k) end", "0");
     }
 

@@ -1,0 +1,11 @@
+{
+  "eventId" : "evt-payment.failed",
+  "occurredAt" : "2026-01-01T10:15:30Z",
+  "aggregateId" : "42",
+  "aggregateType" : "Payment",
+  "version" : 1,
+  "orderId" : 42,
+  "customerId" : 7,
+  "reason" : "Card declined",
+  "eventType" : "payment.failed"
+}

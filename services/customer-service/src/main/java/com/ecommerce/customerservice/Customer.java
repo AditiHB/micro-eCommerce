@@ -41,4 +41,8 @@ public class Customer {
     @UpdateTimestamp
     @Column(nullable = false)
     private LocalDateTime updatedAt;
+
+    /** Optimistic lock and the resource's ETag. */
+    @Version
+    private Long version;
 }

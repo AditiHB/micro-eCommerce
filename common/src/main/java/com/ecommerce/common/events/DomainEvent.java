@@ -1,22 +1,31 @@
 package com.ecommerce.common.events;
 
-import java.io.Serializable;
-import java.time.LocalDateTime;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+
+import java.time.Instant;
 import java.util.UUID;
 
-public abstract class DomainEvent implements Serializable {
-    private static final long serialVersionUID = 1L;
+/**
+ * Base of every event that crosses a service boundary.
+ *
+ * <p>Wire format is JSON, never Java serialization. Timestamps are UTC instants (ISO-8601 with a zone), and
+ * readers ignore fields they do not know, so a producer can add an optional field without breaking consumers
+ * that have not been rebuilt yet (see {@link EventSchema} and {@code docs/EVENT_CONTRACTS.md}).
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+public abstract class DomainEvent {
 
     protected String eventId;
-    protected LocalDateTime occurredAt;
+    protected Instant occurredAt;
     protected String aggregateId;
     protected String aggregateType;
     protected int version;
 
     protected DomainEvent() {
         this.eventId = UUID.randomUUID().toString();
-        this.occurredAt = LocalDateTime.now();
-        this.version = 1;
+        this.occurredAt = Instant.now();
+        this.version = EventCatalog.versionOf(getClass());
     }
 
     protected DomainEvent(String aggregateId, String aggregateType) {
@@ -33,11 +42,11 @@ public abstract class DomainEvent implements Serializable {
         this.eventId = eventId;
     }
 
-    public LocalDateTime getOccurredAt() {
+    public Instant getOccurredAt() {
         return occurredAt;
     }
 
-    public void setOccurredAt(LocalDateTime occurredAt) {
+    public void setOccurredAt(Instant occurredAt) {
         this.occurredAt = occurredAt;
     }
 
@@ -57,6 +66,7 @@ public abstract class DomainEvent implements Serializable {
         this.aggregateType = aggregateType;
     }
 
+    /** Schema version of this event type (not the aggregate's version). */
     public int getVersion() {
         return version;
     }
@@ -65,7 +75,9 @@ public abstract class DomainEvent implements Serializable {
         this.version = version;
     }
 
+    /** Logical type name, e.g. {@code order.created}. Informational on the wire; the type header is what routes. */
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     public String getEventType() {
-        return this.getClass().getSimpleName();
+        return EventCatalog.typeOf(getClass());
     }
 }

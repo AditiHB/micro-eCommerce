@@ -7,12 +7,9 @@ import org.springframework.boot.autoconfigure.security.reactive.ReactiveUserDeta
 import org.springframework.boot.actuate.autoconfigure.security.reactive.ReactiveManagementWebSecurityAutoConfiguration;
 import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 
-// Spring Security is only on the classpath as a transitive dependency (via spring-cloud-starter-gateway's
-// own use of spring-security-crypto/rsa); this service authenticates/authorizes requests itself via its
-// own AuthenticationFilter and RateLimitingFilter GlobalFilters, not Spring Security. Without these
-// exclusions, Spring Boot's reactive security auto-configuration silently activates its maximally
-// restrictive default (HTTP Basic auth behind a randomly generated password logged at startup),
-// rejecting every request the gateway is supposed to route - confirmed by booting this service locally.
+// Security is configured explicitly in GatewaySecurityConfig (OAuth2 resource server, JWKS-validated
+// RS256 tokens). The reactive auto-configurations below are excluded so Spring Boot never falls back
+// to its default HTTP Basic user with a randomly generated password logged at startup.
 @SpringBootApplication(exclude = {
     ReactiveSecurityAutoConfiguration.class,
     ReactiveUserDetailsServiceAutoConfiguration.class,

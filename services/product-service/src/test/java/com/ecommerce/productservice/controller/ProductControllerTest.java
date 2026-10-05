@@ -1,243 +1,168 @@
 package com.ecommerce.productservice.controller;
 
-import com.ecommerce.productservice.config.TestSecurityConfig;
-import com.ecommerce.productservice.dto.CreateProductRequest;
 import com.ecommerce.productservice.dto.ProductDTO;
-import com.ecommerce.productservice.dto.UpdateProductRequest;
+import com.ecommerce.productservice.exception.DuplicateSkuException;
+import com.ecommerce.productservice.exception.GlobalExceptionHandler;
 import com.ecommerce.productservice.exception.ProductNotFoundException;
 import com.ecommerce.productservice.service.ProductService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.startsWith;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(ProductController.class)
 @AutoConfigureMockMvc(addFilters = false)
+@Import(GlobalExceptionHandler.class)
+@DisplayName("Product API (controller slice)")
 class ProductControllerTest {
+
+    private static final String PRODUCTS = "/api/v1/products";
+
     @Autowired
     private MockMvc mockMvc;
-
     @Autowired
     private ObjectMapper objectMapper;
-
     @MockBean
     private ProductService productService;
 
-    @MockBean
-    private com.ecommerce.common.security.JwtAuthenticationFilter jwtAuthenticationFilter;
-
-    @MockBean
-    private com.ecommerce.common.security.CustomUserDetailsService customUserDetailsService;
-
-    private ProductDTO testProductDTO;
-    private CreateProductRequest createRequest;
-    private UpdateProductRequest updateRequest;
+    private ProductDTO product;
 
     @BeforeEach
     void setUp() {
-        testProductDTO = ProductDTO.builder()
-                .id(1L)
-                .name("Test Product")
-                .description("Test Description")
-                .price(new BigDecimal("99.99"))
-                .sku("SKU-TEST-001")
-                .category("Electronics")
-                .quantityAvailable(100)
-                .createdAt(LocalDateTime.now())
-                .updatedAt(LocalDateTime.now())
-                .build();
-
-        createRequest = CreateProductRequest.builder()
-                .name("New Product")
-                .description("New Description")
-                .price(new BigDecimal("49.99"))
-                .sku("SKU-NEW-001")
-                .category("Electronics")
-                .quantityAvailable(50)
-                .build();
-
-        updateRequest = UpdateProductRequest.builder()
-                .name("Updated Product")
-                .price(new BigDecimal("59.99"))
-                .build();
+        product = ProductDTO.builder().id(1L).name("Headphones").description("Wireless").price(new BigDecimal("79.99"))
+                .currency("USD").sku("SKU-001").category("Electronics").version(3L)
+                .createdAt(LocalDateTime.now()).updatedAt(LocalDateTime.now()).build();
     }
 
     @Test
-    void testCreateProduct_Success() throws Exception {
-        when(productService.createProduct(any(CreateProductRequest.class))).thenReturn(testProductDTO);
+    @DisplayName("creating a product returns 201, Location and the version as ETag; the body has no stock field")
+    void create() throws Exception {
+        when(productService.createProduct(any())).thenReturn(product);
 
-        mockMvc.perform(post("/api/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(createRequest)))
+        mockMvc.perform(post(PRODUCTS).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Headphones\",\"price\":79.99,\"sku\":\"SKU-001\",\"category\":\"Electronics\"}"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.id", is(testProductDTO.getId().intValue())))
-                .andExpect(jsonPath("$.name", is(testProductDTO.getName())))
-                .andExpect(jsonPath("$.sku", is(testProductDTO.getSku())));
-
-        verify(productService).createProduct(any(CreateProductRequest.class));
+                .andExpect(header().string("Location", startsWith(PRODUCTS + "/")))
+                .andExpect(header().string("ETag", "\"3\""))
+                .andExpect(jsonPath("$.currency").value("USD"))
+                .andExpect(jsonPath("$.quantityAvailable").doesNotExist());
     }
 
     @Test
-    void testCreateProduct_InvalidRequest() throws Exception {
-        CreateProductRequest invalidRequest = CreateProductRequest.builder()
-                .name("")  // Empty name
-                .price(new BigDecimal("49.99"))
-                .sku("SKU-NEW-001")
-                .category("Electronics")
-                .quantityAvailable(50)
-                .build();
-
-        mockMvc.perform(post("/api/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(invalidRequest)))
-                .andExpect(status().isBadRequest());
+    @DisplayName("an invalid product is a 400 problem naming the fields")
+    void validation() throws Exception {
+        mockMvc.perform(post(PRODUCTS).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"\",\"price\":0,\"sku\":\"\",\"category\":\"\",\"currency\":\"dollars\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errors.name").exists())
+                .andExpect(jsonPath("$.errors.price").exists())
+                .andExpect(jsonPath("$.errors.currency").exists());
+        verify(productService, never()).createProduct(any());
     }
 
     @Test
-    void testGetProduct_Success() throws Exception {
-        when(productService.getProductById(1L)).thenReturn(testProductDTO);
+    @DisplayName("a duplicate SKU is a 409 problem")
+    void duplicateSku() throws Exception {
+        when(productService.createProduct(any())).thenThrow(new DuplicateSkuException("SKU-001"));
 
-        mockMvc.perform(get("/api/products/1"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(testProductDTO.getId().intValue())))
-                .andExpect(jsonPath("$.name", is(testProductDTO.getName())));
-
-        verify(productService).getProductById(1L);
+        mockMvc.perform(post(PRODUCTS).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"X\",\"price\":1,\"sku\":\"SKU-001\",\"category\":\"C\"}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("DUPLICATE_SKU"));
     }
 
     @Test
-    void testGetProduct_NotFound() throws Exception {
-        when(productService.getProductById(999L))
-                .thenThrow(new ProductNotFoundException(999L));
+    @DisplayName("a product is read by id or SKU, with its ETag; an unknown one is a 404 problem")
+    void read() throws Exception {
+        when(productService.getProductById(1L)).thenReturn(product);
+        when(productService.getProductBySku("SKU-001")).thenReturn(product);
+        when(productService.getProductById(9L)).thenThrow(new ProductNotFoundException(9L));
 
-        mockMvc.perform(get("/api/products/999"))
-                .andExpect(status().isNotFound());
-
-        verify(productService).getProductById(999L);
+        mockMvc.perform(get(PRODUCTS + "/1")).andExpect(status().isOk()).andExpect(header().string("ETag", "\"3\""));
+        mockMvc.perform(get(PRODUCTS + "/sku/SKU-001")).andExpect(status().isOk()).andExpect(jsonPath("$.sku").value("SKU-001"));
+        mockMvc.perform(get(PRODUCTS + "/9")).andExpect(status().isNotFound()).andExpect(jsonPath("$.errorCode").value("RESOURCE_NOT_FOUND"));
     }
 
     @Test
-    void testGetProductBySku_Success() throws Exception {
-        when(productService.getProductBySku("SKU-TEST-001")).thenReturn(testProductDTO);
+    @DisplayName("the batch lookup prices several SKUs in one call")
+    void lookup() throws Exception {
+        when(productService.lookupBySkus(anyCollection())).thenReturn(List.of(product));
 
-        mockMvc.perform(get("/api/products/sku/SKU-TEST-001"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sku", is("SKU-TEST-001")));
-
-        verify(productService).getProductBySku("SKU-TEST-001");
+        mockMvc.perform(get(PRODUCTS + "/lookup").param("skus", "SKU-001, SKU-404"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$", hasSize(1))).andExpect(jsonPath("$[0].price").value(79.99));
     }
 
     @Test
-    void testGetAllProducts_Success() throws Exception {
-        Page<ProductDTO> page = new PageImpl<>(List.of(testProductDTO), PageRequest.of(0, 10), 1);
-        when(productService.getAllProducts(any())).thenReturn(page);
-
-        mockMvc.perform(get("/api/products"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(1)))
-                .andExpect(jsonPath("$.totalElements", is(1)));
-
-        verify(productService).getAllProducts(any());
+    @DisplayName("a lookup needs between 1 and 50 SKUs")
+    void lookupBounds() throws Exception {
+        mockMvc.perform(get(PRODUCTS + "/lookup").param("skus", " , ")).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("INVALID_LOOKUP"));
+        String tooMany = String.join(",", java.util.stream.IntStream.range(0, 51).mapToObj(i -> "SKU-" + i).toList());
+        mockMvc.perform(get(PRODUCTS + "/lookup").param("skus", tooMany)).andExpect(status().isBadRequest());
+        verify(productService, never()).lookupBySkus(any(Collection.class));
     }
 
     @Test
-    void testGetProductsByCategory_Success() throws Exception {
-        Page<ProductDTO> page = new PageImpl<>(List.of(testProductDTO), PageRequest.of(0, 10), 1);
-        when(productService.getProductsByCategory("Electronics", PageRequest.of(0, 20))).thenReturn(page);
+    @DisplayName("listing is paged")
+    void list() throws Exception {
+        when(productService.getAllProducts(any())).thenReturn(new PageImpl<>(List.of(product)));
 
-        mockMvc.perform(get("/api/products/category/Electronics"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(1)));
-
-        verify(productService).getProductsByCategory(eq("Electronics"), any());
+        mockMvc.perform(get(PRODUCTS)).andExpect(status().isOk()).andExpect(jsonPath("$.content", hasSize(1)));
     }
 
     @Test
-    void testUpdateProduct_Success() throws Exception {
-        when(productService.updateProduct(eq(1L), any(UpdateProductRequest.class)))
-                .thenReturn(testProductDTO);
+    @DisplayName("PUT passes If-Match to the service")
+    void update() throws Exception {
+        when(productService.updateProduct(eq(1L), any(), eq("\"3\""))).thenReturn(product);
 
-        mockMvc.perform(put("/api/products/1")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(updateRequest)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(testProductDTO.getId().intValue())));
-
-        verify(productService).updateProduct(eq(1L), any(UpdateProductRequest.class));
+        mockMvc.perform(put(PRODUCTS + "/1").header("If-Match", "\"3\"").contentType(MediaType.APPLICATION_JSON).content("{\"price\":89.99}"))
+                .andExpect(status().isOk());
+        verify(productService).updateProduct(eq(1L), any(), eq("\"3\""));
     }
 
     @Test
-    void testDeleteProduct_Success() throws Exception {
-        doNothing().when(productService).deleteProduct(1L);
+    @DisplayName("the stock operations are gone: the catalogue no longer owns stock")
+    void noStockEndpoints() throws Exception {
+        mockMvc.perform(post(PRODUCTS + "/1/reserve").param("quantity", "1")).andExpect(status().isNotFound());
+        mockMvc.perform(post(PRODUCTS + "/1/release").param("quantity", "1")).andExpect(status().isNotFound());
+        mockMvc.perform(get(PRODUCTS + "/low-stock")).andExpect(status().is4xxClientError());
+        mockMvc.perform(get(PRODUCTS + "/available")).andExpect(status().is4xxClientError());
+    }
 
-        mockMvc.perform(delete("/api/products/1"))
-                .andExpect(status().isNoContent());
-
+    @Test
+    @DisplayName("delete returns 204")
+    void deleteProduct() throws Exception {
+        mockMvc.perform(delete(PRODUCTS + "/1")).andExpect(status().isNoContent());
         verify(productService).deleteProduct(1L);
-    }
-
-    @Test
-    void testReserveInventory_Success() throws Exception {
-        doNothing().when(productService).reserveInventory(1L, 10);
-
-        mockMvc.perform(post("/api/products/1/reserve")
-                        .param("quantity", "10"))
-                .andExpect(status().isOk());
-
-        verify(productService).reserveInventory(1L, 10);
-    }
-
-    @Test
-    void testReleaseInventory_Success() throws Exception {
-        doNothing().when(productService).releaseInventory(1L, 10);
-
-        mockMvc.perform(post("/api/products/1/release")
-                        .param("quantity", "10"))
-                .andExpect(status().isOk());
-
-        verify(productService).releaseInventory(1L, 10);
-    }
-
-    @Test
-    void testGetAvailableProducts_Success() throws Exception {
-        Page<ProductDTO> page = new PageImpl<>(List.of(testProductDTO), PageRequest.of(0, 10), 1);
-        when(productService.getAvailableProducts(any())).thenReturn(page);
-
-        mockMvc.perform(get("/api/products/available"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(1)));
-
-        verify(productService).getAvailableProducts(any());
-    }
-
-    @Test
-    void testGetLowStockProducts_Success() throws Exception {
-        when(productService.getLowStockProducts()).thenReturn(List.of(testProductDTO));
-
-        mockMvc.perform(get("/api/products/low-stock"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$", hasSize(1)));
-
-        verify(productService).getLowStockProducts();
     }
 }

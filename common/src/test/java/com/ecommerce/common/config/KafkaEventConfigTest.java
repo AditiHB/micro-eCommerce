@@ -1,72 +1,103 @@
 package com.ecommerce.common.config;
 
+import com.ecommerce.common.events.EventCatalog;
+import com.ecommerce.common.events.Topics;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.config.TopicConfig;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.kafka.core.DefaultKafkaProducerFactory;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import static org.assertj.core.api.Assertions.*;
+import java.util.Collection;
+import java.util.Map;
+import java.util.stream.Collectors;
 
-@ExtendWith(MockitoExtension.class)
-@DisplayName("KafkaEventConfig Unit Tests")
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DisplayName("KafkaEventConfig")
 class KafkaEventConfigTest {
 
-    @InjectMocks
-    private KafkaEventConfig kafkaConfig;
+    private KafkaEventConfig config;
 
     @BeforeEach
     void setUp() {
-        // @Value fields are not populated by Mockito's @InjectMocks, so they must be
-        // set manually - otherwise DefaultKafkaProducerFactory's internal ConcurrentHashMap
-        // throws a NullPointerException on a null bootstrap-servers value.
-        ReflectionTestUtils.setField(kafkaConfig, "bootstrapServers", "localhost:9092");
-        ReflectionTestUtils.setField(kafkaConfig, "replicationFactor", (short) 1);
-        ReflectionTestUtils.setField(kafkaConfig, "partitions", 3);
-        ReflectionTestUtils.setField(kafkaConfig, "dlqSuffix", "-dlq");
+        config = new KafkaEventConfig();
+        // @Value fields are populated by Spring in a running app; set the production defaults by hand here.
+        ReflectionTestUtils.setField(config, "bootstrapServers", "localhost:9092");
+        ReflectionTestUtils.setField(config, "replicationFactor", (short) 1);
+        ReflectionTestUtils.setField(config, "minInsyncReplicas", 1);
+        ReflectionTestUtils.setField(config, "partitions", 3);
+        ReflectionTestUtils.setField(config, "dlqPartitions", 1);
+        ReflectionTestUtils.setField(config, "dlqRetentionMs", 1_209_600_000L);
+        ReflectionTestUtils.setField(config, "retryMaxAttempts", 5);
+        ReflectionTestUtils.setField(config, "retryInitialIntervalMs", 1000L);
+        ReflectionTestUtils.setField(config, "retryMultiplier", 2.0);
+        ReflectionTestUtils.setField(config, "retryMaxIntervalMs", 30_000L);
+        ReflectionTestUtils.setField(config, "concurrency", 3);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Collection<NewTopic> newTopics() {
+        return (Collection<NewTopic>) ReflectionTestUtils.invokeMethod(config.eventTopics(), "getNewTopics");
+    }
+
+    private Map<String, NewTopic> topicsByName() {
+        Collection<NewTopic> topics = newTopics();
+        return topics.stream().collect(Collectors.toMap(NewTopic::name, t -> t));
     }
 
     @Test
-    @DisplayName("Should create Kafka producer factory")
-    void testProducerFactoryCreation() {
-        ProducerFactory<String, Object> producerFactory = kafkaConfig.producerFactory();
+    @DisplayName("declares a topic and a dead-letter topic for every event type - none rely on auto-creation")
+    void declaresEveryTopic() {
+        Map<String, NewTopic> topics = topicsByName();
 
-        assertThat(producerFactory).isNotNull();
-        assertThat(producerFactory).isInstanceOf(DefaultKafkaProducerFactory.class);
+        for (String topic : EventCatalog.topics()) {
+            assertThat(topics).containsKeys(topic, topic + Topics.DLQ_SUFFIX);
+        }
+        // the two the old config forgot
+        assertThat(topics).containsKeys(Topics.ORDER_CANCELLED, Topics.REFUND_COMPLETED, Topics.INVENTORY_RELEASED);
+        assertThat(topics.get(Topics.ORDER_CREATED).numPartitions()).isEqualTo(3);
+        assertThat(topics.get(Topics.ORDER_CREATED + Topics.DLQ_SUFFIX).numPartitions()).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("Should create Kafka template bean")
-    void testKafkaTemplateCreation() {
-        KafkaTemplate<String, Object> kafkaTemplate = kafkaConfig.kafkaTemplate();
+    @DisplayName("a replicated cluster gets RF 3 and min.insync.replicas 2 on every topic, dead letters included")
+    void replicatedTopics() {
+        ReflectionTestUtils.setField(config, "replicationFactor", (short) 3);
+        ReflectionTestUtils.setField(config, "minInsyncReplicas", 2);
 
-        assertThat(kafkaTemplate).isNotNull();
+        assertThat(topicsByName().values()).allSatisfy(topic -> {
+            assertThat(topic.replicationFactor()).isEqualTo((short) 3);
+            assertThat(topic.configs()).containsEntry(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, "2");
+        });
     }
 
     @Test
-    @DisplayName("Should configure producer with String serializer for key")
-    void testProducerSerializerConfiguration() {
-        ProducerFactory<String, Object> factory = kafkaConfig.producerFactory();
-
-        assertThat(factory).isNotNull();
+    @DisplayName("dead-letter topics keep messages for two weeks so an operator has time to act")
+    void dlqRetention() {
+        assertThat(topicsByName().get(Topics.PAYMENT_FAILED + Topics.DLQ_SUFFIX).configs())
+                .containsEntry(TopicConfig.RETENTION_MS_CONFIG, "1209600000");
     }
 
     @Test
-    @DisplayName("Should configure batch size for Kafka producer")
-    void testProducerBatchConfig() {
-        ProducerFactory<String, Object> factory = kafkaConfig.producerFactory();
+    @DisplayName("consumers are told exactly which logical names map to which classes")
+    void typeMappingIsAnAllowList() {
+        String mapping = EventCatalog.typeMapping();
 
-        assertThat(factory).isNotNull();
+        assertThat(mapping).contains("order.created:com.ecommerce.common.events.OrderCreatedEvent")
+                .contains("payment.processed:com.ecommerce.common.events.PaymentProcessedEvent");
     }
 
     @Test
-    @DisplayName("Should configure topic creation settings")
-    void testTopicCreation() {
-        assertThat(kafkaConfig).isNotNull();
+    @DisplayName("builds the error handler and the recoverer that dead-letters to <topic>-dlq")
+    void errorHandlingBuilds() {
+        DeadLetterPublishingRecoverer recoverer = config.deadLetterRecoverer();
+
+        assertThat(recoverer).isNotNull();
+        assertThat(config.kafkaErrorHandler(recoverer)).isNotNull();
+        // Retry timing, dead-lettering and the "never retry a poison message" rule are proven against a real
+        // broker in KafkaDeliveryIntegrationTest.
     }
 }

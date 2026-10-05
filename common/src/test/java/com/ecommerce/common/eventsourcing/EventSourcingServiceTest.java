@@ -44,7 +44,7 @@ class EventSourcingServiceTest {
         testEvent.setAggregateId("order-456");
         testEvent.setAggregateType("Order");
         testEvent.setVersion(1);
-        testEvent.setOccurredAt(LocalDateTime.now());
+        testEvent.setOccurredAt(java.time.Instant.now());
 
         eventStore = EventStore.builder()
             .id(1L)

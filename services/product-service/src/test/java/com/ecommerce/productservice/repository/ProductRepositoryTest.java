@@ -1,173 +1,79 @@
 package com.ecommerce.productservice.repository;
 
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
 import com.ecommerce.productservice.entity.Product;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.data.domain.Page;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataJpaTest
-@ActiveProfiles("test")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@PostgresIntegrationTest
+@DisplayName("ProductRepository (PostgreSQL)")
 class ProductRepositoryTest {
-    @Autowired
-    private ProductRepository productRepository;
 
-    private Product testProduct;
+    @Autowired
+    private ProductRepository repository;
+    @Autowired
+    private EntityManager entityManager;
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @BeforeEach
     void setUp() {
-        testProduct = Product.builder()
-                .name("Test Product")
-                .description("Test Description")
-                .price(new BigDecimal("99.99"))
-                .sku("SKU-TEST-001")
-                .category("Electronics")
-                .quantityAvailable(100)
-                .build();
-        productRepository.save(testProduct);
+        repository.deleteAllInBatch();
+    }
+
+    private Product save(String sku, String name, String category, String price) {
+        return repository.saveAndFlush(Product.builder().name(name).price(new BigDecimal(price)).sku(sku).category(category).build());
     }
 
     @Test
-    void testFindBySku_Success() {
-        Optional<Product> result = productRepository.findBySku("SKU-TEST-001");
+    @DisplayName("a product is stored with its currency and version, and has no stock column")
+    void roundTrip() {
+        Product saved = save("SKU-001", "Headphones", "Electronics", "79.99");
+        entityManager.clear();
 
-        assertThat(result).isPresent();
-        assertThat(result.get().getSku()).isEqualTo("SKU-TEST-001");
+        Product found = repository.findById(saved.getId()).orElseThrow();
+        assertThat(found.getCurrency()).isEqualTo("USD");
+        assertThat(found.getVersion()).isZero();
+        assertThat(jdbc.queryForList("SELECT column_name FROM information_schema.columns WHERE table_name = 'products'", String.class))
+                .doesNotContain("quantity_available");
     }
 
     @Test
-    void testFindBySku_NotFound() {
-        Optional<Product> result = productRepository.findBySku("SKU-NOTFOUND");
+    @DisplayName("the SKU is unique, enforced by the database")
+    void uniqueSku() {
+        save("SKU-001", "Headphones", "Electronics", "79.99");
 
-        assertThat(result).isEmpty();
+        assertThatThrownBy(() -> save("SKU-001", "Other", "Electronics", "1.00")).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    void testFindByCategory_Success() {
-        Pageable pageable = PageRequest.of(0, 10);
-        Page<Product> result = productRepository.findByCategory("Electronics", pageable);
+    @DisplayName("products are found by SKU, several SKUs at once, category and name")
+    void queries() {
+        save("SKU-001", "Wireless Headphones", "Electronics", "79.99");
+        save("SKU-002", "USB-C Cable", "Electronics", "12.99");
+        save("SKU-003", "Cotton T-Shirt", "Clothing", "19.99");
 
-        assertThat(result.getContent()).isNotEmpty();
-        assertThat(result.getContent().get(0).getCategory()).isEqualTo("Electronics");
-    }
-
-    @Test
-    void testFindByCategory_Empty() {
-        Pageable pageable = PageRequest.of(0, 10);
-        Page<Product> result = productRepository.findByCategory("NonExistentCategory", pageable);
-
-        assertThat(result.getContent()).isEmpty();
-    }
-
-    @Test
-    void testFindByCategory_List() {
-        List<Product> result = productRepository.findByCategory("Electronics");
-
-        assertThat(result).isNotEmpty();
-        assertThat(result.stream().allMatch(p -> p.getCategory().equals("Electronics"))).isTrue();
-    }
-
-    @Test
-    void testSearchByName_Success() {
-        Pageable pageable = PageRequest.of(0, 10);
-        Page<Product> result = productRepository.searchByName("Test", pageable);
-
-        assertThat(result.getContent()).isNotEmpty();
-    }
-
-    @Test
-    void testSearchByName_NoResults() {
-        Pageable pageable = PageRequest.of(0, 10);
-        Page<Product> result = productRepository.searchByName("NonExistent", pageable);
-
-        assertThat(result.getContent()).isEmpty();
-    }
-
-    @Test
-    void testFindAvailableProducts_Success() {
-        Pageable pageable = PageRequest.of(0, 10);
-        Page<Product> result = productRepository.findAvailableProducts(pageable);
-
-        assertThat(result.getContent()).isNotEmpty();
-        assertThat(result.getContent().stream().allMatch(p -> p.getQuantityAvailable() > 0)).isTrue();
-    }
-
-    @Test
-    void testFindLowStockProducts_Success() {
-        Product lowStockProduct = Product.builder()
-                .name("Low Stock Product")
-                .price(new BigDecimal("29.99"))
-                .sku("SKU-LOW-001")
-                .category("Electronics")
-                .quantityAvailable(5)
-                .build();
-        productRepository.save(lowStockProduct);
-
-        List<Product> result = productRepository.findLowStockProducts();
-
-        assertThat(result).isNotEmpty();
-        assertThat(result.stream().allMatch(p -> p.getQuantityAvailable() <= 10)).isTrue();
-    }
-
-    @Test
-    void testExistsBySku_True() {
-        boolean result = productRepository.existsBySku("SKU-TEST-001");
-
-        assertThat(result).isTrue();
-    }
-
-    @Test
-    void testExistsBySku_False() {
-        boolean result = productRepository.existsBySku("SKU-NOTFOUND");
-
-        assertThat(result).isFalse();
-    }
-
-    @Test
-    void testSaveAndRetrieve() {
-        Product newProduct = Product.builder()
-                .name("New Product")
-                .description("New Description")
-                .price(new BigDecimal("49.99"))
-                .sku("SKU-NEW-001")
-                .category("Books")
-                .quantityAvailable(25)
-                .build();
-
-        Product saved = productRepository.save(newProduct);
-
-        assertThat(saved.getId()).isNotNull();
-        Optional<Product> retrieved = productRepository.findById(saved.getId());
-        assertThat(retrieved).isPresent();
-        assertThat(retrieved.get().getSku()).isEqualTo("SKU-NEW-001");
-    }
-
-    @Test
-    void testUpdate() {
-        testProduct.setPrice(new BigDecimal("149.99"));
-        Product updated = productRepository.save(testProduct);
-
-        Optional<Product> retrieved = productRepository.findById(updated.getId());
-        assertThat(retrieved).isPresent();
-        assertThat(retrieved.get().getPrice()).isEqualTo(new BigDecimal("149.99"));
-    }
-
-    @Test
-    void testDelete() {
-        Product toDelete = testProduct;
-        productRepository.delete(toDelete);
-
-        Optional<Product> result = productRepository.findById(toDelete.getId());
-        assertThat(result).isEmpty();
+        assertThat(repository.findBySku("SKU-002")).isPresent();
+        assertThat(repository.findBySkuIn(List.of("SKU-001", "SKU-003", "NOPE"))).extracting(Product::getSku).containsExactlyInAnyOrder("SKU-001", "SKU-003");
+        assertThat(repository.findByCategory("Electronics", PageRequest.of(0, 10)).getTotalElements()).isEqualTo(2);
+        assertThat(repository.searchByName("headphone", PageRequest.of(0, 10)).getContent()).extracting(Product::getSku).containsExactly("SKU-001");
+        assertThat(repository.existsBySku("SKU-003")).isTrue();
+        assertThat(repository.existsBySku("NOPE")).isFalse();
     }
 }

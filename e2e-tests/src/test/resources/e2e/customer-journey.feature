@@ -1,99 +1,108 @@
 Feature: Customer journey end-to-end
-  Exercises the live, already-running Docker Compose stack (no mocks): log
-  in, create a customer, browse the inventory catalogue, place an order,
-  pay for it, and confirm Notification Service reacted to both the
-  order-created and payment-processed Kafka events.
+  Exercises the live, already-running Docker Compose stack (no mocks): sign in, create a customer, put a priced
+  product into the catalogue, place an order, and watch the choreography saga run by itself across inventory,
+  payment and notification - charging the order's REAL total (taken from the catalogue, never from the request)
+  and ending COMPLETED.
 
   Background:
     * url gatewayUrl
     * def showcase = Java.type('e2e.DataShowcase')
+    * def docker = Java.type('e2e.DockerControl')
+    * eval docker.clearRateLimitKeys()
 
-    # The users table has no self-service registration endpoint and starts
-    # empty - "karate_admin" is seeded by a Flyway migration specifically
-    # for this (see db/README.md). ADMIN satisfies every role check used
-    # below (customers, orders, payments, inventory).
-    Given path '/api/auth/login'
-    And request { username: '#(testUsername)', password: '#(testPassword)' }
-    When method post
-    Then status 200
-    * def authToken = response.token
-    * configure headers = { Authorization: '#("Bearer " + authToken)' }
+    # Tokens come from Keycloak (the platform's only identity provider). "karate_admin" is a development-only user
+    # created by infrastructure/keycloak/seed-dev.sh with a password from your git-ignored .env.
+    * def login = call read('classpath:e2e/auth.feature') { username: '#(testUsername)', password: '#(testPassword)' }
+    * def token = login.accessToken
+    * configure headers = { Authorization: '#("Bearer " + token)' }
     * showcase.event('Authenticated as karate_admin (ADMIN) - token acquired for every call below.')
 
-  Scenario: Create a customer, browse the catalogue, order, pay, get notified
+  Scenario: Order, pay the real total, get notified
 
-    # 1. Create a customer
-    * def uniqueId = Java.type('java.util.UUID').randomUUID() + ''
-    Given path '/api/customers'
-    And request { name: '#("Karate Customer " + uniqueId)', email: '#("karate." + uniqueId + "@example.com")' }
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    * def customerId = customer.customerId
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 79.99, stock: 10 }
+    * def sku = product.sku
+    * showcase.event('Customer ' + customerId + ' and product ' + sku + ' (79.99 USD, 10 in stock) created.')
+
+    # --- place the order: the server prices it from the catalogue ---------------------------------------------
+    Given path '/api/v1/orders'
+    And request { customerId: '#(customerId)', items: [{ productId: '#(sku)', quantity: 3 }] }
     When method post
     Then status 201
-    And match response.id == '#number'
-    * def customerId = response.id
-    * showcase.event('Customer ' + customerId + ' created - a plain CRUD write, nothing published to Kafka yet.')
-    * showcase.show('Customer ' + customerId + ' created', 'customer_db', 'SELECT id, name, email FROM customers WHERE id=' + customerId)
-
-    # 2. See the product catalogue (Inventory Service - product-service
-    # isn't part of this Compose stack, see docs/SETUP_AND_DEPLOYMENT.md)
-    Given path '/api/inventory'
-    And param size = 20
-    When method get
-    Then status 200
-    And assert response.content.length >= 1
-    * def catalogueItem = response.content[0]
-    * def productId = catalogueItem.productId
-    * showcase.event('Picked ' + productId + ' from the catalogue (' + catalogueItem.quantity + ' units on hand) to order against.')
-
-    # 3. Create an order for a product from the catalogue
-    Given path '/api/orders'
-    And request { customerId: '#(customerId)', productId: '#(productId)', quantity: 1 }
-    When method post
-    Then status 201
-    And match response.customerId == customerId
-    And match response.productId == productId
+    And match header Location == '#regex /api/v1/orders/\\d+'
+    And match header ETag == '"0"'
     And match response.status == 'PENDING'
+    And match response.currency == 'USD'
+    And match response.totalAmount == 239.97
+    And match response.items == [{ productId: '#(sku)', quantity: 3, unitPrice: 79.99, lineTotal: 239.97 }]
     * def orderId = response.id
-    * showcase.event('Order ' + orderId + ' created as PENDING - order-service publishes OrderCreatedEvent. Two independent Kafka consumers react from here: InventoryEventListener (reserve stock) and NotificationEventListener (send "order received").')
-    * showcase.show('Order ' + orderId + ' created (PENDING)', 'order_db', 'SELECT id, customer_id, product_id, quantity, status FROM orders WHERE id=' + orderId)
-    * showcase.show('Inventory for ' + productId + ' right after order creation', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
+    * showcase.event('Order ' + orderId + ' accepted as PENDING, total 239.97 = 3 x 79.99, priced by the server. order-service wrote the order AND its order.created event in one transaction; the outbox relay now delivers it to Kafka.')
 
-    # 4. Invoke the Payment Service for that order - this can race the
-    # automatic saga (order-created -> inventory-reserved -> an automatic
-    # payment via PaymentEventListener.handleInventoryReserved, which in
-    # practice reliably wins since it starts as soon as the order is
-    # created, well before this test's own sequential HTTP calls catch up).
-    # "One payment per order" is enforced atomically (a unique constraint on
-    # orderId - see V7__Enforce_One_Payment_Per_Order.sql), so whichever
-    # path gets there first succeeds (201) and the other gets a clean 400
-    # PAYMENT_ALREADY_EXISTS instead of silently double-charging the order.
-    # Either outcome means the order is paid - step 5 is what actually
-    # verifies that, regardless of which path got there first.
-    Given path '/api/payments'
-    And request { orderId: '#(orderId)', amount: 49.99 }
-    When method post
-    Then assert responseStatus == 201 || responseStatus == 400
-    * if (responseStatus == 400 && response.errorCode != 'PAYMENT_ALREADY_EXISTS') karate.fail('unexpected 400 processing payment: ' + JSON.stringify(response))
-    * if (responseStatus == 201) showcase.event('This direct POST won the race - it created the payment itself (amount 49.99).')
-    * if (responseStatus == 400) showcase.event('PaymentEventListener\'s automatic saga payment won the race instead - this direct POST got a clean 400 PAYMENT_ALREADY_EXISTS (the DB\'s unique constraint on orderId is what actually decides it), not a double charge.')
+    # --- the saga runs by itself ------------------------------------------------------------------------------
+    * def settled = call read('classpath:e2e/helpers/await-order.feature') { token: '#(token)', orderId: '#(orderId)', expected: 'COMPLETED' }
+    * showcase.event('Saga settled: inventory reserved 3 units -> payment captured -> order COMPLETED, all via events.')
 
-    # 5. See Notification Service in action - order-created and
-    # payment-processed are consumed off Kafka asynchronously, so poll until
-    # both notifications for this order have landed.
-    * configure retry = { count: 15, interval: 1000 }
-    Given url notificationUrl
-    And path '/api/notifications/order', orderId
-    And retry until responseStatus == 200 && response.length >= 2
+    # --- payment: the real total, captured -------------------------------------------------------------------
+    Given path '/api/v1/payments/order', orderId
     When method get
     Then status 200
-    * def orderNotifications = response
-    And match orderNotifications == '#[2]'
-    * def notificationTypes = karate.jsonPath(orderNotifications, '$[*].type')
-    And assert notificationTypes.includes('ORDER_CREATED')
-    And assert notificationTypes.includes('PAYMENT_SUCCESS')
-    * showcase.event('Saga settled: both notifications delivered, so the order is confirmed paid end to end regardless of which path actually created the payment.')
+    And match response.status == 'CAPTURED'
+    And match response.amount == 239.97
+    And match response.currency == 'USD'
+    And match response.customerId == customerId
+    And match response.processorReference == '#string'
 
-    # Final state across every service once the saga has settled.
-    * showcase.show('Order ' + orderId + ' final state', 'order_db', 'SELECT id, status, updated_at FROM orders WHERE id=' + orderId)
-    * showcase.show('Payment for order ' + orderId, 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
-    * showcase.show('Inventory for ' + productId + ' final state', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
-    * showcase.show('Notifications for order ' + orderId, 'notification_db', 'SELECT id, type, status, subject FROM notifications WHERE order_id=' + orderId + ' ORDER BY id')
+    # --- inventory: stock went 10 -> 7 ------------------------------------------------------------------------
+    Given path '/api/v1/inventory', product.inventoryId
+    When method get
+    Then status 200
+    And match response.quantity == 7
+
+    # --- notifications: both delivered (recorded in the same transaction as the event, sent by the dispatcher) -
+    * configure retry = { count: 30, interval: 1000 }
+    Given path '/api/v1/notifications/order', orderId
+    And retry until responseStatus == 200 && response.length == 2 && karate.jsonPath(response, "$[?(@.status=='SENT')]").length == 2
+    When method get
+    Then status 200
+    * def types = karate.jsonPath(response, '$[*].type')
+    And assert types.includes('ORDER_CREATED')
+    And assert types.includes('PAYMENT_SUCCESS')
+
+    # --- the order and its audit trail ------------------------------------------------------------------------
+    Given path '/api/v1/orders', orderId
+    When method get
+    Then status 200
+    And match response.status == 'COMPLETED'
+    And match response.version == '#number'
+    * showcase.show('Order ' + orderId + ' final state', 'order_db', 'SELECT id, status, total_amount, currency, version FROM orders WHERE id=' + orderId)
+    * showcase.show('Order lines', 'order_db', 'SELECT order_id, line_no, product_id, quantity, unit_price FROM order_lines WHERE order_id=' + orderId)
+    * showcase.show('Payment for order ' + orderId, 'payment_db', 'SELECT id, order_id, amount, currency, status, processor_reference FROM payments WHERE order_id=' + orderId)
+    * showcase.show('Events order-service relayed (outbox)', 'order_db', "SELECT event_type, topic, status, attempts FROM outbox_event WHERE aggregate_id='" + orderId + "' ORDER BY id")
+    * showcase.show('Events payment-service relayed (outbox)', 'payment_db', "SELECT event_type, topic, status FROM outbox_event WHERE aggregate_id='" + orderId + "' ORDER BY id")
+    * showcase.show('Inventory for ' + sku, 'inventory_db', "SELECT product_id, quantity, version FROM inventory WHERE product_id='" + sku + "'")
+    * showcase.show('Notifications for order ' + orderId, 'notification_db', 'SELECT type, status, attempts FROM notifications WHERE order_id=' + orderId + ' ORDER BY id')
+
+  Scenario: A multi-line order is priced line by line and settles the same way
+
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    * def productA = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 10.00, stock: 20 }
+    * def productB = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 2.50, stock: 20 }
+
+    Given path '/api/v1/orders'
+    And request { customerId: '#(customer.customerId)', items: [{ productId: '#(productA.sku)', quantity: 2 }, { productId: '#(productB.sku)', quantity: 4 }] }
+    When method post
+    Then status 201
+    And match response.totalAmount == 30.00
+    And match response.items == '#[2]'
+    * def orderId = response.id
+
+    * def settled = call read('classpath:e2e/helpers/await-order.feature') { token: '#(token)', orderId: '#(orderId)', expected: 'COMPLETED' }
+
+    Given path '/api/v1/inventory', productA.inventoryId
+    When method get
+    And match response.quantity == 18
+    Given path '/api/v1/inventory', productB.inventoryId
+    When method get
+    And match response.quantity == 16
+    * showcase.event('Both lines reserved and charged as one payment of 30.00.')

@@ -1,5 +1,7 @@
 # 📚 Complete Microservices Documentation Index
 
+> **Security documentation (current):** [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md) (what changed and what is open) · [docs/KEYCLOAK_IDENTITY.md](docs/KEYCLOAK_IDENTITY.md) · [docs/VAULT_SECRETS.md](docs/VAULT_SECRETS.md) · [docs/SMALLSTEP_PKI.md](docs/SMALLSTEP_PKI.md). References to "JWT authentication" / `jwt` configuration elsewhere in this index describe the earlier self-issued-token design.
+
 ## Learning Path for Understanding Enterprise Microservices
 
 This project implements **13 phases of enterprise microservices architecture**. Below is a guided learning path through all documentation.

@@ -1,31 +1,30 @@
 package com.ecommerce.common.events;
 
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
 import java.math.BigDecimal;
 
-/**
- * Event published when a refund is successfully processed (compensating transaction completion).
- * Published by PaymentService after processing refund.
- */
+/** A captured payment was refunded through the processor. */
+@Getter
+@Setter
+@NoArgsConstructor
+@EventSchema(type = "refund.completed", topic = Topics.REFUND_COMPLETED)
 public class RefundCompletedEvent extends DomainEvent {
+
     private Long orderId;
     private Long paymentId;
+    private Long customerId;
     private BigDecimal refundAmount;
+    private String currency;
 
-    public RefundCompletedEvent() {
-        super();
-    }
-
-    public RefundCompletedEvent(Long orderId, Long paymentId, BigDecimal refundAmount) {
+    public RefundCompletedEvent(Long orderId, Long paymentId, Long customerId, BigDecimal refundAmount, String currency) {
         super(String.valueOf(orderId), "Payment");
         this.orderId = orderId;
         this.paymentId = paymentId;
+        this.customerId = customerId;
         this.refundAmount = refundAmount;
+        this.currency = currency;
     }
-
-    public Long getOrderId() { return orderId; }
-    public void setOrderId(Long orderId) { this.orderId = orderId; }
-    public Long getPaymentId() { return paymentId; }
-    public void setPaymentId(Long paymentId) { this.paymentId = paymentId; }
-    public BigDecimal getRefundAmount() { return refundAmount; }
-    public void setRefundAmount(BigDecimal refundAmount) { this.refundAmount = refundAmount; }
 }

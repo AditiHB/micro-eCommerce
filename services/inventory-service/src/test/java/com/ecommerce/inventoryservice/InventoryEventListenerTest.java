@@ -1,167 +1,61 @@
 package com.ecommerce.inventoryservice;
 
-import com.ecommerce.common.events.DlqPublisher;
-import com.ecommerce.common.events.InventoryFailedEvent;
-import com.ecommerce.common.events.InventoryReservedEvent;
-import com.ecommerce.common.events.InventoryReleasedEvent;
+import com.ecommerce.common.events.OrderCancelledEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
-import com.ecommerce.common.events.PaymentFailedEvent;
-import com.ecommerce.common.events.EventPublisher;
-import com.ecommerce.inventoryservice.dto.InventoryResponse;
-import com.ecommerce.inventoryservice.service.InventoryService;
-import org.junit.jupiter.api.BeforeEach;
+import com.ecommerce.common.events.Topics;
+import com.ecommerce.common.testsupport.EventSamples;
+import com.ecommerce.inventoryservice.service.InventorySagaHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.annotation.KafkaListener;
 
-import java.util.Optional;
-import java.util.UUID;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.stream.Collectors;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
-@ExtendWith(MockitoExtension.class)
-@DisplayName("InventoryEventListener Unit Tests")
+@DisplayName("InventoryEventListener")
 class InventoryEventListenerTest {
 
-    @Mock
-    private InventoryService inventoryService;
+    private final InventorySagaHandler handler = mock(InventorySagaHandler.class);
+    private final InventoryEventListener listener = new InventoryEventListener(handler);
 
-    @Mock
-    private EventPublisher eventPublisher;
+    @Test
+    @DisplayName("each saga event is handed to the transactional handler")
+    void delegates() {
+        OrderCreatedEvent created = EventSamples.orderCreated();
+        OrderCancelledEvent cancelled = EventSamples.orderCancelled();
 
-    @Mock
-    private DlqPublisher dlqPublisher;
+        listener.handleOrderCreated(created);
+        listener.handleOrderCancelled(cancelled);
 
-    @Mock
-    private Acknowledgment acknowledgment;
-
-    @InjectMocks
-    private InventoryEventListener listener;
-
-    private OrderCreatedEvent orderCreatedEvent;
-    private PaymentFailedEvent paymentFailedEvent;
-    private InventoryResponse inventoryResponse;
-
-    @BeforeEach
-    void setUp() {
-        Long orderId = 123L;
-        Long customerId = 10L;
-        String productId = "PROD-001";
-        String eventId = UUID.randomUUID().toString();
-
-        orderCreatedEvent = new OrderCreatedEvent(orderId, customerId, productId, 5);
-        orderCreatedEvent.setEventId(eventId);
-
-        paymentFailedEvent = new PaymentFailedEvent(orderId);
-        paymentFailedEvent.setEventId(eventId);
-        paymentFailedEvent.setProductId(productId);
-        paymentFailedEvent.setQuantity(5);
-
-        inventoryResponse = InventoryResponse.builder()
-            .id(1L)
-            .productId(productId)
-            .quantity(95)
-            .build();
+        verify(handler).onOrderCreated(created);
+        verify(handler).onOrderCancelled(cancelled);
     }
 
     @Test
-    @DisplayName("Should reserve inventory when order is created")
-    void testHandleOrderCreatedSuccess() {
-        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.of(inventoryResponse));
+    @DisplayName("a failing handler is NOT swallowed: the exception reaches the container so it can retry and dead-letter")
+    void failuresPropagate() {
+        OrderCreatedEvent created = EventSamples.orderCreated();
+        doThrow(new IllegalStateException("deadlock detected")).when(handler).onOrderCreated(created);
 
-        listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
-
-        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
-        verify(eventPublisher).publishEvent(any(InventoryReservedEvent.class), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
+        assertThatThrownBy(() -> listener.handleOrderCreated(created)).hasMessage("deadlock detected");
     }
 
     @Test
-    @DisplayName("Should publish failure event when insufficient inventory")
-    void testHandleOrderCreatedInsufficientStock() {
-        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.empty());
+    @DisplayName("it reserves on order.created and compensates on order.cancelled - the single compensation trigger")
+    void subscriptions() {
+        Map<String, String> topicToGroup = Arrays.stream(InventoryEventListener.class.getDeclaredMethods())
+                .map(m -> m.getAnnotation(KafkaListener.class))
+                .filter(a -> a != null)
+                .collect(Collectors.toMap(a -> a.topics()[0], KafkaListener::groupId));
 
-        listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
-
-        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
-        verify(eventPublisher).publishEvent(any(InventoryFailedEvent.class), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should publish failure event when product not found")
-    void testHandleOrderCreatedProductNotFound() {
-        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenReturn(Optional.empty());
-
-        listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
-
-        verify(inventoryService).reserveStockIfAvailable(123L, "PROD-001", 5);
-        verify(eventPublisher).publishEvent(any(InventoryFailedEvent.class), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should release inventory when payment fails")
-    void testHandlePaymentFailedSuccess() {
-        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenReturn(Optional.of(inventoryResponse));
-
-        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
-
-        verify(inventoryService).releaseStockIfPresent(123L, "PROD-001", 5);
-        verify(eventPublisher).publishEvent(any(InventoryReleasedEvent.class), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should handle payment failed when inventory not found")
-    void testHandlePaymentFailedInventoryNotFound() {
-        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenReturn(Optional.empty());
-
-        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
-
-        verify(inventoryService).releaseStockIfPresent(123L, "PROD-001", 5);
-        verify(eventPublisher, never()).publishEvent(any(), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should handle payment failed without product info")
-    void testHandlePaymentFailedNoProductInfo() {
-        PaymentFailedEvent event = new PaymentFailedEvent(456L);
-        event.setEventId(UUID.randomUUID().toString());
-
-        listener.handlePaymentFailed(event, acknowledgment);
-
-        verify(inventoryService, never()).releaseStockIfPresent(any(), anyString(), any());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should route to DLQ and still ack when order created processing throws")
-    void testHandleOrderCreatedException() {
-        when(inventoryService.reserveStockIfAvailable(123L, "PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
-
-        listener.handleOrderCreated(orderCreatedEvent, acknowledgment);
-
-        verify(dlqPublisher).publish(eq(orderCreatedEvent), eq("order-created"), any(RuntimeException.class));
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should route to DLQ and still ack when payment failed processing throws")
-    void testHandlePaymentFailedException() {
-        when(inventoryService.releaseStockIfPresent(123L, "PROD-001", 5)).thenThrow(new RuntimeException("Database error"));
-
-        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
-
-        verify(dlqPublisher).publish(eq(paymentFailedEvent), eq("payment-failed"), any(RuntimeException.class));
-        verify(acknowledgment).acknowledge();
+        assertThat(topicToGroup).containsOnlyKeys(Topics.ORDER_CREATED, Topics.ORDER_CANCELLED);
+        assertThat(topicToGroup.values()).containsOnly(Topics.GROUP_INVENTORY);
     }
 }

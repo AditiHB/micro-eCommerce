@@ -22,3 +22,8 @@ the same YAML). If you want Helm specifically - e.g. to practice it as a
 tool - treat this chart as a known-stale starting point, not a working
 deployment, and expect to port the fixes from `k8s/base` and
 `k8s/overlays/postgres` into it by hand.
+
+**Update - authentication model changed.** Besides the gaps above, this chart still configures the retired
+shared `JWT_SECRET` and has no Keycloak, Redis password, per-service database credentials or management-port
+probes. It will not work against the current services. Port from `k8s/base` (see
+`docs/KEYCLOAK_IDENTITY.md` and `docs/SECURITY_HARDENING.md`) before using it.

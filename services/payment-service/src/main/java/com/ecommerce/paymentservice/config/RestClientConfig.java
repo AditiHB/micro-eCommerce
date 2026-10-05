@@ -1,23 +1,12 @@
 package com.ecommerce.paymentservice.config;
 
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.client.RestTemplate;
 
-import java.time.Duration;
-
+/**
+ * Intentionally empty: payment-service makes no outbound HTTP calls. (It used to declare a shared RestTemplate with
+ * a 30-second read timeout that nothing used; calls to other services are built where they are made, with short
+ * explicit timeouts - see docs/RESILIENCE.md.)
+ */
 @Configuration
-@Slf4j
 public class RestClientConfig {
-
-    @Bean
-    public RestTemplate restTemplate(RestTemplateBuilder builder) {
-        log.info("Initializing RestTemplate");
-        return builder
-            .setConnectTimeout(Duration.ofSeconds(10))
-            .setReadTimeout(Duration.ofSeconds(30))
-            .build();
-    }
 }

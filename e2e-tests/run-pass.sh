@@ -9,6 +9,9 @@
 # fast enough; see e2e-tests/README.md's "Known gaps"/troubleshooting notes.
 set -e
 
+# Redis requires a password: source the git-ignored .env (scripts/gen-env.sh) or export REDIS_PASSWORD.
+: "${REDIS_PASSWORD:?REDIS_PASSWORD is not set - run: set -a; . ./.env; set +a}"
+
 PASS_LABEL="$1"
 GATEWAY_URL="$2"
 NOTIFICATION_URL="$3"
@@ -21,7 +24,7 @@ RUNNERS=(CompensatingTransactionRunner CustomerJourneyRunner ErrorHandlingRunner
 
 for runner in "${RUNNERS[@]}"; do
     echo "=== [$PASS_LABEL] clearing rate limiter before $runner ==="
-    "$KUBECTL" exec -n "$REDIS_NS" "$REDIS_POD" -- redis-cli eval \
+    "$KUBECTL" exec -n "$REDIS_NS" "$REDIS_POD" -- redis-cli -a "$REDIS_PASSWORD" --no-auth-warning eval \
       "for _,k in ipairs(redis.call('keys','rate_limit:*')) do redis.call('del',k) end" 0 >/dev/null
 
     echo "=== [$PASS_LABEL] running $runner ==="

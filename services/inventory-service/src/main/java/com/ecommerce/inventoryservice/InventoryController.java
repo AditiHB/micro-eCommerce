@@ -13,13 +13,19 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
+import com.ecommerce.common.web.EntityTags;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
+@Validated
 @RequestMapping(ApiConstants.API_PREFIX + ApiConstants.INVENTORY_ENDPOINT)
 @RequiredArgsConstructor
 @Slf4j
@@ -45,7 +51,7 @@ public class InventoryController {
             @RequestParam(defaultValue = ApiConstants.DEFAULT_PAGE_SIZE + "") int size,
             @Parameter(description = "Field to sort by", example = "id")
             @RequestParam(defaultValue = "id") String sortBy) {
-        log.info("GET /api/inventory - Retrieving inventory items - page: {}, size: {}, sortBy: {}", page, size, sortBy);
+        log.info("GET /inventory - Retrieving inventory items - page: {}, size: {}, sortBy: {}", page, size, sortBy);
         return ResponseEntity.ok(inventoryService.getAllInventory(page, size, sortBy));
     }
 
@@ -63,8 +69,8 @@ public class InventoryController {
     public ResponseEntity<InventoryResponse> getById(
             @Parameter(description = "Inventory ID", example = "1")
             @PathVariable Long id) {
-        log.info("GET /api/inventory/{} - Retrieving inventory", id);
-        return ResponseEntity.ok(inventoryService.getInventory(id));
+        log.info("GET /inventory/{} - Retrieving inventory", id);
+        return withEtag(ResponseEntity.ok(), inventoryService.getInventory(id));
     }
 
     /**
@@ -81,9 +87,9 @@ public class InventoryController {
     public ResponseEntity<InventoryResponse> createInventory(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Inventory creation request", required = true)
             @Valid @RequestBody CreateInventoryRequest request) {
-        log.info("POST /api/inventory - Creating inventory for product: {}", request.getProductId());
-        return ResponseEntity.status(HttpStatus.CREATED)
-            .body(inventoryService.createInventory(request));
+        log.info("POST /inventory - Creating inventory for product: {}", request.getProductId());
+        InventoryResponse created = inventoryService.createInventory(request);
+        return withEtag(ResponseEntity.status(HttpStatus.CREATED), created);
     }
 
     /**
@@ -102,9 +108,11 @@ public class InventoryController {
             @Parameter(description = "Inventory ID", example = "1")
             @PathVariable Long id,
             @Parameter(description = "Quantity to reserve", example = "5")
-            @RequestParam Integer quantity) {
-        log.info("POST /api/inventory/{}/reserve - Reserving {} units", id, quantity);
-        return ResponseEntity.ok(inventoryService.reserveStock(id, quantity));
+            @RequestParam @Positive(message = "Quantity must be positive") Integer quantity,
+            @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String ifMatch) {
+        log.info("POST /inventory/{}/reserve - Reserving {} units", id, quantity);
+        checkIfMatch(id, ifMatch);
+        return withEtag(ResponseEntity.ok(), inventoryService.reserveStock(id, quantity));
     }
 
     /**
@@ -122,9 +130,11 @@ public class InventoryController {
             @Parameter(description = "Inventory ID", example = "1")
             @PathVariable Long id,
             @Parameter(description = "Quantity to release", example = "5")
-            @RequestParam Integer quantity) {
-        log.info("POST /api/inventory/{}/release - Releasing {} units", id, quantity);
-        return ResponseEntity.ok(inventoryService.releaseStock(id, quantity));
+            @RequestParam @Positive(message = "Quantity must be positive") Integer quantity,
+            @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String ifMatch) {
+        log.info("POST /inventory/{}/release - Releasing {} units", id, quantity);
+        checkIfMatch(id, ifMatch);
+        return withEtag(ResponseEntity.ok(), inventoryService.releaseStock(id, quantity));
     }
 
     /**
@@ -142,9 +152,22 @@ public class InventoryController {
     public ResponseEntity<InventoryResponse> updateInventory(
             @Parameter(description = "Inventory ID", example = "1")
             @PathVariable Long id,
-            @Parameter(description = "New quantity", example = "100")
-            @RequestParam Integer quantity) {
-        log.info("PUT /api/inventory/{} - Updating quantity to {}", id, quantity);
-        return ResponseEntity.ok(inventoryService.updateInventory(id, quantity));
+            @Parameter(description = "New quantity (zero is a valid stock level)", example = "100")
+            @RequestParam @PositiveOrZero(message = "Quantity cannot be negative") Integer quantity,
+            @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String ifMatch) {
+        log.info("PUT /inventory/{} - Updating quantity to {}", id, quantity);
+        checkIfMatch(id, ifMatch);
+        return withEtag(ResponseEntity.ok(), inventoryService.updateInventory(id, quantity));
+    }
+
+    /** Optimistic concurrency: if the caller names the version they read, refuse the change when it has moved on. */
+    private void checkIfMatch(Long id, String ifMatch) {
+        if (ifMatch != null && !ifMatch.isBlank()) {
+            EntityTags.verifyIfMatch(ifMatch, inventoryService.getInventory(id).getVersion());
+        }
+    }
+
+    private static ResponseEntity<InventoryResponse> withEtag(ResponseEntity.BodyBuilder builder, InventoryResponse body) {
+        return builder.eTag(EntityTags.of(body.getVersion())).body(body);
     }
 }

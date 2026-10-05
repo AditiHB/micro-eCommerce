@@ -1,133 +1,108 @@
-Feature: Inventory reservation is idempotent against Kafka redelivery
-  Proves the fix for a real gap found by auditing this suite's own coverage:
-  InventoryEventListener.handleOrderCreated/handlePaymentFailed had no
-  protection against Kafka redelivering the same event twice - a normal
-  occurrence under AckMode.MANUAL (a consumer restart or rebalance before
-  acking is not a failure), not a hypothetical. Before this fix, redelivery
-  would decrement (or release) the same order's stock a second time,
-  silently - the exact same bug class as the double-payment race already
-  fixed in PaymentEventListener (see commit 0c4f488), just on the
-  inventory side instead, and never protected the same way.
-
-  The fix: InventoryService.reserveStockIfAvailable/releaseStockIfPresent
-  now go through an inventory_reservations table (one row per orderId,
-  unique constraint) as an idempotency ledger - reserving inserts that row
-  FIRST, inside the same transaction, before ever touching the inventory
-  quantity; releasing atomically flips it from active to released. A
-  second delivery of the same event hits that row (the insert's unique
-  constraint, or the conditional UPDATE already having applied) and
-  short-circuits before decrementing/incrementing again.
-
-  Each scenario here publishes the exact same hand-crafted event (same
-  eventId, same payload) onto a main topic TWICE in a row via
-  KafkaFaultInjector, bypassing order-service/payment-service's own
-  producers entirely - faithfully simulating what Kafka redelivery actually
-  looks like to this consumer (the identical message, read again), without
-  needing to actually kill a consumer mid-processing to provoke it.
+Feature: Stock is never oversold, and the last unit is sellable
+  Inventory takes stock with a single conditional statement backed by CHECK (quantity >= 0). These scenarios prove
+  it through the whole stack: the saga reserving for real orders, and the REST stock operations, under load.
 
   Background:
     * url gatewayUrl
-    Given path '/api/auth/login'
-    And request { username: '#(testUsername)', password: '#(testPassword)' }
+    * def showcase = Java.type('e2e.DataShowcase')
+    * def docker = Java.type('e2e.DockerControl')
+    * eval docker.clearRateLimitKeys()
+    * def login = call read('classpath:e2e/auth.feature') { username: '#(testUsername)', password: '#(testPassword)' }
+    * def token = login.accessToken
+    * configure headers = { Authorization: '#("Bearer " + token)' }
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    * def customerId = customer.customerId
+
+  Scenario: The last unit is sellable (it used to fail on the zero and strand the order in PENDING)
+
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 9.99, stock: 1 }
+    * def placed = call read('classpath:e2e/helpers/place-order.feature') { token: '#(token)', customerId: '#(customerId)', items: [{ productId: '#(product.sku)', quantity: 1 }] }
+
+    * def settled = call read('classpath:e2e/helpers/await-order.feature') { token: '#(token)', orderId: '#(placed.orderId)', expected: 'COMPLETED' }
+
+    Given path '/api/v1/inventory', product.inventoryId
+    When method get
+    Then status 200
+    And match response.quantity == 0
+    * showcase.event('Reserved the one remaining unit: stock is exactly 0, the order COMPLETED.')
+
+  Scenario: More orders than stock - exactly the stock is sold, the rest are cancelled, stock ends at zero and never goes negative
+
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 5.00, stock: 3 }
+    * def sku = product.sku
+    * def orderIds = []
+    * def place = function(i){ var r = karate.call('classpath:e2e/helpers/place-order.feature', { token: token, customerId: customerId, items: [{ productId: sku, quantity: 1 }] }); orderIds.push(r.orderId); return r.orderId }
+    * eval for (var i = 0; i < 6; i++) place(i)
+    * match orderIds == '#[6]'
+
+    * def outcomes = []
+    * def await = function(id){ var r = karate.call('classpath:e2e/helpers/await-order.feature', { token: token, orderId: id, expected: 'TERMINAL', attempts: 90 }); outcomes.push(r.order.status) }
+    * eval for (var j = 0; j < orderIds.length; j++) await(orderIds[j])
+
+    * def completed = karate.filter(outcomes, function(s){ return s == 'COMPLETED' })
+    * def cancelled = karate.filter(outcomes, function(s){ return s == 'CANCELLED' })
+    * match completed == '#[3]'
+    * match cancelled == '#[3]'
+
+    Given path '/api/v1/inventory', product.inventoryId
+    When method get
+    Then status 200
+    And match response.quantity == 0
+    * showcase.show('Reservations: exactly 3 units were handed out', 'inventory_db', "SELECT order_id, product_id, quantity, released_at FROM inventory_reservations WHERE product_id='" + sku + "' ORDER BY order_id")
+
+  Scenario: The REST stock operations cannot oversell or invent stock either
+
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 1.00, stock: 10 }
+    * def inventoryId = product.inventoryId
+
+    # take exactly what is left, in two goes, then ask for one more
+    Given path '/api/v1/inventory', inventoryId, 'reserve'
+    And param quantity = 6
     When method post
     Then status 200
-    * def authToken = response.token
-    * configure headers = { Authorization: '#("Bearer " + authToken)' }
-    * def injector = Java.type('e2e.KafkaFaultInjector')
-    * def showcase = Java.type('e2e.DataShowcase')
-    * def uuid = function(){ return Java.type('java.util.UUID').randomUUID() + '' }
-    * def sleep = function(ms){ Java.type('java.lang.Thread').sleep(ms) }
+    And match response.quantity == 4
+    Given path '/api/v1/inventory', inventoryId, 'reserve'
+    And param quantity = 4
+    When method post
+    Then status 200
+    And match response.quantity == 0
+    Given path '/api/v1/inventory', inventoryId, 'reserve'
+    And param quantity = 1
+    When method post
+    Then status 409
+    And match response.errorCode == 'INSUFFICIENT_STOCK'
 
-  Scenario: Redelivering order-created for the same order does not double-decrement stock
-
-    Given path '/api/inventory'
-    And param size = 1
+    # a negative reservation used to ADD stock
+    Given path '/api/v1/inventory', inventoryId, 'reserve'
+    And param quantity = -50
+    When method post
+    Then status 400
+    Given path '/api/v1/inventory', inventoryId
     When method get
     Then status 200
-    And assert response.content.length >= 1
-    * def productId = response.content[0].productId
-    * def beforeQty = response.content[0].quantity
-    * showcase.event('Starting stock for ' + productId + ': ' + beforeQty + ' units.')
+    And match response.quantity == 0
 
-    * def orderId = Java.type('java.lang.System').currentTimeMillis()
-    * def eventId = uuid()
-    * def payload = '{"eventId":"' + eventId + '","occurredAt":"2026-01-01T00:00:00","aggregateId":"' + orderId + '","aggregateType":"Order","version":1,"orderId":' + orderId + ',"customerId":1,"productId":"' + productId + '","quantity":1}'
+  Scenario: Optimistic concurrency - a stale ETag cannot overwrite a newer stock-take
 
-    * showcase.event('First delivery: publishing OrderCreatedEvent for order ' + orderId + ' (qty 1).')
-    * injector.publishRaw('order-created', orderId + '', 'com.ecommerce.common.events.OrderCreatedEvent', payload)
-
-    * configure retry = { count: 15, interval: 1000 }
-    Given path '/api/inventory'
-    And param size = 1
-    And retry until responseStatus == 200 && response.content[0].quantity == beforeQty - 1
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 1.00, stock: 10 }
+    Given path '/api/v1/inventory', product.inventoryId
     When method get
     Then status 200
-    And match response.content[0].quantity == beforeQty - 1
-    * showcase.event('Stock correctly decremented by 1 after the first delivery.')
-    * showcase.show('inventory_reservations for order ' + orderId + ' after first delivery', 'inventory_db', 'SELECT order_id, product_id, quantity, released_at FROM inventory_reservations WHERE order_id=' + orderId)
+    * def etag = responseHeaders['ETag'][0]
 
-    * showcase.event('Redelivering the EXACT SAME event (identical eventId ' + eventId + ') - this is what a Kafka redelivery looks like to this consumer.')
-    * injector.publishRaw('order-created', orderId + '', 'com.ecommerce.common.events.OrderCreatedEvent', payload)
-    * sleep(5000)
-
-    Given path '/api/inventory'
-    And param size = 1
-    When method get
+    Given path '/api/v1/inventory', product.inventoryId
+    And param quantity = 20
+    And header If-Match = etag
+    When method put
     Then status 200
-    And match response.content[0].quantity == beforeQty - 1
-    * showcase.event('Stock is STILL beforeQty-1, not beforeQty-2 - the redelivery was correctly absorbed as a no-op instead of decrementing again.')
-    * showcase.show('Inventory for ' + productId + ' after redelivery - decremented exactly once', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
-    * showcase.show('inventory_reservations for order ' + orderId + ' - still exactly one row', 'inventory_db', 'SELECT order_id, product_id, quantity, released_at FROM inventory_reservations WHERE order_id=' + orderId)
 
-  Scenario: Redelivering payment-failed for the same order does not double-release stock
+    Given path '/api/v1/inventory', product.inventoryId
+    And param quantity = 30
+    And header If-Match = etag
+    When method put
+    Then status 412
+    And match response.errorCode == 'PRECONDITION_FAILED'
 
-    Given path '/api/inventory'
-    And param size = 1
+    Given path '/api/v1/inventory', product.inventoryId
     When method get
-    Then status 200
-    * def productId = response.content[0].productId
-    * def beforeQty = response.content[0].quantity
-    * showcase.event('Starting stock for ' + productId + ': ' + beforeQty + ' units.')
-
-    * def orderId = Java.type('java.lang.System').currentTimeMillis()
-    * def reserveEventId = uuid()
-    * def reservePayload = '{"eventId":"' + reserveEventId + '","occurredAt":"2026-01-01T00:00:00","aggregateId":"' + orderId + '","aggregateType":"Order","version":1,"orderId":' + orderId + ',"customerId":1,"productId":"' + productId + '","quantity":2}'
-    * showcase.event('Setting up: reserving 2 units for order ' + orderId + ' first, so there is something to release.')
-    * injector.publishRaw('order-created', orderId + '', 'com.ecommerce.common.events.OrderCreatedEvent', reservePayload)
-
-    * configure retry = { count: 15, interval: 1000 }
-    Given path '/api/inventory'
-    And param size = 1
-    And retry until responseStatus == 200 && response.content[0].quantity == beforeQty - 2
-    When method get
-    Then status 200
-    And match response.content[0].quantity == beforeQty - 2
-    * showcase.event('2 units reserved for order ' + orderId + ' - now triggering the compensating release.')
-
-    * def releaseEventId = uuid()
-    * def releasePayload = '{"eventId":"' + releaseEventId + '","occurredAt":"2026-01-01T00:00:00","aggregateId":"' + orderId + '","aggregateType":"Order","version":1,"orderId":' + orderId + ',"productId":"' + productId + '","quantity":2,"reason":"idempotency test"}'
-    * showcase.event('First delivery: publishing PaymentFailedEvent for order ' + orderId + ' - should release the 2 units back.')
-    * injector.publishRaw('payment-failed', orderId + '', 'com.ecommerce.common.events.PaymentFailedEvent', releasePayload)
-
-    * configure retry = { count: 15, interval: 1000 }
-    Given path '/api/inventory'
-    And param size = 1
-    And retry until responseStatus == 200 && response.content[0].quantity == beforeQty
-    When method get
-    Then status 200
-    And match response.content[0].quantity == beforeQty
-    * showcase.event('Stock correctly released back to the original ' + beforeQty + ' after the first delivery.')
-    * showcase.show('inventory_reservations for order ' + orderId + ' after first release', 'inventory_db', 'SELECT order_id, product_id, quantity, released_at FROM inventory_reservations WHERE order_id=' + orderId)
-
-    * showcase.event('Redelivering the EXACT SAME payment-failed event (identical eventId ' + releaseEventId + ').')
-    * injector.publishRaw('payment-failed', orderId + '', 'com.ecommerce.common.events.PaymentFailedEvent', releasePayload)
-    * sleep(5000)
-
-    Given path '/api/inventory'
-    And param size = 1
-    When method get
-    Then status 200
-    And match response.content[0].quantity == beforeQty
-    * showcase.event('Stock is STILL exactly ' + beforeQty + ', not beforeQty+2 - the redelivered release was correctly absorbed as a no-op.')
-    * showcase.show('Inventory for ' + productId + ' after redelivery - released exactly once', 'inventory_db', "SELECT product_id, quantity FROM inventory WHERE product_id='" + productId + "'")
-    * showcase.show('inventory_reservations for order ' + orderId + ' - released_at set exactly once', 'inventory_db', 'SELECT order_id, product_id, quantity, released_at FROM inventory_reservations WHERE order_id=' + orderId)
+    And match response.quantity == 20

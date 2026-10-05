@@ -1,0 +1,247 @@
+# ===============================================================================
+# Overlay: an internal certificate authority (smallstep step-ca) and TLS everywhere it matters.
+#
+#   scripts/gen-env.sh                      # once
+#   docker compose -f docker-compose.yml -f docker-compose.pki.yml --profile https up -d --build
+#
+# What you get
+#   - step-ca: a private CA (root + intermediate) with an `admin` JWK provisioner and an ACME
+#     provisioner. Its keys live in the `step-ca-data` volume, protected by STEP_CA_PASSWORD.
+#   - pki-init: issues short-lived (24h) certificates for nginx, Keycloak and Vault, and publishes
+#     the public CA bundle (plus a Java truststore) under the `pki-certs` volume.
+#   - pki-renewer: renews them before they expire (`step ca renew --daemon`).
+#   - nginx terminates HTTPS with its step-ca certificate  ->  https://localhost
+#   - Keycloak serves HTTPS with its step-ca certificate    ->  https://localhost:8443
+#     and every service/gateway now reaches it over TLS, trusting the platform CA through a
+#     Spring Boot SSL bundle (ecommerce.security.jwks-ssl-bundle / ecommerce.service-auth.ssl-bundle).
+#   Vault over TLS as well: add  -f docker-compose.vault.yml -f docker-compose.vault-tls.yml
+#
+# Trust the CA on your machine (browser / curl) with the root certificate from the volume:
+#   docker compose -f docker-compose.yml -f docker-compose.pki.yml cp pki-renewer:/certs/ca/root_ca.crt ./root_ca.crt
+#   curl --cacert root_ca.crt https://localhost/health
+#
+# Not done here, deliberately: mutual TLS between services and TLS for Kafka/Redis/Postgres. See
+# docs/SMALLSTEP_PKI.md ("What this does not cover") for what each would take.
+# ===============================================================================
+
+x-pki-trust: &pki-trust
+  # The platform CA as a Spring Boot SSL bundle: used to verify Keycloak's certificate.
+  SPRING_SSL_BUNDLE_PEM_PKI_TRUSTSTORE_CERTIFICATE: "file:/certs/ca/ca-bundle.crt"
+  ECOMMERCE_SECURITY_JWKSSSLBUNDLE: "pki"
+  SECURITY_ISSUER: "https://localhost:8443/realms/ecommerce"
+  SECURITY_JWK_SET_URI: "https://keycloak:8443/realms/ecommerce/protocol/openid-connect/certs"
+
+# Least privilege: a workload mounts only the part of the certificate volume it needs. Services get the
+# public CA material (trust anchors) and never see any private key; Keycloak, nginx and Vault each mount
+# only their own directory.
+x-pki-ca-volume: &pki-ca-volume
+  type: volume
+  source: pki-certs
+  target: /certs/ca
+  read_only: true
+  volume:
+    subpath: ca
+
+services:
+  step-ca:
+    image: smallstep/step-ca:0.30.2
+    container_name: step-ca
+    environment:
+      DOCKER_STEPCA_INIT_NAME: "Micro-eCommerce Internal CA"
+      DOCKER_STEPCA_INIT_DNS_NAMES: "localhost,step-ca"
+      DOCKER_STEPCA_INIT_PROVISIONER_NAME: "admin"
+      DOCKER_STEPCA_INIT_ACME: "true"
+      DOCKER_STEPCA_INIT_PASSWORD_FILE: "/run/secrets/step_ca_password"
+    secrets:
+      - step_ca_password
+    volumes:
+      - step-ca-data:/home/step
+    ports:
+      - "127.0.0.1:9000:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "step ca health --ca-url https://localhost:9000 --root /home/step/certs/root_ca.crt | grep -q ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    mem_limit: 128m
+
+  # One-shot: issue the leaf certificates and publish the public trust material.
+  pki-init:
+    image: smallstep/step-cli:0.31.0
+    container_name: pki-init
+    user: "0"
+    depends_on:
+      step-ca:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/pki/issue-certs.sh"]
+    environment:
+      CA_URL: "https://step-ca:9000"
+    secrets:
+      - step_ca_password
+    volumes:
+      - step-ca-data:/ca:ro
+      - pki-certs:/certs
+      - ./infrastructure/pki:/pki:ro
+    restart: "no"
+    mem_limit: 64m
+
+  # One-shot: a PKCS12 truststore of the CA for Java clients that cannot read PEM (Spring Cloud Vault).
+  # The password protects integrity only - it guards public certificates, not a secret.
+  pki-truststore:
+    image: eclipse-temurin:17-jre-jammy
+    container_name: pki-truststore
+    user: "0"
+    depends_on:
+      pki-init:
+        condition: service_completed_successfully
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        rm -f /certs/ca/truststore.p12 &&
+        keytool -importcert -noprompt -alias platform-root -file /certs/ca/root_ca.crt
+        -keystore /certs/ca/truststore.p12 -storetype PKCS12 -storepass changeit &&
+        keytool -importcert -noprompt -alias platform-intermediate -file /certs/ca/intermediate_ca.crt
+        -keystore /certs/ca/truststore.p12 -storetype PKCS12 -storepass changeit &&
+        chmod 644 /certs/ca/truststore.p12
+    volumes:
+      - pki-certs:/certs
+    restart: "no"
+    mem_limit: 128m
+
+  pki-renewer:
+    image: smallstep/step-cli:0.31.0
+    container_name: pki-renewer
+    user: "0"
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "/pki/renew.sh"]
+    environment:
+      CA_URL: "https://step-ca:9000"
+    volumes:
+      - pki-certs:/certs
+      - ./infrastructure/pki:/pki:ro
+    restart: unless-stopped
+    mem_limit: 64m
+
+  # --- Keycloak over TLS --------------------------------------------------------------------------
+  keycloak:
+    command:
+      - start-dev
+      - --import-realm
+      - --https-certificate-file=/certs/keycloak/tls.crt
+      - --https-certificate-key-file=/certs/keycloak/tls.key
+      - --https-port=8443
+    environment:
+      KC_HOSTNAME: "https://localhost:8443"
+      # Keycloak serves its management interface (health, metrics) over HTTPS too once HTTPS is on. Keep it
+      # plain HTTP: it is internal-only (port 9000 is not published) and the health probe is a TCP check.
+      KC_HTTP_MANAGEMENT_SCHEME: "http"
+    ports:
+      - "127.0.0.1:8443:8443"
+    volumes:
+      # Keycloak's own certificate and key only - not the CA material, not anyone else's key.
+      - type: volume
+        source: pki-certs
+        target: /certs/keycloak
+        read_only: true
+        volume:
+          subpath: keycloak
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+    healthcheck:
+      # Management port stays plain HTTP inside the container.
+      test:
+        - "CMD-SHELL"
+        - "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"
+
+  keycloak-seed:
+    environment:
+      KEYCLOAK_URL: "https://keycloak:8443"
+      KEYCLOAK_TRUSTSTORE: "/certs/ca/truststore.p12"
+    volumes:
+      - *pki-ca-volume
+
+  # --- services verify Keycloak's certificate against the platform CA -------------------------------
+  api-gateway:
+    environment: *pki-trust
+    volumes:
+      - *pki-ca-volume
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+
+  customer-service:
+    environment: *pki-trust
+    volumes:
+      - *pki-ca-volume
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+
+  inventory-service:
+    environment: *pki-trust
+    volumes:
+      - *pki-ca-volume
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+
+  order-service:
+    environment: *pki-trust
+    volumes:
+      - *pki-ca-volume
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+
+  payment-service:
+    environment: *pki-trust
+    volumes:
+      - *pki-ca-volume
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+
+  notification-service:
+    environment:
+      <<: *pki-trust
+      KEYCLOAK_TOKEN_URI: "https://keycloak:8443/realms/ecommerce/protocol/openid-connect/token"
+      ECOMMERCE_SERVICEAUTH_SSLBUNDLE: "pki"
+    volumes:
+      - *pki-ca-volume
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+
+  # --- nginx edge TLS ------------------------------------------------------------------------------
+  nginx:
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+    volumes:
+      # Only this workload's own certificate directory, read-only.
+      - type: volume
+        source: pki-certs
+        target: /etc/nginx/certs
+        read_only: true
+        volume:
+          subpath: nginx
+    # nginx reads certificates at (re)load time, so re-read them every 6h - well inside the 24h lifetime.
+    command:
+      - /bin/sh
+      - -c
+      - "(while :; do sleep 21600; nginx -s reload; done) & exec nginx -g 'daemon off;'"
+
+secrets:
+  step_ca_password:
+    environment: STEP_CA_PASSWORD
+
+volumes:
+  step-ca-data:
+    driver: local
+  pki-certs:
+    driver: local

@@ -1,0 +1,18 @@
+{
+  "eventId" : "evt-inventory.released",
+  "occurredAt" : "2026-01-01T10:15:30Z",
+  "aggregateId" : "42",
+  "aggregateType" : "Inventory",
+  "version" : 1,
+  "orderId" : 42,
+  "lines" : [ {
+    "productId" : "SKU-001",
+    "quantity" : 2,
+    "unitPrice" : 79.99
+  }, {
+    "productId" : "SKU-002",
+    "quantity" : 1,
+    "unitPrice" : 12.99
+  } ],
+  "eventType" : "inventory.released"
+}

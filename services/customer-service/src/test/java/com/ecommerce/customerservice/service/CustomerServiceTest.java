@@ -1,221 +1,133 @@
 package com.ecommerce.customerservice.service;
 
-import com.ecommerce.common.constants.ApiConstants;
-import com.ecommerce.common.config.CacheConfig;
-import com.ecommerce.common.dto.PagedResponse;
+import com.ecommerce.common.exception.BusinessException;
+import com.ecommerce.common.exception.ConflictException;
+import com.ecommerce.common.exception.PreconditionFailedException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.common.metrics.ApplicationMetrics;
 import com.ecommerce.customerservice.Customer;
 import com.ecommerce.customerservice.CustomerRepository;
 import com.ecommerce.customerservice.dto.CreateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
-import io.micrometer.core.instrument.Timer;
+import com.ecommerce.customerservice.dto.UpdateCustomerRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
 
-import java.util.List;
 import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Customer Service Unit Tests")
+@DisplayName("CustomerService")
 class CustomerServiceTest {
 
     @Mock
-    private CustomerRepository customerRepository;
-
+    private CustomerRepository repository;
     @Mock
-    private ApplicationMetrics applicationMetrics;
+    private ApplicationMetrics metrics;
 
-    @InjectMocks
-    private CustomerService customerService;
-
-    private Customer testCustomer;
-    private CreateCustomerRequest createRequest;
+    private CustomerService service;
 
     @BeforeEach
     void setUp() {
-        testCustomer = Customer.builder()
-            .id(1L)
-            .name("John Doe")
-            .email("john@example.com")
-            .build();
+        service = new CustomerService(repository, metrics);
+    }
 
-        createRequest = CreateCustomerRequest.builder()
-            .name("John Doe")
-            .email("john@example.com")
-            .build();
-
-        lenient().when(applicationMetrics.recordCustomerCreationTime()).thenReturn(Timer.start());
+    private Customer stored(long version) {
+        return Customer.builder().id(1L).name("John Doe").email("john@example.com").version(version).build();
     }
 
     @Test
-    @DisplayName("Should create customer successfully")
-    void testCreateCustomer() {
-        when(customerRepository.save(any(Customer.class))).thenReturn(testCustomer);
+    @DisplayName("creating a customer stores it and returns it with its version")
+    void create() {
+        when(repository.existsByEmail("john@example.com")).thenReturn(false);
+        when(repository.saveAndFlush(any(Customer.class))).thenAnswer(inv -> {
+            Customer c = inv.getArgument(0);
+            c.setId(1L);
+            c.setVersion(0L);
+            return c;
+        });
 
-        CustomerResponse response = customerService.createCustomer(createRequest);
+        CustomerResponse response = service.createCustomer(CreateCustomerRequest.builder().name("John Doe").email("john@example.com").build());
 
-        assertThat(response).isNotNull();
-        assertThat(response.getName()).isEqualTo("John Doe");
-        assertThat(response.getEmail()).isEqualTo("john@example.com");
-        verify(customerRepository, times(1)).save(any(Customer.class));
-        verify(applicationMetrics, times(1)).recordCustomerCreated();
-    }
-
-    @Test
-    @DisplayName("Should retrieve customer by ID successfully")
-    void testGetCustomer() {
-        when(customerRepository.findById(1L)).thenReturn(Optional.of(testCustomer));
-
-        CustomerResponse response = customerService.getCustomer(1L);
-
-        assertThat(response).isNotNull();
         assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getName()).isEqualTo("John Doe");
-        verify(customerRepository, times(1)).findById(1L);
+        assertThat(response.getVersion()).isZero();
     }
 
     @Test
-    @DisplayName("Should throw ResourceNotFoundException when customer not found")
-    void testGetCustomerNotFound() {
-        when(customerRepository.findById(999L)).thenReturn(Optional.empty());
+    @DisplayName("an email already in use is a 409, before anything is written")
+    void duplicateEmail() {
+        when(repository.existsByEmail("john@example.com")).thenReturn(true);
 
-        assertThatThrownBy(() -> customerService.getCustomer(999L))
-            .isInstanceOf(ResourceNotFoundException.class);
-
-        verify(customerRepository, times(1)).findById(999L);
+        assertThatThrownBy(() -> service.createCustomer(CreateCustomerRequest.builder().name("X Y").email("john@example.com").build()))
+                .isInstanceOf(ConflictException.class)
+                .extracting(e -> ((ConflictException) e).getErrorCode()).isEqualTo("CUSTOMER_EMAIL_EXISTS");
+        verify(repository, never()).saveAndFlush(any());
     }
 
     @Test
-    @DisplayName("Should retrieve all customers with pagination")
-    void testGetAllCustomers() {
-        Customer customer2 = Customer.builder()
-            .id(2L)
-            .name("Jane Doe")
-            .email("jane@example.com")
-            .build();
+    @DisplayName("an update with the current If-Match, or none, is applied")
+    void updateApplied() {
+        Customer current = stored(3L);
+        when(repository.findById(1L)).thenReturn(Optional.of(current));
+        when(repository.saveAndFlush(current)).thenReturn(current);
+        UpdateCustomerRequest request = UpdateCustomerRequest.builder().name("Jane Doe").email("jane@example.com").build();
 
-        List<Customer> customers = List.of(testCustomer, customer2);
-        Page<Customer> page = new PageImpl<>(customers);
-
-        when(customerRepository.findAll(any(Pageable.class))).thenReturn(page);
-
-        PagedResponse<CustomerResponse> response = customerService.getAllCustomers(0, 10, "id");
-
-        assertThat(response).isNotNull();
-        assertThat(response.getContent()).hasSize(2);
-        assertThat(response.getPageNumber()).isEqualTo(0);
-        assertThat(response.getPageSize()).isEqualTo(10);
-        assertThat(response.getTotalElements()).isEqualTo(2);
-        verify(customerRepository, times(1)).findAll(any(Pageable.class));
+        assertThat(service.updateCustomer(1L, request, "\"3\"").getName()).isEqualTo("Jane Doe");
+        assertThat(service.updateCustomer(1L, request, null).getEmail()).isEqualTo("jane@example.com");
     }
 
     @Test
-    @DisplayName("Should limit page size to maximum")
-    void testGetAllCustomersPageSizeLimit() {
-        int largePageSize = ApiConstants.MAX_PAGE_SIZE + 100;
-        Page<Customer> page = new PageImpl<>(List.of(testCustomer));
+    @DisplayName("an update with a stale If-Match is a 412 and changes nothing: the lost update is prevented")
+    void updateStale() {
+        Customer current = stored(3L);
+        when(repository.findById(1L)).thenReturn(Optional.of(current));
 
-        when(customerRepository.findAll(any(Pageable.class))).thenReturn(page);
+        assertThatThrownBy(() -> service.updateCustomer(1L,
+                UpdateCustomerRequest.builder().name("Jane Doe").email("jane@example.com").build(), "\"2\""))
+                .isInstanceOf(PreconditionFailedException.class);
 
-        customerService.getAllCustomers(0, largePageSize, "id");
-
-        verify(customerRepository, times(1)).findAll(any(Pageable.class));
+        assertThat(current.getName()).isEqualTo("John Doe");
+        verify(repository, never()).saveAndFlush(any());
     }
 
     @Test
-    @DisplayName("Should update customer successfully")
-    void testUpdateCustomer() {
-        Customer updatedCustomer = Customer.builder()
-            .id(1L)
-            .name("Updated Name")
-            .email("updated@example.com")
-            .build();
+    @DisplayName("an update that takes another customer's email is a 409")
+    void updateToTakenEmail() {
+        when(repository.findById(1L)).thenReturn(Optional.of(stored(0L)));
+        when(repository.existsByEmailAndIdNot("taken@example.com", 1L)).thenReturn(true);
 
-        when(customerRepository.findById(1L)).thenReturn(Optional.of(testCustomer));
-        when(customerRepository.save(any(Customer.class))).thenReturn(updatedCustomer);
-
-        CreateCustomerRequest updateRequest = CreateCustomerRequest.builder()
-            .name("Updated Name")
-            .email("updated@example.com")
-            .build();
-
-        CustomerResponse response = customerService.updateCustomer(1L, updateRequest);
-
-        assertThat(response.getName()).isEqualTo("Updated Name");
-        assertThat(response.getEmail()).isEqualTo("updated@example.com");
-        verify(customerRepository, times(1)).findById(1L);
-        verify(customerRepository, times(1)).save(any(Customer.class));
+        assertThatThrownBy(() -> service.updateCustomer(1L,
+                UpdateCustomerRequest.builder().name("John Doe").email("taken@example.com").build(), null))
+                .isInstanceOf(ConflictException.class);
     }
 
     @Test
-    @DisplayName("Should throw exception when updating non-existent customer")
-    void testUpdateCustomerNotFound() {
-        when(customerRepository.findById(999L)).thenReturn(Optional.empty());
+    @DisplayName("an unknown customer is a 404 for read, update and delete")
+    void unknown() {
+        when(repository.findById(9L)).thenReturn(Optional.empty());
+        when(repository.existsById(9L)).thenReturn(false);
 
-        assertThatThrownBy(() -> customerService.updateCustomer(999L, createRequest))
-            .isInstanceOf(ResourceNotFoundException.class);
-
-        verify(customerRepository, times(1)).findById(999L);
-        verify(customerRepository, never()).save(any(Customer.class));
+        assertThatThrownBy(() -> service.getCustomer(9L)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.updateCustomer(9L,
+                UpdateCustomerRequest.builder().name("Jane Doe").email("j@example.com").build(), null)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.deleteCustomer(9L)).isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
-    @DisplayName("Should delete customer successfully")
-    void testDeleteCustomer() {
-        when(customerRepository.existsById(1L)).thenReturn(true);
-
-        customerService.deleteCustomer(1L);
-
-        verify(customerRepository, times(1)).existsById(1L);
-        verify(customerRepository, times(1)).deleteById(1L);
-    }
-
-    @Test
-    @DisplayName("Should throw exception when deleting non-existent customer")
-    void testDeleteCustomerNotFound() {
-        when(customerRepository.existsById(999L)).thenReturn(false);
-
-        assertThatThrownBy(() -> customerService.deleteCustomer(999L))
-            .isInstanceOf(ResourceNotFoundException.class);
-
-        verify(customerRepository, times(1)).existsById(999L);
-        verify(customerRepository, never()).deleteById(any());
-    }
-
-    @Test
-    @DisplayName("Should properly map customer to response")
-    void testMapToResponse() {
-        when(customerRepository.findById(1L)).thenReturn(Optional.of(testCustomer));
-
-        CustomerResponse response = customerService.getCustomer(1L);
-
-        assertThat(response.getId()).isEqualTo(testCustomer.getId());
-        assertThat(response.getName()).isEqualTo(testCustomer.getName());
-        assertThat(response.getEmail()).isEqualTo(testCustomer.getEmail());
-    }
-
-    @Test
-    @DisplayName("Should handle empty customer list")
-    void testGetAllCustomersEmpty() {
-        Page<Customer> emptyPage = new PageImpl<>(List.of());
-        when(customerRepository.findAll(any(Pageable.class))).thenReturn(emptyPage);
-
-        PagedResponse<CustomerResponse> response = customerService.getAllCustomers(0, 10, "id");
-
-        assertThat(response.getContent()).isEmpty();
-        assertThat(response.getTotalElements()).isEqualTo(0);
+    @DisplayName("sorting is limited to known fields")
+    void sortAllowList() {
+        assertThatThrownBy(() -> service.getAllCustomers(0, 20, "password"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo("INVALID_SORT_FIELD");
     }
 }

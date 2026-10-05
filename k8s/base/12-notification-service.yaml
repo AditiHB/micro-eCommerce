@@ -25,17 +25,36 @@ spec:
     spec:
       enableServiceLinks: false
       serviceAccountName: notification-service-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: notification-service
         image: micro-ecommerce:notification-service
         imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
         ports:
         - containerPort: 8086
+        - containerPort: 9086
+          name: management
         env:
+        - name: EUREKA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: eureka-password
         - name: SPRING_CONFIG_IMPORT
           value: "optional:configserver:http://config-server:8888/"
         - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
-          value: "http://discovery-server:8761/eureka/"
+          value: "http://eureka:$(EUREKA_PASSWORD)@discovery-server:8761/eureka/"
         - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
           value: "true"
         - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
@@ -46,11 +65,21 @@ spec:
           value: "http://order-service:8083"
         - name: NOTIFICATION_CHANNEL
           value: "log"
-        - name: JWT_SECRET
+        - name: SECURITY_ISSUER
+          value: "http://localhost:8180/realms/ecommerce"
+        - name: SECURITY_JWK_SET_URI
+          value: "http://keycloak:8080/realms/ecommerce/protocol/openid-connect/certs"
+        - name: SECURITY_AUDIENCE
+          value: "ecommerce-api"
+        - name: KEYCLOAK_TOKEN_URI
+          value: "http://keycloak:8080/realms/ecommerce/protocol/openid-connect/token"
+        - name: NOTIFICATION_CLIENT_ID
+          value: "notification-service"
+        - name: NOTIFICATION_CLIENT_SECRET
           valueFrom:
             secretKeyRef:
               name: ecommerce-secrets
-              key: jwt-secret
+              key: notification-client-secret
         resources:
           requests:
             cpu: 250m
@@ -61,7 +90,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8086
+            port: 9086
           initialDelaySeconds: 60
           periodSeconds: 15
           timeoutSeconds: 5
@@ -69,11 +98,17 @@ spec:
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8086
+            port: 9086
           initialDelaySeconds: 45
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: tmp
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

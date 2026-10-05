@@ -1,51 +1,13 @@
-# Mirrors docker-compose-postgres.yml exactly (same image, same credentials,
-# same one-database-per-service layout via the same init script) so this
-# overlay is a drop-in, already-proven substitute rather than a fresh,
-# untested design. This is also what fixes the real "scaling" bug: every
-# service in k8s/base defaults to an in-process H2 database, so two replicas
-# of the same service silently disagree about what data exists. Applying
-# this overlay (SPRING_PROFILES_ACTIVE=postgres, DB_HOST=postgres - see this
-# directory's kustomization.yaml) switches all 5 business services onto this
-# single, shared Postgres instance instead, via each service's own
-# application-postgres.yml.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: postgres-init-script
-  namespace: ecommerce
-data:
-  init-multiple-postgres-databases.sh: |
-    #!/bin/bash
-    # Creates one database per service, since the official postgres image
-    # only creates the single database named by POSTGRES_DB. Reads a
-    # comma-separated list from POSTGRES_MULTIPLE_DATABASES. Same intent as
-    # infrastructure/postgres/init-multiple-postgres-databases.sh (used by
-    # docker-compose-postgres.yml), but a plain existence-check-then-create
-    # instead of that script's \gexec trick - confirmed live (via kubectl
-    # logs postgres-0) that \gexec is a psql-interactive-only meta-command;
-    # handed through `psql -c "...\gexec"` it isn't interpreted at all, it's
-    # sent to the server as literal SQL text, which Postgres then rejects
-    # with a syntax error - every database silently failed to get created
-    # as a result, confirmed by every business service then crash-looping
-    # with "FATAL: database ... does not exist".
-    set -e
-
-    if [ -n "$POSTGRES_MULTIPLE_DATABASES" ]; then
-        echo "Creating databases: $POSTGRES_MULTIPLE_DATABASES"
-        IFS=',' read -ra DATABASES <<< "$POSTGRES_MULTIPLE_DATABASES"
-        for db in "${DATABASES[@]}"; do
-            db="$(echo "$db" | xargs)"
-            EXISTS=$(psql -tAc "SELECT 1 FROM pg_database WHERE datname = '$db'" --username "$POSTGRES_USER" --dbname "postgres")
-            if [ "$EXISTS" = "1" ]; then
-                echo "Database '$db' already exists, skipping"
-            else
-                echo "Creating database '$db' owned by '$POSTGRES_USER'"
-                psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "postgres" \
-                  -c "CREATE DATABASE \"$db\" OWNER \"$POSTGRES_USER\""
-            fi
-        done
-    fi
----
+# Real, shared Postgres instead of each pod's own private in-process H2 - the fix for multi-replica
+# correctness. One database and one owner role per service, created by the SAME init script Docker
+# Compose uses (infrastructure/postgres/init-multiple-postgres-databases.sh, copied next to this file as
+# generated/ by scripts/gen-k8s-secrets.sh and turned into the postgres-init-script ConfigMap by this
+# overlay's kustomization). Passwords come from the ecommerce-secrets Secret; nothing is hard-coded.
+#
+# History worth keeping: the previous inline copy of the script used `psql -c "...\gexec"`, which
+# is a psql meta-command that only works on stdin - every database silently failed to be created and
+# every service then crash-looped with "FATAL: database ... does not exist". The shared script feeds
+# SQL through a here-document, which is why it works.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -77,11 +39,49 @@ spec:
           name: postgres
         env:
         - name: POSTGRES_USER
-          value: "ecommerce_user"
+          value: "postgres"
         - name: POSTGRES_PASSWORD
-          value: "ecommerce_password"
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: postgres-admin-password
         - name: POSTGRES_MULTIPLE_DATABASES
           value: "customer_db,inventory_db,order_db,payment_db,notification_db,product_db"
+        - name: CUSTOMER_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: customer-db-password
+        - name: ORDER_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: order-db-password
+        - name: INVENTORY_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: inventory-db-password
+        - name: PAYMENT_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: payment-db-password
+        - name: NOTIFICATION_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: notification-db-password
+        - name: PRODUCT_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: product-db-password
+        - name: VAULT_DB_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: vault-db-admin-password
         resources:
           requests:
             cpu: 250m
@@ -97,12 +97,12 @@ spec:
           readOnly: true
         livenessProbe:
           exec:
-            command: ["pg_isready", "-U", "ecommerce_user"]
+            command: ["pg_isready", "-U", "postgres"]
           initialDelaySeconds: 30
           periodSeconds: 10
         readinessProbe:
           exec:
-            command: ["pg_isready", "-U", "ecommerce_user"]
+            command: ["pg_isready", "-U", "postgres"]
           initialDelaySeconds: 10
           periodSeconds: 5
       volumes:

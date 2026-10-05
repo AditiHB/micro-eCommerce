@@ -1,228 +1,126 @@
 package com.ecommerce.customerservice;
 
-import com.ecommerce.customerservice.dto.CreateCustomerRequest;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import com.ecommerce.common.service.UserService;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 
-import static org.hamcrest.Matchers.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.startsWith;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+/** The customer API through the full stack on PostgreSQL (the cache runs through its outage path: no Redis here). */
+@SpringBootTest
 @AutoConfigureMockMvc(addFilters = false)
-@ActiveProfiles("test")
-@Tag("integration")
-@DisplayName("Customer Controller Integration Tests")
+@PostgresIntegrationTest
+@WithMockUser(roles = "ADMIN")
+@DisplayName("Customer API (full stack, PostgreSQL)")
 class CustomerControllerIntegrationTest {
 
-    // AuthController (in this service's own package) depends on UserService, which lives in
-    // the common auth subsystem that is deliberately left out of the component scan (see
-    // CommonIntegrationConfig). Mocked here purely so the application context can start.
-    @MockBean
-    private UserService userService;
+    private static final String CUSTOMERS = "/api/v1/customers";
 
     @Autowired
     private MockMvc mockMvc;
-
     @Autowired
-    private CustomerRepository customerRepository;
-
-    @Autowired
-    private ObjectMapper objectMapper;
+    private CustomerRepository repository;
 
     @BeforeEach
     void setUp() {
-        customerRepository.deleteAll();
+        repository.deleteAllInBatch();
+    }
+
+    private long create(String name, String email) throws Exception {
+        String location = mockMvc.perform(post(CUSTOMERS).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"" + name + "\",\"email\":\"" + email + "\"}"))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getHeader("Location");
+        return Long.parseLong(location.substring(CUSTOMERS.length() + 1));
     }
 
     @Test
-    @DisplayName("Should create a customer successfully")
-    void testCreateCustomerSuccess() throws Exception {
-        CreateCustomerRequest request = CreateCustomerRequest.builder()
-            .name("John Doe")
-            .email("john@example.com")
-            .build();
-
-        mockMvc.perform(post("/api/customers")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(request)))
-            .andExpect(status().isCreated())
-            .andExpect(jsonPath("$.id").exists())
-            .andExpect(jsonPath("$.name").value("John Doe"))
-            .andExpect(jsonPath("$.email").value("john@example.com"))
-            .andExpect(jsonPath("$.createdAt").exists())
-            .andExpect(jsonPath("$.updatedAt").exists());
+    @DisplayName("creating returns 201 with Location and the version as ETag")
+    void create() throws Exception {
+        mockMvc.perform(post(CUSTOMERS).contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"John Doe\",\"email\":\"john@example.com\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", startsWith(CUSTOMERS + "/")))
+                .andExpect(header().string("ETag", "\"0\""))
+                .andExpect(jsonPath("$.email").value("john@example.com"));
     }
 
     @Test
-    @DisplayName("Should fail to create customer with invalid email")
-    void testCreateCustomerInvalidEmail() throws Exception {
-        CreateCustomerRequest request = CreateCustomerRequest.builder()
-            .name("John Doe")
-            .email("invalid-email")
-            .build();
+    @DisplayName("a duplicate email is a 409 problem; an invalid email is a 400 problem naming the field")
+    void errors() throws Exception {
+        create("John Doe", "john@example.com");
 
-        mockMvc.perform(post("/api/customers")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(request)))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
-            .andExpect(jsonPath("$.errors.email").exists());
+        mockMvc.perform(post(CUSTOMERS).contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Other One\",\"email\":\"john@example.com\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errorCode").value("CUSTOMER_EMAIL_EXISTS"));
+        mockMvc.perform(post(CUSTOMERS).contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Other One\",\"email\":\"nope\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors.email").exists());
     }
 
     @Test
-    @DisplayName("Should get customer by ID")
-    void testGetCustomerById() throws Exception {
-        Customer customer = Customer.builder()
-            .name("Jane Doe")
-            .email("jane@example.com")
-            .build();
-        Customer savedCustomer = customerRepository.save(customer);
+    @DisplayName("PUT uses its own update shape: an unknown field such as id is rejected, not silently ignored")
+    void updateRejectsUnknownFields() throws Exception {
+        long id = create("John Doe", "john@example.com");
 
-        mockMvc.perform(get("/api/customers/" + savedCustomer.getId())
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.id").value(savedCustomer.getId()))
-            .andExpect(jsonPath("$.name").value("Jane Doe"))
-            .andExpect(jsonPath("$.email").value("jane@example.com"));
+        mockMvc.perform(put(CUSTOMERS + "/" + id).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Jane Doe\",\"email\":\"jane@example.com\",\"id\":99}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("MALFORMED_REQUEST"));
     }
 
     @Test
-    @DisplayName("Should return 404 when customer not found")
-    void testGetCustomerNotFound() throws Exception {
-        mockMvc.perform(get("/api/customers/999")
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isNotFound())
-            .andExpect(jsonPath("$.errorCode").value("RESOURCE_NOT_FOUND"))
-            .andExpect(jsonPath("$.message").value(containsString("Customer not found")));
+    @DisplayName("update with the current ETag works and bumps it; the old ETag is then a 412 (lost update prevented)")
+    void optimisticConcurrency() throws Exception {
+        long id = create("John Doe", "john@example.com");
+
+        mockMvc.perform(put(CUSTOMERS + "/" + id).header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Johnny Doe\",\"email\":\"john@example.com\"}"))
+                .andExpect(status().isOk()).andExpect(header().string("ETag", "\"1\"")).andExpect(jsonPath("$.name").value("Johnny Doe"));
+        mockMvc.perform(put(CUSTOMERS + "/" + id).header("If-Match", "\"0\"").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Someone Else\",\"email\":\"john@example.com\"}"))
+                .andExpect(status().isPreconditionFailed()).andExpect(jsonPath("$.errorCode").value("PRECONDITION_FAILED"));
+        mockMvc.perform(get(CUSTOMERS + "/" + id)).andExpect(jsonPath("$.name").value("Johnny Doe"));
     }
 
     @Test
-    @DisplayName("Should get all customers with pagination")
-    void testGetAllCustomersWithPagination() throws Exception {
-        // Create test data
-        for (int i = 1; i <= 5; i++) {
-            Customer customer = Customer.builder()
-                .name("Customer " + i)
-                .email("customer" + i + "@example.com")
-                .build();
-            customerRepository.save(customer);
-        }
+    @DisplayName("taking another customer's email on update is a 409")
+    void updateToTakenEmail() throws Exception {
+        create("John Doe", "john@example.com");
+        long jane = create("Jane Doe", "jane@example.com");
 
-        mockMvc.perform(get("/api/customers?page=0&size=2&sortBy=id")
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.content").isArray())
-            .andExpect(jsonPath("$.content.length()").value(2))
-            .andExpect(jsonPath("$.pageNumber").value(0))
-            .andExpect(jsonPath("$.pageSize").value(2))
-            .andExpect(jsonPath("$.totalElements").value(5))
-            .andExpect(jsonPath("$.totalPages").value(3))
-            .andExpect(jsonPath("$.isFirst").value(true));
+        mockMvc.perform(put(CUSTOMERS + "/" + jane).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Jane Doe\",\"email\":\"john@example.com\"}"))
+                .andExpect(status().isConflict());
     }
 
     @Test
-    @DisplayName("Should update customer successfully")
-    void testUpdateCustomerSuccess() throws Exception {
-        Customer customer = Customer.builder()
-            .name("Old Name")
-            .email("old@example.com")
-            .build();
-        Customer savedCustomer = customerRepository.save(customer);
+    @DisplayName("reading, listing, sorting and deleting; unknown ids are 404 problems")
+    void readListDelete() throws Exception {
+        long id = create("John Doe", "john@example.com");
+        create("Jane Doe", "jane@example.com");
 
-        CreateCustomerRequest updateRequest = CreateCustomerRequest.builder()
-            .name("New Name")
-            .email("new@example.com")
-            .build();
-
-        mockMvc.perform(put("/api/customers/" + savedCustomer.getId())
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(updateRequest)))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.name").value("New Name"))
-            .andExpect(jsonPath("$.email").value("new@example.com"));
-    }
-
-    @Test
-    @DisplayName("Should delete customer successfully")
-    void testDeleteCustomerSuccess() throws Exception {
-        Customer customer = Customer.builder()
-            .name("To Delete")
-            .email("delete@example.com")
-            .build();
-        Customer savedCustomer = customerRepository.save(customer);
-
-        mockMvc.perform(delete("/api/customers/" + savedCustomer.getId())
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isNoContent());
-
-        // Verify it's deleted
-        mockMvc.perform(get("/api/customers/" + savedCustomer.getId())
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isNotFound());
-    }
-
-    @Test
-    @DisplayName("Should fail to create customer with blank name")
-    void testCreateCustomerBlankName() throws Exception {
-        CreateCustomerRequest request = CreateCustomerRequest.builder()
-            .name("")
-            .email("test@example.com")
-            .build();
-
-        mockMvc.perform(post("/api/customers")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(request)))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
-            .andExpect(jsonPath("$.errors.name").exists());
-    }
-
-    @Test
-    @DisplayName("Should handle multiple page navigation")
-    void testPaginationNavigation() throws Exception {
-        // Create 30 customers
-        for (int i = 1; i <= 30; i++) {
-            Customer customer = Customer.builder()
-                .name("Customer " + i)
-                .email("customer" + i + "@example.com")
-                .build();
-            customerRepository.save(customer);
-        }
-
-        // Test first page
-        mockMvc.perform(get("/api/customers?page=0&size=10&sortBy=id"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.pageNumber").value(0))
-            .andExpect(jsonPath("$.isFirst").value(true))
-            .andExpect(jsonPath("$.isLast").value(false))
-            .andExpect(jsonPath("$.totalPages").value(3));
-
-        // Test middle page
-        mockMvc.perform(get("/api/customers?page=1&size=10&sortBy=id"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.pageNumber").value(1))
-            .andExpect(jsonPath("$.isFirst").value(false))
-            .andExpect(jsonPath("$.isLast").value(false));
-
-        // Test last page
-        mockMvc.perform(get("/api/customers?page=2&size=10&sortBy=id"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.pageNumber").value(2))
-            .andExpect(jsonPath("$.isFirst").value(false))
-            .andExpect(jsonPath("$.isLast").value(true))
-            .andExpect(jsonPath("$.content.length()").value(10));
+        mockMvc.perform(get(CUSTOMERS + "/" + id)).andExpect(status().isOk()).andExpect(header().string("ETag", "\"0\""));
+        mockMvc.perform(get(CUSTOMERS).param("sortBy", "email")).andExpect(status().isOk()).andExpect(jsonPath("$.content", hasSize(2)));
+        mockMvc.perform(get(CUSTOMERS).param("sortBy", "passwordHash")).andExpect(status().isBadRequest());
+        mockMvc.perform(delete(CUSTOMERS + "/" + id)).andExpect(status().isNoContent());
+        mockMvc.perform(get(CUSTOMERS + "/" + id)).andExpect(status().isNotFound()).andExpect(jsonPath("$.errorCode").value("RESOURCE_NOT_FOUND"));
+        mockMvc.perform(delete(CUSTOMERS + "/" + id)).andExpect(status().isNotFound());
     }
 }

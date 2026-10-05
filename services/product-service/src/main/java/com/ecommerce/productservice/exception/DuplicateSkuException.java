@@ -1,11 +1,11 @@
 package com.ecommerce.productservice.exception;
 
-public class DuplicateSkuException extends RuntimeException {
-    public DuplicateSkuException(String sku) {
-        super("Product with SKU " + sku + " already exists");
-    }
+import com.ecommerce.common.exception.ConflictException;
 
-    public DuplicateSkuException(String message, Throwable cause) {
-        super(message, cause);
+/** A product with this SKU already exists (409). */
+public class DuplicateSkuException extends ConflictException {
+
+    public DuplicateSkuException(String sku) {
+        super("Product with SKU " + sku + " already exists", "DUPLICATE_SKU");
     }
 }

@@ -1,205 +1,142 @@
 package com.ecommerce.customerservice.integration;
 
-import com.ecommerce.common.exception.ResourceNotFoundException;
-import com.ecommerce.customerservice.Customer;
+import com.ecommerce.common.config.CacheConfig;
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
+import com.ecommerce.common.testsupport.SharedRedis;
 import com.ecommerce.customerservice.CustomerRepository;
 import com.ecommerce.customerservice.dto.CreateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
+import com.ecommerce.customerservice.dto.UpdateCustomerRequest;
 import com.ecommerce.customerservice.service.CustomerService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import com.ecommerce.common.service.UserService;
-import org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureTestEntityManager;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * The customer cache against a real Redis and a real database: only reference data is cached, one entry per
+ * customer, evicted by key (not wholesale) after the change commits - and a Redis outage degrades to the database
+ * instead of failing requests.
+ */
 @SpringBootTest
-@AutoConfigureTestEntityManager
-@Transactional
-@ActiveProfiles("test")
-@Tag("integration")
-@DisplayName("Customer Service Integration Tests")
+@PostgresIntegrationTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@DisplayName("Customer cache (Redis + PostgreSQL)")
 class CustomerServiceIntegrationTest {
 
-    // AuthController (in this service's own package) depends on UserService, which lives in
-    // the common auth subsystem that is deliberately left out of the component scan (see
-    // CommonIntegrationConfig). Mocked here purely so the application context can start.
-    @MockBean
-    private UserService userService;
+    @DynamicPropertySource
+    static void redis(DynamicPropertyRegistry registry) {
+        registry.add("spring.data.redis.host", SharedRedis::host);
+        registry.add("spring.data.redis.port", SharedRedis::port);
+    }
 
     @Autowired
-    private CustomerService customerService;
-
+    private CustomerService service;
     @Autowired
-    private CustomerRepository customerRepository;
+    private CustomerRepository repository;
+    @Autowired
+    private CacheManager cacheManager;
+
+    private Cache cache() {
+        return cacheManager.getCache(CacheConfig.CUSTOMERS_CACHE);
+    }
 
     @BeforeEach
     void setUp() {
-        customerRepository.deleteAll();
+        repository.deleteAllInBatch();
+        cache().clear();
+    }
+
+    @AfterEach
+    void tearDown() {
+        SharedRedis.resume();
+    }
+
+    private long create(String name, String email) {
+        return service.createCustomer(CreateCustomerRequest.builder().name(name).email(email).build()).getId();
     }
 
     @Test
-    @DisplayName("Should create and retrieve customer with full context")
-    void testCreateAndRetrieveCustomer() {
-        CreateCustomerRequest request = CreateCustomerRequest.builder()
-            .name("Integration Test")
-            .email("integration@test.com")
-            .build();
+    @DisplayName("a customer read by id is cached: the second read does not need the database")
+    void readsAreCached() {
+        long id = create("John Doe", "john@example.com");
 
-        CustomerResponse created = customerService.createCustomer(request);
-        CustomerResponse retrieved = customerService.getCustomer(created.getId());
+        service.getCustomer(id);
+        assertThat(cache().get(id)).isNotNull();
 
-        assertThat(retrieved).isNotNull();
-        assertThat(retrieved.getName()).isEqualTo("Integration Test");
-        assertThat(retrieved.getEmail()).isEqualTo("integration@test.com");
+        repository.deleteAllInBatch(); // the row is gone, but the cached entry still answers
+        assertThat(service.getCustomer(id).getName()).isEqualTo("John Doe");
     }
 
     @Test
-    @DisplayName("Should update customer and persist changes")
-    void testUpdateCustomerPersistence() {
-        Customer customer = Customer.builder()
-            .name("Original")
-            .email("original@test.com")
-            .build();
-        Customer saved = customerRepository.save(customer);
+    @DisplayName("updating a customer evicts that customer's entry - and only that one")
+    void evictionIsPerKey() {
+        long john = create("John Doe", "john@example.com");
+        long jane = create("Jane Doe", "jane@example.com");
+        service.getCustomer(john);
+        service.getCustomer(jane);
 
-        CreateCustomerRequest updateRequest = CreateCustomerRequest.builder()
-            .name("Updated")
-            .email("updated@test.com")
-            .build();
+        service.updateCustomer(john, UpdateCustomerRequest.builder().name("Johnny Doe").email("john@example.com").build(), null);
 
-        customerService.updateCustomer(saved.getId(), updateRequest);
-
-        Customer verified = customerRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getName()).isEqualTo("Updated");
-        assertThat(verified.getEmail()).isEqualTo("updated@test.com");
+        assertThat(cache().get(john)).as("the changed customer is evicted").isNull();
+        assertThat(cache().get(jane)).as("the others stay cached").isNotNull();
+        assertThat(service.getCustomer(john).getName()).as("the next read sees the change").isEqualTo("Johnny Doe");
     }
 
     @Test
-    @DisplayName("Should delete customer and verify removal")
-    void testDeleteCustomerPersistence() {
-        Customer customer = Customer.builder()
-            .name("To Delete")
-            .email("delete@test.com")
-            .build();
-        Customer saved = customerRepository.save(customer);
+    @DisplayName("deleting a customer evicts the entry, so a deleted customer is not served from the cache")
+    void deleteEvicts() {
+        long id = create("John Doe", "john@example.com");
+        service.getCustomer(id);
 
-        customerService.deleteCustomer(saved.getId());
+        service.deleteCustomer(id);
 
-        assertThatThrownBy(() -> customerService.getCustomer(saved.getId()))
-            .isInstanceOf(ResourceNotFoundException.class);
+        assertThat(cache().get(id)).isNull();
     }
 
     @Test
-    @DisplayName("Should handle pagination with multiple customers")
-    void testPaginationWithMultipleCustomers() {
-        for (int i = 1; i <= 15; i++) {
-            Customer customer = Customer.builder()
-                .name("Customer " + i)
-                .email("customer" + i + "@test.com")
-                .build();
-            customerRepository.save(customer);
-        }
+    @DisplayName("lists are not cached")
+    void listsAreNotCached() {
+        create("John Doe", "john@example.com");
 
-        var page1 = customerService.getAllCustomers(0, 5, "id");
-        var page2 = customerService.getAllCustomers(1, 5, "id");
-        var page3 = customerService.getAllCustomers(2, 5, "id");
+        service.getAllCustomers(0, 10, "id");
 
-        assertThat(page1.getContent()).hasSize(5);
-        assertThat(page2.getContent()).hasSize(5);
-        assertThat(page3.getContent()).hasSize(5);
-        assertThat(page1.getTotalElements()).isEqualTo(15);
-        assertThat(page1.getTotalPages()).isEqualTo(3);
+        assertThat(cache().get("all:0:10:id")).isNull();
     }
 
     @Test
-    @DisplayName("Should maintain referential integrity on update")
-    void testReferentialIntegrity() {
-        Customer customer1 = Customer.builder()
-            .name("Customer 1")
-            .email("customer1@test.com")
-            .build();
-        Customer customer2 = Customer.builder()
-            .name("Customer 2")
-            .email("customer2@test.com")
-            .build();
+    @DisplayName("the cached entry carries the version, so the ETag it yields matches the database")
+    void cachedVersion() {
+        long id = create("John Doe", "john@example.com");
+        service.updateCustomer(id, UpdateCustomerRequest.builder().name("John Q").email("john@example.com").build(), null);
 
-        Customer saved1 = customerRepository.save(customer1);
-        customerRepository.save(customer2);
+        CustomerResponse first = service.getCustomer(id);
+        CustomerResponse second = service.getCustomer(id);
 
-        CreateCustomerRequest updateRequest = CreateCustomerRequest.builder()
-            .name("Updated 1")
-            .email("customer1_updated@test.com")
-            .build();
-
-        customerService.updateCustomer(saved1.getId(), updateRequest);
-
-        long totalCustomers = customerRepository.count();
-        assertThat(totalCustomers).isEqualTo(2);
+        assertThat(first.getVersion()).isEqualTo(1L);
+        assertThat(second.getVersion()).isEqualTo(first.getVersion());
     }
 
     @Test
-    @DisplayName("Should handle concurrent customer operations")
-    void testConcurrentOperations() throws InterruptedException {
-        CreateCustomerRequest request1 = CreateCustomerRequest.builder()
-            .name("Concurrent 1")
-            .email("concurrent1@test.com")
-            .build();
+    @DisplayName("a Redis outage never breaks a request: reads fall through to the database, writes still succeed")
+    void redisOutageDegrades() {
+        long id = create("John Doe", "john@example.com");
+        SharedRedis.pause();
 
-        CreateCustomerRequest request2 = CreateCustomerRequest.builder()
-            .name("Concurrent 2")
-            .email("concurrent2@test.com")
-            .build();
+        CustomerResponse read = service.getCustomer(id);
+        long other = create("Jane Doe", "jane@example.com");
+        service.updateCustomer(other, UpdateCustomerRequest.builder().name("Jane Q").email("jane@example.com").build(), null);
 
-        CustomerResponse created1 = customerService.createCustomer(request1);
-        CustomerResponse created2 = customerService.createCustomer(request2);
-
-        assertThat(created1.getId()).isNotEqualTo(created2.getId());
-        assertThat(customerRepository.count()).isEqualTo(2);
-    }
-
-    @Test
-    @DisplayName("Should validate timestamps are set on creation")
-    void testTimestampOnCreation() {
-        CreateCustomerRequest request = CreateCustomerRequest.builder()
-            .name("Timestamp Test")
-            .email("timestamp@test.com")
-            .build();
-
-        CustomerResponse response = customerService.createCustomer(request);
-
-        assertThat(response.getCreatedAt()).isNotNull();
-        assertThat(response.getUpdatedAt()).isNotNull();
-    }
-
-    @Test
-    @DisplayName("Should update timestamp on modification")
-    void testTimestampOnUpdate() throws InterruptedException {
-        Customer customer = Customer.builder()
-            .name("Original")
-            .email("original@test.com")
-            .build();
-        Customer saved = customerRepository.save(customer);
-        var originalUpdatedAt = saved.getUpdatedAt();
-
-        Thread.sleep(100);
-
-        CreateCustomerRequest updateRequest = CreateCustomerRequest.builder()
-            .name("Updated")
-            .email("updated@test.com")
-            .build();
-
-        customerService.updateCustomer(saved.getId(), updateRequest);
-        customerRepository.flush();
-
-        Customer updated = customerRepository.findById(saved.getId()).orElseThrow();
-        assertThat(updated.getUpdatedAt()).isAfter(originalUpdatedAt);
+        assertThat(read.getName()).isEqualTo("John Doe");
+        assertThat(repository.findById(other).orElseThrow().getName()).isEqualTo("Jane Q");
     }
 }

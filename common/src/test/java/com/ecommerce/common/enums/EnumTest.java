@@ -3,92 +3,70 @@ package com.ecommerce.common.enums;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.*;
+import java.util.EnumSet;
 
-@DisplayName("Enum Classes Unit Tests")
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DisplayName("Lifecycle state machines")
 class EnumTest {
 
     @Test
-    @DisplayName("Should have OrderStatus values")
-    void testOrderStatusValues() {
-        assertThat(OrderStatus.values()).isNotEmpty();
-        assertThat(OrderStatus.valueOf("PENDING")).isNotNull();
+    @DisplayName("an order moves forward through the saga, or is cancelled or failed from any open status")
+    void orderForwardTransitions() {
+        assertThat(OrderStatus.PENDING.allowedNext())
+                .containsExactlyInAnyOrder(OrderStatus.INVENTORY_RESERVED, OrderStatus.PAYMENT_PROCESSING,
+                        OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.FAILED);
+        assertThat(OrderStatus.INVENTORY_RESERVED.allowedNext())
+                .containsExactlyInAnyOrder(OrderStatus.PAYMENT_PROCESSING, OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.FAILED);
+        assertThat(OrderStatus.PAYMENT_PROCESSING.allowedNext())
+                .containsExactlyInAnyOrder(OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.FAILED);
     }
 
     @Test
-    @DisplayName("Should have PaymentStatus values")
-    void testPaymentStatusValues() {
-        assertThat(PaymentStatus.values()).isNotEmpty();
-        assertThat(PaymentStatus.valueOf("PENDING")).isNotNull();
-    }
-
-    @Test
-    @DisplayName("Should convert OrderStatus to string")
-    void testOrderStatusToString() {
-        OrderStatus status = OrderStatus.PENDING;
-        assertThat(status.toString()).isNotNull();
-    }
-
-    @Test
-    @DisplayName("Should convert PaymentStatus to string")
-    void testPaymentStatusToString() {
-        PaymentStatus status = PaymentStatus.PENDING;
-        assertThat(status.toString()).isNotNull();
-    }
-
-    @Test
-    @DisplayName("Should compare OrderStatus values")
-    void testOrderStatusComparison() {
-        OrderStatus status1 = OrderStatus.PENDING;
-        OrderStatus status2 = OrderStatus.PENDING;
-
-        assertThat(status1).isEqualTo(status2);
-    }
-
-    @Test
-    @DisplayName("Should compare PaymentStatus values")
-    void testPaymentStatusComparison() {
-        PaymentStatus status1 = PaymentStatus.PROCESSED;
-        PaymentStatus status2 = PaymentStatus.PROCESSED;
-
-        assertThat(status1).isEqualTo(status2);
-    }
-
-    @Test
-    @DisplayName("Should differentiate between different OrderStatus")
-    void testDifferentOrderStatus() {
-        OrderStatus pending = OrderStatus.PENDING;
-        OrderStatus completed = OrderStatus.COMPLETED;
-
-        assertThat(pending).isNotEqualTo(completed);
-    }
-
-    @Test
-    @DisplayName("Should differentiate between different PaymentStatus")
-    void testDifferentPaymentStatus() {
-        PaymentStatus pending = PaymentStatus.PENDING;
-        PaymentStatus failed = PaymentStatus.FAILED;
-
-        assertThat(pending).isNotEqualTo(failed);
-    }
-
-    @Test
-    @DisplayName("Should be able to iterate OrderStatus")
-    void testIterateOrderStatus() {
-        OrderStatus[] statuses = OrderStatus.values();
-        assertThat(statuses).isNotEmpty();
-        for (OrderStatus status : statuses) {
-            assertThat(status).isNotNull();
+    @DisplayName("COMPLETED, CANCELLED and FAILED are final: nothing leaves them (a late payment cannot revive a cancelled order)")
+    void orderTerminalStatesAreFinal() {
+        for (OrderStatus terminal : EnumSet.of(OrderStatus.COMPLETED, OrderStatus.CANCELLED, OrderStatus.FAILED)) {
+            assertThat(terminal.isTerminal()).isTrue();
+            for (OrderStatus next : OrderStatus.values()) {
+                assertThat(terminal.canTransitionTo(next)).as("%s -> %s", terminal, next).isFalse();
+            }
         }
     }
 
     @Test
-    @DisplayName("Should be able to iterate PaymentStatus")
-    void testIteratePaymentStatus() {
-        PaymentStatus[] statuses = PaymentStatus.values();
-        assertThat(statuses).isNotEmpty();
-        for (PaymentStatus status : statuses) {
-            assertThat(status).isNotNull();
+    @DisplayName("an order can never go backwards")
+    void orderCannotGoBackwards() {
+        assertThat(OrderStatus.INVENTORY_RESERVED.canTransitionTo(OrderStatus.PENDING)).isFalse();
+        assertThat(OrderStatus.PAYMENT_PROCESSING.canTransitionTo(OrderStatus.INVENTORY_RESERVED)).isFalse();
+        assertThat(OrderStatus.PENDING.canTransitionTo(OrderStatus.PENDING)).isFalse();
+    }
+
+    @Test
+    @DisplayName("the open statuses are exactly the non-terminal ones")
+    void openStatuses() {
+        assertThat(OrderStatus.open()).containsExactlyInAnyOrder(
+                OrderStatus.PENDING, OrderStatus.INVENTORY_RESERVED, OrderStatus.PAYMENT_PROCESSING);
+        for (OrderStatus status : OrderStatus.values()) {
+            assertThat(OrderStatus.open().contains(status)).isEqualTo(!status.isTerminal());
+        }
+    }
+
+    @Test
+    @DisplayName("money moves PENDING -> AUTHORIZED -> CAPTURED -> REFUNDED, and only a captured payment can be refunded")
+    void paymentLifecycle() {
+        assertThat(PaymentStatus.PENDING.allowedNext()).containsExactlyInAnyOrder(PaymentStatus.AUTHORIZED, PaymentStatus.FAILED);
+        assertThat(PaymentStatus.AUTHORIZED.allowedNext()).containsExactlyInAnyOrder(PaymentStatus.CAPTURED, PaymentStatus.FAILED);
+        assertThat(PaymentStatus.CAPTURED.allowedNext()).containsExactly(PaymentStatus.REFUNDED);
+        assertThat(PaymentStatus.PENDING.canTransitionTo(PaymentStatus.REFUNDED)).isFalse();
+        assertThat(PaymentStatus.AUTHORIZED.canTransitionTo(PaymentStatus.REFUNDED)).isFalse();
+        assertThat(PaymentStatus.FAILED.canTransitionTo(PaymentStatus.REFUNDED)).isFalse();
+    }
+
+    @Test
+    @DisplayName("REFUNDED and FAILED payments are final")
+    void paymentTerminalStates() {
+        for (PaymentStatus terminal : EnumSet.of(PaymentStatus.REFUNDED, PaymentStatus.FAILED)) {
+            assertThat(terminal.allowedNext()).isEmpty();
         }
     }
 }

@@ -1,313 +1,204 @@
 package com.ecommerce.paymentservice.service;
 
-import com.ecommerce.common.constants.ApiConstants;
-import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.PaymentStatus;
 import com.ecommerce.common.events.EventPublisher;
+import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
+import com.ecommerce.common.events.RefundCompletedEvent;
 import com.ecommerce.common.exception.BusinessException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
-import com.ecommerce.common.eventsourcing.EventSourcingService;
+import com.ecommerce.common.exception.UnprocessableEntityException;
 import com.ecommerce.paymentservice.Payment;
 import com.ecommerce.paymentservice.PaymentRepository;
-import com.ecommerce.paymentservice.dto.ProcessPaymentRequest;
-import com.ecommerce.paymentservice.dto.PaymentResponse;
+import com.ecommerce.paymentservice.exception.InvalidPaymentTransitionException;
+import com.ecommerce.paymentservice.gateway.PaymentGateway;
+import com.ecommerce.paymentservice.gateway.PaymentGateway.Outcome;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.util.Arrays;
-import java.util.List;
 import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+/** Money-moving rules, with the processor and the database mocked; the same flows on a real database are in the integration tests. */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("PaymentService Unit Tests")
+@DisplayName("PaymentService")
 class PaymentServiceTest {
 
-    @Mock
-    private PaymentRepository paymentRepository;
+    private static final BigDecimal AMOUNT = new BigDecimal("172.97");
 
     @Mock
-    private EventPublisher eventPublisher;
-
+    private PaymentRepository payments;
     @Mock
-    private EventSourcingService eventSourcingService;
+    private PaymentGateway gateway;
+    @Mock
+    private EventPublisher events;
 
-    @InjectMocks
-    private PaymentService paymentService;
-
-    private Payment testPayment;
-    private ProcessPaymentRequest processRequest;
+    private PaymentService service;
 
     @BeforeEach
     void setUp() {
-        testPayment = Payment.builder()
-            .id(1L)
-            .orderId(123L)
-            .amount(BigDecimal.valueOf(99.99))
-            .status(PaymentStatus.PROCESSED)
-            .createdAt(LocalDateTime.now())
-            .updatedAt(LocalDateTime.now())
-            .build();
+        service = new PaymentService(payments, gateway, events);
+        org.mockito.Mockito.lenient().when(payments.saveAndFlush(any(Payment.class))).thenAnswer(inv -> {
+            Payment p = inv.getArgument(0);
+            if (p.getId() == null) {
+                p.setId(9L);
+            }
+            return p;
+        });
+    }
 
-        processRequest = ProcessPaymentRequest.builder()
-            .orderId(123L)
-            .amount(BigDecimal.valueOf(99.99))
-            .build();
+    private Payment captured() {
+        Payment payment = Payment.pending(42L, 7L, AMOUNT, "USD");
+        payment.setId(9L);
+        payment.authorized("auth-1");
+        payment.captured("cap-1");
+        return payment;
+    }
+
+    // ------------------------------------------------------------------ charging
+
+    @Test
+    @DisplayName("charges the order's total: authorize, capture, then announce payment.processed with the amount")
+    void chargeSucceeds() {
+        when(gateway.authorize("order-42", AMOUNT, "USD")).thenReturn(Outcome.approved("auth-1"));
+        when(gateway.capture("order-42", "auth-1")).thenReturn(Outcome.approved("cap-1"));
+
+        Payment payment = service.charge(42L, 7L, AMOUNT, "USD");
+
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CAPTURED);
+        assertThat(payment.getAmount()).isEqualByComparingTo("172.97");
+        assertThat(payment.getProcessorReference()).isEqualTo("cap-1");
+        org.mockito.ArgumentCaptor<PaymentProcessedEvent> event = org.mockito.ArgumentCaptor.forClass(PaymentProcessedEvent.class);
+        verify(events).publish(event.capture());
+        assertThat(event.getValue().getAmount()).isEqualByComparingTo("172.97");
+        assertThat(event.getValue().getCurrency()).isEqualTo("USD");
+        assertThat(event.getValue().getCustomerId()).isEqualTo(7L);
+        assertThat(event.getValue().getOrderId()).isEqualTo(42L);
     }
 
     @Test
-    @DisplayName("Should process payment successfully")
-    void testProcessPaymentSuccess() {
-        Payment processingPayment = Payment.builder()
-            .id(1L)
-            .orderId(123L)
-            .amount(BigDecimal.valueOf(99.99))
-            .status(PaymentStatus.PROCESSING)
-            .build();
+    @DisplayName("a decline is a normal outcome: the payment is FAILED and payment.failed carries the reason")
+    void declineIsAnOutcome() {
+        when(gateway.authorize(anyString(), any(), anyString())).thenReturn(Outcome.declined("Card declined"));
 
-        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(processingPayment);
-        when(paymentRepository.save(any(Payment.class))).thenReturn(testPayment);
-        doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
+        Payment payment = service.charge(42L, 7L, AMOUNT, "USD");
 
-        PaymentResponse response = paymentService.processPayment(processRequest);
-
-        assertThat(response).isNotNull();
-        assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getOrderId()).isEqualTo(123L);
-        assertThat(response.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(99.99));
-        assertThat(response.getStatus()).isEqualTo(PaymentStatus.PROCESSED);
-        verify(paymentRepository, times(1)).saveAndFlush(any(Payment.class));
-        verify(paymentRepository, times(1)).save(any(Payment.class));
-        verify(eventPublisher, times(1)).publishEvent(any(PaymentProcessedEvent.class), anyString());
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(payment.getFailureReason()).isEqualTo("Card declined");
+        org.mockito.ArgumentCaptor<PaymentFailedEvent> event = org.mockito.ArgumentCaptor.forClass(PaymentFailedEvent.class);
+        verify(events).publish(event.capture());
+        assertThat(event.getValue().getReason()).isEqualTo("Card declined");
+        verify(gateway, never()).capture(anyString(), anyString());
     }
 
     @Test
-    @DisplayName("Should reject as a clean business error when a payment already exists for the order")
-    void testProcessPaymentRejectsDuplicateOrderId() {
-        when(paymentRepository.saveAndFlush(any(Payment.class)))
-            .thenThrow(new DataIntegrityViolationException("duplicate key value violates unique constraint \"uq_payments_order_id\""));
+    @DisplayName("a capture that is refused after a successful authorization also ends FAILED, never half-charged")
+    void captureDecline() {
+        when(gateway.authorize(anyString(), any(), anyString())).thenReturn(Outcome.approved("auth-1"));
+        when(gateway.capture(anyString(), anyString())).thenReturn(Outcome.declined("Authorization expired"));
 
-        assertThatThrownBy(() -> paymentService.processPayment(processRequest))
-            .isInstanceOf(BusinessException.class)
-            .hasMessageContaining(String.valueOf(processRequest.getOrderId()));
+        Payment payment = service.charge(42L, 7L, AMOUNT, "USD");
 
-        verify(paymentRepository, never()).save(any(Payment.class));
-        verify(eventPublisher, never()).publishEvent(any(), anyString());
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.FAILED);
+        verify(events).publish(any(PaymentFailedEvent.class));
     }
 
     @Test
-    @DisplayName("Should get payment by ID successfully")
-    void testGetPaymentSuccess() {
-        when(paymentRepository.findById(1L)).thenReturn(Optional.of(testPayment));
+    @DisplayName("a processor that cannot be reached is an exception (retried), not a decline: no payment.failed is sent")
+    void processorOutage() {
+        when(gateway.authorize(anyString(), any(), anyString())).thenThrow(new IllegalStateException("connect timed out"));
 
-        PaymentResponse response = paymentService.getPayment(1L);
+        assertThatThrownBy(() -> service.charge(42L, 7L, AMOUNT, "USD")).hasMessage("connect timed out");
 
-        assertThat(response).isNotNull();
-        assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getOrderId()).isEqualTo(123L);
-        verify(paymentRepository, times(1)).findById(1L);
+        verify(events, never()).publish(any());
+    }
+
+    // ------------------------------------------------------------------ refunds
+
+    @Test
+    @DisplayName("refunding a captured payment goes through the processor and announces refund.completed")
+    void refund() {
+        Payment payment = captured();
+        when(payments.findById(9L)).thenReturn(Optional.of(payment));
+        when(gateway.refund(eq("refund-9"), eq("cap-1"), eq(AMOUNT))).thenReturn(Outcome.approved("ref-1"));
+
+        assertThat(service.refundPayment(9L).getStatus()).isEqualTo(PaymentStatus.REFUNDED);
+
+        org.mockito.ArgumentCaptor<RefundCompletedEvent> event = org.mockito.ArgumentCaptor.forClass(RefundCompletedEvent.class);
+        verify(events).publish(event.capture());
+        assertThat(event.getValue().getRefundAmount()).isEqualByComparingTo("172.97");
+        assertThat(event.getValue().getPaymentId()).isEqualTo(9L);
     }
 
     @Test
-    @DisplayName("Should throw exception when payment not found")
-    void testGetPaymentNotFound() {
-        when(paymentRepository.findById(999L)).thenReturn(Optional.empty());
+    @DisplayName("a payment that was never captured is refused BEFORE the processor is called")
+    void refundUncapturedIsRefusedEarly() {
+        Payment pending = Payment.pending(42L, 7L, AMOUNT, "USD");
+        pending.setId(9L);
+        when(payments.findById(9L)).thenReturn(Optional.of(pending));
 
-        assertThatThrownBy(() -> paymentService.getPayment(999L))
-            .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.refundPayment(9L)).isInstanceOf(InvalidPaymentTransitionException.class);
+
+        verify(gateway, never()).refund(anyString(), any(), any());
+        verify(events, never()).publish(any());
     }
 
     @Test
-    @DisplayName("Should get all payments with pagination")
-    void testGetAllPaymentsSuccess() {
-        List<Payment> payments = Arrays.asList(testPayment);
-        Page<Payment> page = new PageImpl<>(payments, mock(Pageable.class), 1);
-        when(paymentRepository.findAll(any(Pageable.class))).thenReturn(page);
+    @DisplayName("a second refund is refused (409) without calling the processor again")
+    void secondRefund() {
+        Payment payment = captured();
+        payment.refunded("ref-1");
+        when(payments.findById(9L)).thenReturn(Optional.of(payment));
 
-        PagedResponse<PaymentResponse> response = paymentService.getAllPayments(0, 10, "id");
+        assertThatThrownBy(() -> service.refundPayment(9L)).isInstanceOf(InvalidPaymentTransitionException.class);
 
-        assertThat(response).isNotNull();
-        assertThat(response.getContent()).hasSize(1);
-        assertThat(response.getPageNumber()).isEqualTo(0);
-        assertThat(response.getTotalElements()).isEqualTo(1);
+        verify(gateway, never()).refund(anyString(), any(), any());
     }
 
     @Test
-    @DisplayName("Should refund payment successfully")
-    void testRefundPaymentSuccess() {
-        Payment refundedPayment = Payment.builder()
-            .id(1L)
-            .orderId(123L)
-            .amount(BigDecimal.valueOf(99.99))
-            .status(PaymentStatus.REFUNDED)
-            .build();
+    @DisplayName("a refund the processor refuses is a 422 and the payment stays CAPTURED")
+    void refundDeclined() {
+        Payment payment = captured();
+        when(payments.findById(9L)).thenReturn(Optional.of(payment));
+        when(gateway.refund(anyString(), any(), any())).thenReturn(Outcome.declined("Dispute open"));
 
-        when(paymentRepository.findById(1L)).thenReturn(Optional.of(testPayment));
-        when(paymentRepository.save(any(Payment.class))).thenReturn(refundedPayment);
+        assertThatThrownBy(() -> service.refundPayment(9L)).isInstanceOf(UnprocessableEntityException.class);
 
-        PaymentResponse response = paymentService.refundPayment(1L);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.CAPTURED);
+        verify(events, never()).publish(any());
+    }
 
-        assertThat(response.getStatus()).isEqualTo(PaymentStatus.REFUNDED);
-        verify(paymentRepository, times(1)).save(any(Payment.class));
+    // ------------------------------------------------------------------ reading
+
+    @Test
+    @DisplayName("an unknown payment, or an order with no payment, is a 404")
+    void notFound() {
+        when(payments.findById(1L)).thenReturn(Optional.empty());
+        when(payments.findByOrderId(5L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getPayment(1L)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.getPaymentByOrder(5L)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.refundPayment(1L)).isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
-    @DisplayName("Should throw exception when refunding non-existent payment")
-    void testRefundPaymentNotFound() {
-        when(paymentRepository.findById(999L)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> paymentService.refundPayment(999L))
-            .isInstanceOf(ResourceNotFoundException.class);
-    }
-
-    @Test
-    @DisplayName("Should handle multiple payment statuses")
-    void testMultiplePaymentStatusTransitions() {
-        Payment payment = Payment.builder()
-            .id(1L)
-            .orderId(123L)
-            .amount(BigDecimal.valueOf(99.99))
-            .status(PaymentStatus.PROCESSING)
-            .build();
-
-        when(paymentRepository.findById(1L))
-            .thenReturn(Optional.of(payment));
-        when(paymentRepository.save(any(Payment.class)))
-            .thenReturn(Payment.builder().id(1L).status(PaymentStatus.PROCESSED).build())
-            .thenReturn(Payment.builder().id(1L).status(PaymentStatus.REFUNDED).build());
-
-        paymentService.refundPayment(1L);
-
-        verify(paymentRepository, times(1)).save(any(Payment.class));
-    }
-
-    @Test
-    @DisplayName("Should enforce max page size")
-    void testGetAllPaymentsMaxPageSize() {
-        List<Payment> payments = Arrays.asList(testPayment);
-        Page<Payment> page = new PageImpl<>(payments, mock(Pageable.class), 1);
-        when(paymentRepository.findAll(any(Pageable.class))).thenReturn(page);
-
-        paymentService.getAllPayments(0, 1000, "id");
-
-        verify(paymentRepository, times(1)).findAll(argThat((Pageable pageable) ->
-            pageable.getPageSize() <= ApiConstants.MAX_PAGE_SIZE
-        ));
-    }
-
-    @Test
-    @DisplayName("Should handle empty payments list")
-    void testGetAllPaymentsEmpty() {
-        Page<Payment> emptyPage = new PageImpl<>(Arrays.asList(), mock(Pageable.class), 0);
-        when(paymentRepository.findAll(any(Pageable.class))).thenReturn(emptyPage);
-
-        PagedResponse<PaymentResponse> response = paymentService.getAllPayments(0, 10, "id");
-
-        assertThat(response.getContent()).isEmpty();
-        assertThat(response.getTotalElements()).isEqualTo(0);
-    }
-
-    @Test
-    @DisplayName("Should publish event when payment is processed")
-    void testPaymentEventPublished() {
-        Payment processingPayment = Payment.builder()
-            .id(1L)
-            .status(PaymentStatus.PROCESSING)
-            .build();
-
-        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(processingPayment);
-        when(paymentRepository.save(any(Payment.class))).thenReturn(testPayment);
-        doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
-
-        paymentService.processPayment(processRequest);
-
-        verify(eventPublisher, times(1)).publishEvent(
-            argThat(event -> event instanceof PaymentProcessedEvent),
-            eq("payment-processed")
-        );
-    }
-
-    @Test
-    @DisplayName("Should handle small payment amounts")
-    void testProcessSmallPayment() {
-        ProcessPaymentRequest smallRequest = ProcessPaymentRequest.builder()
-            .orderId(123L)
-            .amount(BigDecimal.valueOf(0.01))
-            .build();
-
-        Payment smallPayment = Payment.builder()
-            .id(1L)
-            .amount(BigDecimal.valueOf(0.01))
-            .status(PaymentStatus.PROCESSED)
-            .build();
-
-        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(smallPayment);
-        when(paymentRepository.save(any(Payment.class))).thenReturn(smallPayment);
-        doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
-
-        PaymentResponse response = paymentService.processPayment(smallRequest);
-
-        assertThat(response.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(0.01));
-    }
-
-    @Test
-    @DisplayName("Should handle large payment amounts")
-    void testProcessLargePayment() {
-        ProcessPaymentRequest largeRequest = ProcessPaymentRequest.builder()
-            .orderId(123L)
-            .amount(BigDecimal.valueOf(999999.99))
-            .build();
-
-        Payment largePayment = Payment.builder()
-            .id(1L)
-            .amount(BigDecimal.valueOf(999999.99))
-            .status(PaymentStatus.PROCESSED)
-            .build();
-
-        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(largePayment);
-        when(paymentRepository.save(any(Payment.class))).thenReturn(largePayment);
-        doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
-
-        PaymentResponse response = paymentService.processPayment(largeRequest);
-
-        assertThat(response.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(999999.99));
-    }
-
-    @Test
-    @DisplayName("Should handle zero payment amount")
-    void testProcessZeroPayment() {
-        ProcessPaymentRequest zeroRequest = ProcessPaymentRequest.builder()
-            .orderId(123L)
-            .amount(BigDecimal.valueOf(0.00))
-            .build();
-
-        Payment zeroPayment = Payment.builder()
-            .id(1L)
-            .amount(BigDecimal.valueOf(0.00))
-            .status(PaymentStatus.PROCESSED)
-            .build();
-
-        when(paymentRepository.saveAndFlush(any(Payment.class))).thenReturn(zeroPayment);
-        when(paymentRepository.save(any(Payment.class))).thenReturn(zeroPayment);
-        doNothing().when(eventPublisher).publishEvent(any(PaymentProcessedEvent.class), anyString());
-
-        PaymentResponse response = paymentService.processPayment(zeroRequest);
-
-        assertThat(response.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(0.00));
+    @DisplayName("sorting is limited to known fields")
+    void sortAllowList() {
+        assertThatThrownBy(() -> service.getAllPayments(0, 20, "processorReference"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo("INVALID_SORT_FIELD");
     }
 }

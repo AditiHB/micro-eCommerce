@@ -1,34 +1,31 @@
 package com.ecommerce.common.events;
 
-/**
- * Event published when inventory is successfully reserved.
- * Includes product and quantity information for potential compensation.
- */
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+/** Stock for every line of the order is now held. Passes the order's priced total on to payment. */
+@Getter
+@Setter
+@NoArgsConstructor
+@EventSchema(type = "inventory.reserved", topic = Topics.INVENTORY_RESERVED)
 public class InventoryReservedEvent extends DomainEvent {
+
     private Long orderId;
-    private String productId;
-    private Integer quantity;
+    private Long customerId;
+    private List<LineItem> lines;
+    private BigDecimal totalAmount;
+    private String currency;
 
-    public InventoryReservedEvent() {
-        super();
-    }
-
-    public InventoryReservedEvent(Long orderId) {
+    public InventoryReservedEvent(Long orderId, Long customerId, List<LineItem> lines, BigDecimal totalAmount, String currency) {
         super(String.valueOf(orderId), "Inventory");
         this.orderId = orderId;
+        this.customerId = customerId;
+        this.lines = lines;
+        this.totalAmount = totalAmount;
+        this.currency = currency;
     }
-
-    public InventoryReservedEvent(Long orderId, String productId, Integer quantity) {
-        super(String.valueOf(orderId), "Inventory");
-        this.orderId = orderId;
-        this.productId = productId;
-        this.quantity = quantity;
-    }
-
-    public Long getOrderId() { return orderId; }
-    public void setOrderId(Long orderId) { this.orderId = orderId; }
-    public String getProductId() { return productId; }
-    public void setProductId(String productId) { this.productId = productId; }
-    public Integer getQuantity() { return quantity; }
-    public void setQuantity(Integer quantity) { this.quantity = quantity; }
 }

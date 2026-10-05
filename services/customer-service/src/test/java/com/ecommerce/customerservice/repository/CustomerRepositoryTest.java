@@ -1,163 +1,86 @@
 package com.ecommerce.customerservice.repository;
 
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
 import com.ecommerce.customerservice.Customer;
 import com.ecommerce.customerservice.CustomerRepository;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @DataJpaTest
-@ActiveProfiles("test")
-@DisplayName("Customer Repository Unit Tests")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@PostgresIntegrationTest
+@DisplayName("CustomerRepository (PostgreSQL)")
 class CustomerRepositoryTest {
 
     @Autowired
-    private CustomerRepository customerRepository;
+    private CustomerRepository repository;
+    @Autowired
+    private EntityManager entityManager;
 
     @BeforeEach
     void setUp() {
-        customerRepository.deleteAll();
+        repository.deleteAllInBatch();
+    }
+
+    private Customer save(String name, String email) {
+        return repository.saveAndFlush(Customer.builder().name(name).email(email).build());
     }
 
     @Test
-    @DisplayName("Should save and retrieve customer successfully")
-    void testSaveCustomer() {
-        Customer customer = Customer.builder()
-            .name("John Doe")
-            .email("john@example.com")
-            .build();
+    @DisplayName("a customer is stored with a version and timestamps")
+    void roundTrip() {
+        Customer saved = save("John Doe", "john@example.com");
+        entityManager.clear();
 
-        Customer savedCustomer = customerRepository.save(customer);
-
-        assertThat(savedCustomer).isNotNull();
-        assertThat(savedCustomer.getId()).isNotNull();
-        assertThat(savedCustomer.getName()).isEqualTo("John Doe");
-        assertThat(savedCustomer.getEmail()).isEqualTo("john@example.com");
+        Customer found = repository.findById(saved.getId()).orElseThrow();
+        assertThat(found.getVersion()).isZero();
+        assertThat(found.getCreatedAt()).isNotNull();
     }
 
     @Test
-    @DisplayName("Should find customer by ID")
-    void testFindCustomerById() {
-        Customer customer = Customer.builder()
-            .name("Jane Doe")
-            .email("jane@example.com")
-            .build();
-        Customer savedCustomer = customerRepository.save(customer);
+    @DisplayName("the database enforces unique emails")
+    void uniqueEmail() {
+        save("John Doe", "john@example.com");
 
-        Customer foundCustomer = customerRepository.findById(savedCustomer.getId()).orElse(null);
-
-        assertThat(foundCustomer).isNotNull();
-        assertThat(foundCustomer.getId()).isEqualTo(savedCustomer.getId());
-        assertThat(foundCustomer.getEmail()).isEqualTo("jane@example.com");
+        assertThatThrownBy(() -> save("Someone Else", "john@example.com")).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    @DisplayName("Should return empty when customer not found")
-    void testFindCustomerByIdNotFound() {
-        var result = customerRepository.findById(999L);
+    @DisplayName("existsByEmail and existsByEmailAndIdNot tell 'taken' from 'mine'")
+    void emailExistence() {
+        Customer john = save("John Doe", "john@example.com");
+        Customer jane = save("Jane Doe", "jane@example.com");
 
-        assertThat(result).isEmpty();
+        assertThat(repository.existsByEmail("john@example.com")).isTrue();
+        assertThat(repository.existsByEmail("nobody@example.com")).isFalse();
+        assertThat(repository.existsByEmailAndIdNot("john@example.com", john.getId())).as("it is mine").isFalse();
+        assertThat(repository.existsByEmailAndIdNot("john@example.com", jane.getId())).as("it is John's").isTrue();
     }
 
     @Test
-    @DisplayName("Should update customer successfully")
-    void testUpdateCustomer() {
-        Customer customer = Customer.builder()
-            .name("Old Name")
-            .email("old@example.com")
-            .build();
-        Customer savedCustomer = customerRepository.save(customer);
+    @DisplayName("two writers holding the same version cannot both win")
+    void optimisticLocking() {
+        Customer saved = save("John Doe", "john@example.com");
+        entityManager.clear();
+        Customer copyA = repository.findById(saved.getId()).orElseThrow();
+        entityManager.detach(copyA);
+        Customer copyB = repository.findById(saved.getId()).orElseThrow();
+        entityManager.detach(copyB);
 
-        savedCustomer.setName("New Name");
-        savedCustomer.setEmail("new@example.com");
-        customerRepository.save(savedCustomer);
+        copyA.setName("From A");
+        repository.saveAndFlush(copyA);
+        copyB.setName("From B");
 
-        Customer updatedCustomer = customerRepository.findById(savedCustomer.getId()).orElse(null);
-
-        assertThat(updatedCustomer).isNotNull();
-        assertThat(updatedCustomer.getName()).isEqualTo("New Name");
-        assertThat(updatedCustomer.getEmail()).isEqualTo("new@example.com");
-    }
-
-    @Test
-    @DisplayName("Should delete customer successfully")
-    void testDeleteCustomer() {
-        Customer customer = Customer.builder()
-            .name("To Delete")
-            .email("delete@example.com")
-            .build();
-        Customer savedCustomer = customerRepository.save(customer);
-
-        customerRepository.deleteById(savedCustomer.getId());
-
-        var result = customerRepository.findById(savedCustomer.getId());
-
-        assertThat(result).isEmpty();
-    }
-
-    @Test
-    @DisplayName("Should check if customer exists")
-    void testExistsById() {
-        Customer customer = Customer.builder()
-            .name("Test")
-            .email("test@example.com")
-            .build();
-        Customer savedCustomer = customerRepository.save(customer);
-
-        assertThat(customerRepository.existsById(savedCustomer.getId())).isTrue();
-        assertThat(customerRepository.existsById(999L)).isFalse();
-    }
-
-    @Test
-    @DisplayName("Should count all customers")
-    void testCountCustomers() {
-        for (int i = 1; i <= 5; i++) {
-            Customer customer = Customer.builder()
-                .name("Customer " + i)
-                .email("customer" + i + "@example.com")
-                .build();
-            customerRepository.save(customer);
-        }
-
-        long count = customerRepository.count();
-
-        assertThat(count).isEqualTo(5);
-    }
-
-    @Test
-    @DisplayName("Should return all customers")
-    void testFindAllCustomers() {
-        for (int i = 1; i <= 3; i++) {
-            Customer customer = Customer.builder()
-                .name("Customer " + i)
-                .email("customer" + i + "@example.com")
-                .build();
-            customerRepository.save(customer);
-        }
-
-        var customers = customerRepository.findAll();
-
-        assertThat(customers).hasSize(3);
-        assertThat(customers).extracting("name")
-            .containsExactlyInAnyOrder("Customer 1", "Customer 2", "Customer 3");
-    }
-
-    @Test
-    @DisplayName("Should persist timestamps on save")
-    void testTimestampPersistence() {
-        Customer customer = Customer.builder()
-            .name("Timestamp Test")
-            .email("timestamp@example.com")
-            .build();
-
-        Customer savedCustomer = customerRepository.save(customer);
-
-        assertThat(savedCustomer.getCreatedAt()).isNotNull();
-        assertThat(savedCustomer.getUpdatedAt()).isNotNull();
+        assertThatThrownBy(() -> repository.saveAndFlush(copyB)).isInstanceOf(ObjectOptimisticLockingFailureException.class);
     }
 }

@@ -1,23 +1,20 @@
 package com.ecommerce.paymentservice.service;
 
-import com.ecommerce.common.config.CacheConfig;
 import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
-import com.ecommerce.common.enums.PaymentStatus;
-import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.events.EventPublisher;
+import com.ecommerce.common.events.PaymentFailedEvent;
+import com.ecommerce.common.events.PaymentProcessedEvent;
+import com.ecommerce.common.events.RefundCompletedEvent;
 import com.ecommerce.common.exception.BusinessException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
-import com.ecommerce.common.eventsourcing.EventSourcingService;
+import com.ecommerce.common.exception.UnprocessableEntityException;
 import com.ecommerce.paymentservice.Payment;
 import com.ecommerce.paymentservice.PaymentRepository;
-import com.ecommerce.paymentservice.dto.ProcessPaymentRequest;
 import com.ecommerce.paymentservice.dto.PaymentResponse;
+import com.ecommerce.paymentservice.gateway.PaymentGateway;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -25,155 +22,134 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Set;
 
+/**
+ * The one place money moves. Charging happens only here, driven by the saga ({@link PaymentSagaHandler});
+ * there is no REST endpoint that creates a charge, so there is exactly one owner of the charge command and no
+ * second path to reconcile. Back office can read payments and refund a captured one.
+ *
+ * <p>The processor is called with a stable idempotency key per order, so if the surrounding transaction is
+ * rolled back after the processor said yes, the retry gets the same answer instead of charging twice. Workflow
+ * state (payment status) is never cached.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 @Transactional
 public class PaymentService {
 
+    static final Set<String> SORTABLE_FIELDS = Set.of("id", "orderId", "amount", "status", "createdAt", "updatedAt");
+
     private final PaymentRepository paymentRepository;
+    private final PaymentGateway gateway;
     private final EventPublisher eventPublisher;
-    private final EventSourcingService eventSourcingService;
 
-    private static final String KAFKA_TOPIC_PAYMENT_PROCESSED = "payment-processed";
-    private static final String KAFKA_TOPIC_PAYMENT_FAILED = "payment-failed";
+    // ------------------------------------------------------------------ reading
 
-    /**
-     * Processes a payment and publishes an event.
-     *
-     * @param request the payment processing request
-     * @return the processed payment response
-     */
-    @CacheEvict(value = CacheConfig.PAYMENTS_CACHE, allEntries = true)
-    public PaymentResponse processPayment(ProcessPaymentRequest request) {
-        log.info("Processing payment for order: {}, amount: {}", request.getOrderId(), request.getAmount());
-
-        Payment payment = Payment.builder()
-            .orderId(request.getOrderId())
-            .amount(request.getAmount())
-            .status(PaymentStatus.PROCESSING)
-            .build();
-
-        Payment savedPayment;
-        try {
-            // saveAndFlush, not save: this method is @Transactional at the
-            // class level, so a plain save() only queues the INSERT -
-            // Hibernate wouldn't actually execute it (and so wouldn't hit
-            // the unique constraint below) until the transaction commits,
-            // which happens after this method returns and well outside
-            // this try/catch. Flushing forces it to happen now.
-            savedPayment = paymentRepository.saveAndFlush(payment);
-        } catch (DataIntegrityViolationException e) {
-            // Unique constraint on orderId (see
-            // V7__Enforce_One_Payment_Per_Order.sql) - a payment for this
-            // order already exists, either from an earlier call here or
-            // from PaymentEventListener's saga-driven path reacting to the
-            // same order. Surface this as a clean 400, not a raw 500.
-            throw new BusinessException(
-                "A payment already exists for order " + request.getOrderId(), "PAYMENT_ALREADY_EXISTS", e);
-        }
-
-        // Simulate payment processing (in real scenario, call payment gateway)
-        savedPayment.setStatus(PaymentStatus.PROCESSED);
-        Payment processedPayment = paymentRepository.save(savedPayment);
-
-        log.info("Payment processed successfully with ID: {}", processedPayment.getId());
-        publishPaymentProcessedEvent(processedPayment);
-
-        return mapToResponse(processedPayment);
-    }
-
-    /**
-     * Retrieves a payment by ID.
-     *
-     * @param id the payment ID
-     * @return the payment response
-     * @throws ResourceNotFoundException if payment not found
-     */
     @Transactional(readOnly = true)
-    @Cacheable(value = CacheConfig.PAYMENTS_CACHE, key = "#id")
     public PaymentResponse getPayment(Long id) {
-        log.info("Fetching payment with ID: {}", id);
-
-        Payment payment = paymentRepository.findById(id)
-            .orElseThrow(() -> new ResourceNotFoundException("Payment", id));
-
-        return mapToResponse(payment);
+        return mapToResponse(paymentRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Payment", id)));
     }
 
-    /**
-     * Retrieves all payments with pagination.
-     *
-     * @param pageNumber the page number (0-indexed)
-     * @param pageSize the page size
-     * @param sortBy the field to sort by
-     * @return paged payment responses
-     */
     @Transactional(readOnly = true)
-    @Cacheable(value = CacheConfig.PAYMENTS_CACHE, key = "'all:' + #pageNumber + ':' + #pageSize + ':' + #sortBy")
+    public PaymentResponse getPaymentByOrder(Long orderId) {
+        return mapToResponse(paymentRepository.findByOrderId(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Payment for order " + orderId + " not found")));
+    }
+
+    @Transactional(readOnly = true)
     public PagedResponse<PaymentResponse> getAllPayments(int pageNumber, int pageSize, String sortBy) {
-        log.info("Fetching payments - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
-
-        pageSize = Math.min(pageSize, ApiConstants.MAX_PAGE_SIZE);
-
-        Pageable pageable = PageRequest.of(pageNumber, pageSize, Sort.by(sortBy).ascending());
+        if (!SORTABLE_FIELDS.contains(sortBy)) {
+            throw new BusinessException("Cannot sort by '" + sortBy + "'. Allowed: " + SORTABLE_FIELDS, "INVALID_SORT_FIELD");
+        }
+        int size = Math.min(Math.max(pageSize, 1), ApiConstants.MAX_PAGE_SIZE);
+        Pageable pageable = PageRequest.of(Math.max(pageNumber, 0), size, Sort.by(sortBy).ascending());
         Page<Payment> page = paymentRepository.findAll(pageable);
-
-        List<PaymentResponse> responses = page.getContent()
-            .stream()
-            .map(this::mapToResponse)
-            .toList();
-
-        return PagedResponse.of(responses, pageNumber, pageSize, page.getTotalElements());
+        List<PaymentResponse> responses = page.getContent().stream().map(this::mapToResponse).toList();
+        return PagedResponse.of(responses, pageNumber, size, page.getTotalElements());
     }
 
+    // ------------------------------------------------------------------ the charge (saga only)
+
     /**
-     * Refunds a payment.
-     *
-     * @param id the payment ID
-     * @return the refunded payment response
-     * @throws ResourceNotFoundException if payment not found
+     * Charges an order: authorize, then capture. A processor <em>decline</em> is a normal outcome - the payment
+     * becomes FAILED and {@code payment.failed} is announced (which cancels the order). If the processor cannot be
+     * reached the exception propagates, nothing is saved, and the Kafka error handler retries.
+     * The caller guarantees no payment exists for the order yet.
      */
-    @CacheEvict(value = CacheConfig.PAYMENTS_CACHE, allEntries = true)
+    public Payment charge(Long orderId, Long customerId, BigDecimal amount, String currency) {
+        Payment payment = paymentRepository.saveAndFlush(Payment.pending(orderId, customerId, amount, currency));
+
+        PaymentGateway.Outcome authorization = gateway.authorize("order-" + orderId, amount, currency);
+        if (!authorization.approved()) {
+            return decline(payment, authorization.declineReason());
+        }
+        payment.authorized(authorization.reference());
+
+        PaymentGateway.Outcome capture = gateway.capture("order-" + orderId, authorization.reference());
+        if (!capture.approved()) {
+            return decline(payment, capture.declineReason());
+        }
+        payment.captured(capture.reference());
+        paymentRepository.saveAndFlush(payment);
+
+        eventPublisher.publish(new PaymentProcessedEvent(payment.getId(), orderId, customerId, amount, currency));
+        log.info("Payment {} captured for order {}: {} {}", payment.getId(), orderId, amount, currency);
+        return payment;
+    }
+
+    private Payment decline(Payment payment, String reason) {
+        payment.failed(reason);
+        paymentRepository.saveAndFlush(payment);
+        eventPublisher.publish(new PaymentFailedEvent(payment.getOrderId(), payment.getCustomerId(), reason));
+        log.warn("Payment {} for order {} declined: {}", payment.getId(), payment.getOrderId(), reason);
+        return payment;
+    }
+
+    // ------------------------------------------------------------------ refunds
+
+    /** Back-office refund. Only a CAPTURED payment can be refunded; anything else is a 409. */
     public PaymentResponse refundPayment(Long id) {
-        log.info("Processing refund for payment: {}", id);
-
-        Payment payment = paymentRepository.findById(id)
-            .orElseThrow(() -> new ResourceNotFoundException("Payment", id));
-
-        payment.setStatus(PaymentStatus.REFUNDED);
-        Payment refundedPayment = paymentRepository.save(payment);
-
-        log.info("Payment refunded successfully");
-        return mapToResponse(refundedPayment);
+        Payment payment = paymentRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Payment", id));
+        return mapToResponse(refund(payment));
     }
 
     /**
-     * Publishes payment processed event to Kafka.
-     *
-     * @param payment the processed payment
+     * Gives the captured money back through the processor (idempotently, keyed by the payment), marks the payment
+     * REFUNDED and announces {@code refund.completed}. Refusing an illegal refund is the state machine's job: a
+     * payment that is not CAPTURED throws.
      */
-    private void publishPaymentProcessedEvent(Payment payment) {
-        PaymentProcessedEvent event = new PaymentProcessedEvent(
-            payment.getId(),
-            payment.getOrderId(),
-            payment.getAmount()
-        );
-
-        eventPublisher.publishEvent(event, KAFKA_TOPIC_PAYMENT_PROCESSED);
-        log.info("PaymentProcessedEvent published successfully for payment {}", payment.getId());
+    Payment refund(Payment payment) {
+        payment.requireRefundable();
+        String key = "refund-" + payment.getId();
+        PaymentGateway.Outcome outcome = gateway.refund(key, payment.getProcessorReference(), payment.getAmount());
+        if (!outcome.approved()) {
+            throw new UnprocessableEntityException("The payment processor refused the refund: " + outcome.declineReason(), "REFUND_DECLINED");
+        }
+        payment.refunded(outcome.reference());
+        paymentRepository.saveAndFlush(payment);
+        eventPublisher.publish(new RefundCompletedEvent(payment.getOrderId(), payment.getId(), payment.getCustomerId(),
+                payment.getAmount(), payment.getCurrency()));
+        log.info("Payment {} refunded ({} {})", payment.getId(), payment.getAmount(), payment.getCurrency());
+        return payment;
     }
 
-    private PaymentResponse mapToResponse(Payment payment) {
+    PaymentResponse mapToResponse(Payment payment) {
         return PaymentResponse.builder()
-            .id(payment.getId())
-            .orderId(payment.getOrderId())
-            .amount(payment.getAmount())
-            .status(payment.getStatus())
-            .createdAt(payment.getCreatedAt())
-            .updatedAt(payment.getUpdatedAt())
-            .build();
+                .id(payment.getId())
+                .orderId(payment.getOrderId())
+                .customerId(payment.getCustomerId())
+                .amount(payment.getAmount())
+                .currency(payment.getCurrency())
+                .status(payment.getStatus())
+                .processorReference(payment.getProcessorReference())
+                .failureReason(payment.getFailureReason())
+                .version(payment.getVersion())
+                .createdAt(payment.getCreatedAt())
+                .updatedAt(payment.getUpdatedAt())
+                .build();
     }
 }

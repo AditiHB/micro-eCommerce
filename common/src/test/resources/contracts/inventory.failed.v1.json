@@ -1,0 +1,11 @@
+{
+  "eventId" : "evt-inventory.failed",
+  "occurredAt" : "2026-01-01T10:15:30Z",
+  "aggregateId" : "42",
+  "aggregateType" : "Inventory",
+  "version" : 1,
+  "orderId" : 42,
+  "customerId" : 7,
+  "reason" : "Insufficient stock for SKU-001",
+  "eventType" : "inventory.failed"
+}

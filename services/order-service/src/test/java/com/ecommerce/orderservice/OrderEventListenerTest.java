@@ -1,227 +1,80 @@
 package com.ecommerce.orderservice;
 
-import com.ecommerce.common.enums.OrderStatus;
-import com.ecommerce.common.events.DlqPublisher;
-import com.ecommerce.common.events.InventoryFailedEvent;
-import com.ecommerce.common.events.OrderCancelledEvent;
-import com.ecommerce.common.events.PaymentFailedEvent;
-import com.ecommerce.common.events.PaymentProcessedEvent;
-import com.ecommerce.common.events.RefundCompletedEvent;
-import com.ecommerce.common.events.EventPublisher;
-import com.ecommerce.orderservice.dto.OrderResponse;
-import com.ecommerce.orderservice.service.OrderService;
-import org.junit.jupiter.api.BeforeEach;
+import com.ecommerce.common.events.InventoryReservedEvent;
+import com.ecommerce.common.events.Topics;
+import com.ecommerce.common.testsupport.EventSamples;
+import com.ecommerce.orderservice.service.OrderSagaHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.annotation.KafkaListener;
 
-import java.math.BigDecimal;
-import java.util.Optional;
-import java.util.UUID;
+import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.stream.Collectors;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
-@ExtendWith(MockitoExtension.class)
-@DisplayName("OrderEventListener Unit Tests")
+@DisplayName("OrderEventListener")
 class OrderEventListenerTest {
 
-    @Mock
-    private OrderRepository repository;
+    private final OrderSagaHandler handler = mock(OrderSagaHandler.class);
+    private final OrderEventListener listener = new OrderEventListener(handler);
 
-    @Mock
-    private OrderService orderService;
+    @Test
+    @DisplayName("each saga event is handed to the transactional handler")
+    void delegates() {
+        var reserved = EventSamples.inventoryReserved();
+        var failed = EventSamples.inventoryFailed();
+        var processed = EventSamples.paymentProcessed();
+        var paymentFailed = EventSamples.paymentFailed();
+        var refunded = EventSamples.refundCompleted();
 
-    @Mock
-    private EventPublisher eventPublisher;
+        listener.handleInventoryReserved(reserved);
+        listener.handleInventoryFailed(failed);
+        listener.handlePaymentProcessed(processed);
+        listener.handlePaymentFailed(paymentFailed);
+        listener.handleRefundCompleted(refunded);
 
-    @Mock
-    private DlqPublisher dlqPublisher;
-
-    @Mock
-    private Acknowledgment acknowledgment;
-
-    @InjectMocks
-    private OrderEventListener listener;
-
-    private PaymentProcessedEvent paymentProcessedEvent;
-    private InventoryFailedEvent inventoryFailedEvent;
-    private PaymentFailedEvent paymentFailedEvent;
-    private RefundCompletedEvent refundCompletedEvent;
-    private Order order;
-    private OrderResponse orderResponse;
-
-    @BeforeEach
-    void setUp() {
-        Long orderId = 123L;
-        String eventId = UUID.randomUUID().toString();
-
-        paymentProcessedEvent = new PaymentProcessedEvent(1L, orderId, BigDecimal.valueOf(99.99));
-        paymentProcessedEvent.setEventId(eventId);
-
-        inventoryFailedEvent = new InventoryFailedEvent(orderId);
-        inventoryFailedEvent.setEventId(eventId);
-
-        paymentFailedEvent = new PaymentFailedEvent(orderId);
-        paymentFailedEvent.setEventId(eventId);
-
-        refundCompletedEvent = new RefundCompletedEvent(orderId, 1L, BigDecimal.valueOf(99.99));
-        refundCompletedEvent.setEventId(eventId);
-
-        order = Order.builder()
-            .id(123L)
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.PENDING)
-            .build();
-
-        orderResponse = OrderResponse.builder()
-            .id(123L)
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.CANCELLED)
-            .build();
+        verify(handler).onInventoryReserved(reserved);
+        verify(handler).onInventoryFailed(failed);
+        verify(handler).onPaymentProcessed(processed);
+        verify(handler).onPaymentFailed(paymentFailed);
+        verify(handler).onRefundCompleted(refunded);
     }
 
     @Test
-    @DisplayName("Should update order status to COMPLETED when payment is processed")
-    void testHandlePaymentProcessedSuccess() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.COMPLETED))
-            .thenReturn(Optional.of(orderResponse));
+    @DisplayName("a failing handler is NOT swallowed: the exception reaches the container so it can retry and dead-letter")
+    void failuresPropagate() {
+        InventoryReservedEvent event = EventSamples.inventoryReserved();
+        doThrow(new IllegalStateException("database blip")).when(handler).onInventoryReserved(event);
 
-        listener.handlePaymentProcessed(paymentProcessedEvent, acknowledgment);
-
-        verify(orderService).updateOrderStatusIfPresent(123L, OrderStatus.COMPLETED);
-        verify(acknowledgment).acknowledge();
+        assertThatThrownBy(() -> listener.handleInventoryReserved(event)).hasMessage("database blip");
     }
 
     @Test
-    @DisplayName("Should handle payment processed when order not found")
-    void testHandlePaymentProcessedOrderNotFound() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.COMPLETED))
-            .thenReturn(Optional.empty());
+    @DisplayName("it listens to exactly the topics of the saga steps it reacts to, in its own consumer group")
+    void subscriptions() {
+        Map<String, String> topicToGroup = Arrays.stream(OrderEventListener.class.getDeclaredMethods())
+                .map(m -> m.getAnnotation(KafkaListener.class))
+                .filter(a -> a != null)
+                .collect(Collectors.toMap(a -> a.topics()[0], KafkaListener::groupId));
 
-        listener.handlePaymentProcessed(paymentProcessedEvent, acknowledgment);
-
-        verify(orderService).updateOrderStatusIfPresent(123L, OrderStatus.COMPLETED);
-        verify(acknowledgment).acknowledge();
+        assertThat(topicToGroup).containsOnlyKeys(Topics.INVENTORY_RESERVED, Topics.INVENTORY_FAILED,
+                Topics.PAYMENT_PROCESSED, Topics.PAYMENT_FAILED, Topics.REFUND_COMPLETED);
+        assertThat(topicToGroup.values()).containsOnly(Topics.GROUP_ORDER);
     }
 
     @Test
-    @DisplayName("Should cancel order when inventory fails")
-    void testHandleInventoryFailedSuccess() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED))
-            .thenReturn(Optional.of(orderResponse));
-
-        listener.handleInventoryFailed(inventoryFailedEvent, acknowledgment);
-
-        verify(orderService).updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED);
-        verify(eventPublisher).publishEvent(any(OrderCancelledEvent.class), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should handle inventory failed when order not found")
-    void testHandleInventoryFailedOrderNotFound() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED))
-            .thenReturn(Optional.empty());
-
-        listener.handleInventoryFailed(inventoryFailedEvent, acknowledgment);
-
-        verify(orderService).updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED);
-        verify(eventPublisher, never()).publishEvent(any(OrderCancelledEvent.class), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should cancel order when payment fails")
-    void testHandlePaymentFailedSuccess() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED))
-            .thenReturn(Optional.of(orderResponse));
-
-        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
-
-        verify(orderService).updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED);
-        verify(eventPublisher).publishEvent(any(OrderCancelledEvent.class), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should handle payment failed when order not found")
-    void testHandlePaymentFailedOrderNotFound() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED))
-            .thenReturn(Optional.empty());
-
-        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
-
-        verify(orderService).updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED);
-        verify(eventPublisher, never()).publishEvent(any(OrderCancelledEvent.class), anyString(), anyString(), anyString());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should log completion when refund is completed")
-    void testHandleRefundCompletedSuccess() {
-        when(repository.findById(123L)).thenReturn(Optional.of(order));
-
-        listener.handleRefundCompleted(refundCompletedEvent, acknowledgment);
-
-        verify(repository).findById(123L);
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should route to DLQ and still ack when refund completed processing throws")
-    void testHandleRefundCompletedException() {
-        when(repository.findById(123L)).thenThrow(new RuntimeException("Database error"));
-
-        listener.handleRefundCompleted(refundCompletedEvent, acknowledgment);
-
-        verify(dlqPublisher).publish(eq(refundCompletedEvent), eq("refund-completed"), any(RuntimeException.class));
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should route to DLQ and still ack when payment processed handling throws")
-    void testHandlePaymentProcessedException() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.COMPLETED))
-            .thenThrow(new RuntimeException("Database error"));
-
-        listener.handlePaymentProcessed(paymentProcessedEvent, acknowledgment);
-
-        verify(dlqPublisher).publish(eq(paymentProcessedEvent), eq("payment-processed"), any(RuntimeException.class));
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should route to DLQ and still ack when inventory failed processing throws")
-    void testHandleInventoryFailedException() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED))
-            .thenThrow(new RuntimeException("Database error"));
-
-        listener.handleInventoryFailed(inventoryFailedEvent, acknowledgment);
-
-        verify(dlqPublisher).publish(eq(inventoryFailedEvent), eq("inventory-failed"), any(RuntimeException.class));
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should route to DLQ and still ack when payment failed processing throws")
-    void testHandlePaymentFailedException() {
-        when(orderService.updateOrderStatusIfPresent(123L, OrderStatus.CANCELLED))
-            .thenThrow(new RuntimeException("Database error"));
-
-        listener.handlePaymentFailed(paymentFailedEvent, acknowledgment);
-
-        verify(dlqPublisher).publish(eq(paymentFailedEvent), eq("payment-failed"), any(RuntimeException.class));
-        verify(acknowledgment).acknowledge();
+    @DisplayName("no listener method takes an Acknowledgment: offsets are committed by the container after success")
+    void noManualAcks() {
+        for (Method method : OrderEventListener.class.getDeclaredMethods()) {
+            assertThat(method.getParameterTypes()).as(method.getName())
+                    .noneMatch(t -> t.getName().endsWith("Acknowledgment"));
+        }
     }
 }

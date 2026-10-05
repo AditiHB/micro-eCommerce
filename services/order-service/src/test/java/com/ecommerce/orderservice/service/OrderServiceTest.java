@@ -1,231 +1,166 @@
 package com.ecommerce.orderservice.service;
 
-import com.ecommerce.common.constants.ApiConstants;
-import com.ecommerce.common.config.CacheConfig;
-import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.enums.OrderStatus;
 import com.ecommerce.common.events.EventPublisher;
-import com.ecommerce.common.events.OrderCreatedEvent;
+import com.ecommerce.common.events.OrderCancelledEvent;
+import com.ecommerce.common.exception.BusinessException;
+import com.ecommerce.common.exception.ConflictException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
-import com.ecommerce.common.eventsourcing.EventSourcingService;
 import com.ecommerce.orderservice.Order;
+import com.ecommerce.orderservice.OrderLine;
 import com.ecommerce.orderservice.OrderRepository;
-import com.ecommerce.orderservice.dto.CreateOrderRequest;
 import com.ecommerce.orderservice.dto.OrderResponse;
+import com.ecommerce.orderservice.exception.InvalidOrderTransitionException;
+import com.ecommerce.orderservice.idempotency.IdempotencyRecordRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+/** The rules of OrderService that need no database; persistence behaviour is in OrderServiceIntegrationTest. */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Order Service Unit Tests")
+@DisplayName("OrderService")
 class OrderServiceTest {
 
     @Mock
-    private OrderRepository orderRepository;
-
+    private OrderRepository orders;
     @Mock
-    private EventPublisher eventPublisher;
-
+    private IdempotencyRecordRepository idempotency;
     @Mock
-    private EventSourcingService eventSourcingService;
+    private EventPublisher events;
 
-    @InjectMocks
-    private OrderService orderService;
-
-    private Order testOrder;
-    private CreateOrderRequest createRequest;
+    private OrderService service;
 
     @BeforeEach
     void setUp() {
-        testOrder = Order.builder()
-            .id(1L)
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.PENDING)
-            .build();
+        service = new OrderService(orders, idempotency, events);
+    }
 
-        createRequest = CreateOrderRequest.builder()
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .build();
+    private Order order(OrderStatus status) {
+        Order order = Order.place(7L, "USD", List.of(
+                OrderLine.builder().productId("SKU-001").quantity(2).unitPrice(new BigDecimal("10.00")).build()));
+        order.setId(5L);
+        order.setVersion(0L);
+        if (status != OrderStatus.PENDING) {
+            order.transitionTo(status);
+        }
+        return order;
     }
 
     @Test
-    @DisplayName("Should create order successfully")
-    void testCreateOrder() {
-        when(orderRepository.save(any(Order.class))).thenReturn(testOrder);
+    @DisplayName("cancelling is a command: the order moves to CANCELLED and order.cancelled is announced")
+    void cancelAnnounces() {
+        Order order = order(OrderStatus.INVENTORY_RESERVED);
+        when(orders.findById(5L)).thenReturn(Optional.of(order));
 
-        OrderResponse response = orderService.createOrder(createRequest);
+        OrderResponse response = service.cancelOrder(5L, "Changed my mind");
 
-        assertThat(response).isNotNull();
-        assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getCustomerId()).isEqualTo(1L);
-        assertThat(response.getProductId()).isEqualTo("PROD-001");
-        assertThat(response.getQuantity()).isEqualTo(5);
-        assertThat(response.getStatus()).isEqualTo(OrderStatus.PENDING);
-        verify(orderRepository, times(1)).save(any(Order.class));
-        verify(eventPublisher, times(1)).publishEvent(any(OrderCreatedEvent.class), eq("order-created"));
+        assertThat(response.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        ArgumentCaptor<OrderCancelledEvent> event = ArgumentCaptor.forClass(OrderCancelledEvent.class);
+        verify(events).publish(event.capture(), isNull(), isNull());
+        assertThat(event.getValue().getOrderId()).isEqualTo(5L);
+        assertThat(event.getValue().getCustomerId()).isEqualTo(7L);
+        assertThat(event.getValue().getReason()).isEqualTo("Changed my mind");
     }
 
     @Test
-    @DisplayName("Should retrieve order by ID successfully")
-    void testGetOrder() {
-        when(orderRepository.findById(1L)).thenReturn(Optional.of(testOrder));
+    @DisplayName("cancelling a cancelled order is a harmless no-op: no second event")
+    void cancelIsIdempotent() {
+        when(orders.findById(5L)).thenReturn(Optional.of(order(OrderStatus.CANCELLED)));
 
-        OrderResponse response = orderService.getOrder(1L);
+        assertThat(service.cancelOrder(5L, "again").getStatus()).isEqualTo(OrderStatus.CANCELLED);
 
-        assertThat(response).isNotNull();
-        assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getCustomerId()).isEqualTo(1L);
-        verify(orderRepository, times(1)).findById(1L);
+        verify(events, never()).publish(any(), any(), any());
     }
 
     @Test
-    @DisplayName("Should throw ResourceNotFoundException when order not found")
-    void testGetOrderNotFound() {
-        when(orderRepository.findById(999L)).thenReturn(Optional.empty());
+    @DisplayName("a completed order cannot be cancelled (409) and nothing is announced")
+    void completedCannotBeCancelled() {
+        when(orders.findById(5L)).thenReturn(Optional.of(order(OrderStatus.COMPLETED)));
 
-        assertThatThrownBy(() -> orderService.getOrder(999L))
-            .isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.cancelOrder(5L, "too late")).isInstanceOf(InvalidOrderTransitionException.class);
 
-        verify(orderRepository, times(1)).findById(999L);
+        verify(events, never()).publish(any(), any(), any());
     }
 
     @Test
-    @DisplayName("Should retrieve all orders with pagination")
-    void testGetAllOrders() {
-        Order order2 = Order.builder()
-            .id(2L)
-            .customerId(2L)
-            .productId("PROD-002")
-            .quantity(3)
-            .status(OrderStatus.INVENTORY_RESERVED)
-            .build();
+    @DisplayName("back office cannot complete an order by hand - that would skip payment")
+    void cannotCompleteByHand() {
+        when(orders.findById(5L)).thenReturn(Optional.of(order(OrderStatus.PENDING)));
 
-        List<Order> orders = List.of(testOrder, order2);
-        Page<Order> page = new PageImpl<>(orders);
-
-        when(orderRepository.findAll(any(Pageable.class))).thenReturn(page);
-
-        PagedResponse<OrderResponse> response = orderService.getAllOrders(0, 10, "id");
-
-        assertThat(response).isNotNull();
-        assertThat(response.getContent()).hasSize(2);
-        assertThat(response.getPageNumber()).isEqualTo(0);
-        assertThat(response.getPageSize()).isEqualTo(10);
-        assertThat(response.getTotalElements()).isEqualTo(2);
-        verify(orderRepository, times(1)).findAll(any(Pageable.class));
+        assertThatThrownBy(() -> service.updateOrderStatus(5L, OrderStatus.COMPLETED))
+                .isInstanceOf(ConflictException.class)
+                .extracting(e -> ((ConflictException) e).getErrorCode()).isEqualTo("ORDER_STATUS_MANAGED_BY_SAGA");
+        assertThatThrownBy(() -> service.updateOrderStatus(5L, OrderStatus.INVENTORY_RESERVED))
+                .isInstanceOf(ConflictException.class);
     }
 
     @Test
-    @DisplayName("Should limit page size to maximum")
-    void testGetAllOrdersPageSizeLimit() {
-        int largePageSize = ApiConstants.MAX_PAGE_SIZE + 100;
-        Page<Order> page = new PageImpl<>(List.of(testOrder));
+    @DisplayName("setting CANCELLED by hand runs the cancel command, so the compensations still happen")
+    void manualCancelCompensates() {
+        when(orders.findById(5L)).thenReturn(Optional.of(order(OrderStatus.PENDING)));
 
-        when(orderRepository.findAll(any(Pageable.class))).thenReturn(page);
+        service.updateOrderStatus(5L, OrderStatus.CANCELLED);
 
-        orderService.getAllOrders(0, largePageSize, "id");
-
-        verify(orderRepository, times(1)).findAll(any(Pageable.class));
+        verify(events).publish(any(OrderCancelledEvent.class), isNull(), isNull());
     }
 
     @Test
-    @DisplayName("Should update order status successfully")
-    void testUpdateOrderStatus() {
-        Order updatedOrder = Order.builder()
-            .id(1L)
-            .customerId(1L)
-            .productId("PROD-001")
-            .quantity(5)
-            .status(OrderStatus.COMPLETED)
-            .build();
+    @DisplayName("an unknown order is a 404")
+    void unknownOrder() {
+        when(orders.findById(9L)).thenReturn(Optional.empty());
 
-        when(orderRepository.findById(1L)).thenReturn(Optional.of(testOrder));
-        when(orderRepository.save(any(Order.class))).thenReturn(updatedOrder);
-
-        OrderResponse response = orderService.updateOrderStatus(1L, OrderStatus.COMPLETED);
-
-        assertThat(response.getStatus()).isEqualTo(OrderStatus.COMPLETED);
-        verify(orderRepository, times(1)).findById(1L);
-        verify(orderRepository, times(1)).save(any(Order.class));
+        assertThatThrownBy(() -> service.getOrder(9L)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.cancelOrder(9L, "x")).isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
-    @DisplayName("Should throw exception when updating non-existent order")
-    void testUpdateOrderStatusNotFound() {
-        when(orderRepository.findById(999L)).thenReturn(Optional.empty());
+    @DisplayName("the saga deadline cancels an open order that is stale, and leaves a fresh or finished one alone")
+    void expire() {
+        Order stale = order(OrderStatus.PENDING);
+        stale.setUpdatedAt(LocalDateTime.now().minusMinutes(10));
+        Order fresh = order(OrderStatus.PENDING);
+        fresh.setUpdatedAt(LocalDateTime.now());
+        Order done = order(OrderStatus.COMPLETED);
+        done.setUpdatedAt(LocalDateTime.now().minusMinutes(10));
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(5);
+        when(orders.findById(1L)).thenReturn(Optional.of(stale));
+        when(orders.findById(2L)).thenReturn(Optional.of(fresh));
+        when(orders.findById(3L)).thenReturn(Optional.of(done));
 
-        assertThatThrownBy(() -> orderService.updateOrderStatus(999L, OrderStatus.COMPLETED))
-            .isInstanceOf(ResourceNotFoundException.class);
+        assertThat(service.expire(1L, cutoff, "timed out")).isTrue();
+        assertThat(service.expire(2L, cutoff, "timed out")).isFalse();
+        assertThat(service.expire(3L, cutoff, "timed out")).isFalse();
 
-        verify(orderRepository, times(1)).findById(999L);
-        verify(orderRepository, never()).save(any(Order.class));
+        assertThat(stale.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        verify(events).publish(any(OrderCancelledEvent.class), isNull(), isNull());
     }
 
     @Test
-    @DisplayName("Should properly map order to response")
-    void testMapToResponse() {
-        when(orderRepository.findById(1L)).thenReturn(Optional.of(testOrder));
-
-        OrderResponse response = orderService.getOrder(1L);
-
-        assertThat(response.getId()).isEqualTo(testOrder.getId());
-        assertThat(response.getCustomerId()).isEqualTo(testOrder.getCustomerId());
-        assertThat(response.getProductId()).isEqualTo(testOrder.getProductId());
-        assertThat(response.getQuantity()).isEqualTo(testOrder.getQuantity());
-        assertThat(response.getStatus()).isEqualTo(testOrder.getStatus());
-    }
-
-    @Test
-    @DisplayName("Should handle empty order list")
-    void testGetAllOrdersEmpty() {
-        Page<Order> emptyPage = new PageImpl<>(List.of());
-        when(orderRepository.findAll(any(Pageable.class))).thenReturn(emptyPage);
-
-        PagedResponse<OrderResponse> response = orderService.getAllOrders(0, 10, "id");
-
-        assertThat(response.getContent()).isEmpty();
-        assertThat(response.getTotalElements()).isEqualTo(0);
-    }
-
-    @Test
-    @DisplayName("Should publish order created event on order creation")
-    void testOrderCreatedEventPublished() {
-        when(orderRepository.save(any(Order.class))).thenReturn(testOrder);
-
-        orderService.createOrder(createRequest);
-
-        verify(eventPublisher, times(1)).publishEvent(any(OrderCreatedEvent.class), eq("order-created"));
-    }
-
-    @Test
-    @DisplayName("Should handle order status transitions")
-    void testOrderStatusTransitions() {
-        Order order = testOrder;
-        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
-        when(orderRepository.save(any(Order.class)))
-            .thenAnswer(invocation -> invocation.getArgument(0));
-
-        orderService.updateOrderStatus(1L, OrderStatus.INVENTORY_RESERVED);
-        orderService.updateOrderStatus(1L, OrderStatus.COMPLETED);
-
-        verify(orderRepository, times(2)).save(any(Order.class));
+    @DisplayName("sorting is limited to known fields; anything else is a 400, not a persistence exception")
+    void sortAllowList() {
+        assertThatThrownBy(() -> service.getAllOrders(0, 20, "customer.password"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo("INVALID_SORT_FIELD");
+        assertThatThrownBy(() -> service.getOrdersByCustomer(1L, 0, 20, "'; drop table orders; --"))
+                .isInstanceOf(BusinessException.class);
+        verify(orders, never()).findAll(any(org.springframework.data.domain.Pageable.class));
     }
 }

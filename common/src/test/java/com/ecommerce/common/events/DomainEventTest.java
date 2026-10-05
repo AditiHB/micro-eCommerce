@@ -1,101 +1,55 @@
 package com.ecommerce.common.events;
 
+import com.ecommerce.common.testsupport.EventSamples;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 
-@DisplayName("DomainEvent Unit Tests")
+@DisplayName("DomainEvent")
 class DomainEventTest {
 
     @Test
-    @DisplayName("Should create OrderCreatedEvent")
-    void testOrderCreatedEvent() {
-        OrderCreatedEvent event = new OrderCreatedEvent(123L, 456L, "product-789", 5);
+    @DisplayName("a new event gets a unique id, a UTC timestamp and its schema version")
+    void newEventDefaults() {
+        OrderCreatedEvent first = new OrderCreatedEvent(1L, 2L, List.of(), BigDecimal.ZERO, "USD");
+        OrderCreatedEvent second = new OrderCreatedEvent(1L, 2L, List.of(), BigDecimal.ZERO, "USD");
 
-        assertThat(event.getOrderId()).isEqualTo(123L);
-        assertThat(event.getCustomerId()).isEqualTo(456L);
-        assertThat(event.getProductId()).isEqualTo("product-789");
-        assertThat(event.getQuantity()).isEqualTo(5);
+        assertThat(first.getEventId()).isNotBlank().isNotEqualTo(second.getEventId());
+        assertThat(first.getOccurredAt()).isBeforeOrEqualTo(Instant.now());
+        assertThat(first.getVersion()).isEqualTo(1);
+        assertThat(first.getEventType()).isEqualTo("order.created");
     }
 
     @Test
-    @DisplayName("Should create OrderCancelledEvent")
-    void testOrderCancelledEvent() {
-        OrderCancelledEvent event = new OrderCancelledEvent(123L, "Customer requested cancellation");
-
-        assertThat(event.getOrderId()).isEqualTo(123L);
-        assertThat(event.getReason()).isEqualTo("Customer requested cancellation");
+    @DisplayName("the aggregate is the order, so every event of one order shares one Kafka key")
+    void sagaEventsOfOneOrderShareTheirKey() {
+        assertThat(EventSamples.all().values()).allSatisfy(event ->
+                assertThat(event.getAggregateId()).as(event.getEventType()).isEqualTo("42"));
     }
 
     @Test
-    @DisplayName("Should create PaymentProcessedEvent")
-    void testPaymentProcessedEvent() {
-        PaymentProcessedEvent event = new PaymentProcessedEvent(1L, 123L, BigDecimal.valueOf(99.99));
+    @DisplayName("order lines carry their priced total")
+    void lineTotals() {
+        OrderCreatedEvent event = EventSamples.orderCreated();
 
-        assertThat(event.getPaymentId()).isEqualTo(1L);
-        assertThat(event.getOrderId()).isEqualTo(123L);
-        assertThat(event.getAmount()).isEqualTo(BigDecimal.valueOf(99.99));
+        assertThat(event.getLines()).extracting(LineItem::getLineTotal)
+                .containsExactly(new BigDecimal("159.98"), new BigDecimal("12.99"));
+        assertThat(event.getTotalAmount()).isEqualByComparingTo("172.97");
     }
 
     @Test
-    @DisplayName("Should create PaymentFailedEvent")
-    void testPaymentFailedEvent() {
-        PaymentFailedEvent event = new PaymentFailedEvent(123L, "product-789", 5, "Insufficient funds");
+    @DisplayName("an undeclared event class falls back to its simple name and has no topic")
+    void undeclaredEvent() {
+        class Plain extends DomainEvent {
+        }
 
-        assertThat(event.getOrderId()).isEqualTo(123L);
-        assertThat(event.getProductId()).isEqualTo("product-789");
-        assertThat(event.getQuantity()).isEqualTo(5);
-        assertThat(event.getReason()).isEqualTo("Insufficient funds");
-    }
-
-    @Test
-    @DisplayName("Should create InventoryReservedEvent")
-    void testInventoryReservedEvent() {
-        InventoryReservedEvent event = new InventoryReservedEvent(456L, "product-123", 10);
-
-        assertThat(event.getOrderId()).isEqualTo(456L);
-        assertThat(event.getProductId()).isEqualTo("product-123");
-        assertThat(event.getQuantity()).isEqualTo(10);
-    }
-
-    @Test
-    @DisplayName("Should create InventoryReleasedEvent")
-    void testInventoryReleasedEvent() {
-        InventoryReleasedEvent event = new InventoryReleasedEvent(456L, "product-123", 10);
-
-        assertThat(event.getOrderId()).isEqualTo(456L);
-        assertThat(event.getProductId()).isEqualTo("product-123");
-        assertThat(event.getQuantity()).isEqualTo(10);
-    }
-
-    @Test
-    @DisplayName("Should create InventoryFailedEvent")
-    void testInventoryFailedEvent() {
-        InventoryFailedEvent event = new InventoryFailedEvent(456L);
-
-        assertThat(event.getOrderId()).isEqualTo(456L);
-    }
-
-    @Test
-    @DisplayName("Should create RefundInitiatedEvent")
-    void testRefundInitiatedEvent() {
-        RefundInitiatedEvent event = new RefundInitiatedEvent(123L, 1L, BigDecimal.valueOf(99.99), "Order cancelled");
-
-        assertThat(event.getPaymentId()).isEqualTo(1L);
-        assertThat(event.getOrderId()).isEqualTo(123L);
-        assertThat(event.getRefundAmount()).isEqualTo(BigDecimal.valueOf(99.99));
-    }
-
-    @Test
-    @DisplayName("Should create RefundCompletedEvent")
-    void testRefundCompletedEvent() {
-        RefundCompletedEvent event = new RefundCompletedEvent(123L, 1L, BigDecimal.valueOf(99.99));
-
-        assertThat(event.getPaymentId()).isEqualTo(1L);
-        assertThat(event.getOrderId()).isEqualTo(123L);
-        assertThat(event.getRefundAmount()).isEqualTo(BigDecimal.valueOf(99.99));
+        assertThat(new Plain().getEventType()).isEqualTo("Plain");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> EventCatalog.topicOf(Plain.class))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

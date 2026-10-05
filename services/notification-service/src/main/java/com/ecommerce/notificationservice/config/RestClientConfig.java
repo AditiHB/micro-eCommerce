@@ -1,39 +1,14 @@
 package com.ecommerce.notificationservice.config;
 
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.web.client.RestTemplateBuilder;
-import org.springframework.context.annotation.Bean;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.web.client.RestTemplate;
-
-import java.time.Duration;
 
 /**
- * REST client configuration for Notification Service's two outbound calls:
- * Customer Service (to resolve recipient email) and Order Service (to
- * resolve the customer owning an order).
+ * Notification-service's own configuration: switches on {@link NotificationProperties}. (The one outbound HTTP
+ * client - to the customer service - is built where it is used, in {@code CustomerClient}, with short explicit
+ * timeouts; the former shared RestTemplates with 30-second read timeouts are gone.)
  */
 @Configuration
-@Slf4j
-@RequiredArgsConstructor
+@EnableConfigurationProperties(NotificationProperties.class)
 public class RestClientConfig {
-
-    @Bean(name = "customerServiceRestTemplate")
-    public RestTemplate customerServiceRestTemplate(RestTemplateBuilder builder) {
-        log.info("Initializing RestTemplate for Customer Service");
-        return builder
-            .setConnectTimeout(Duration.ofSeconds(10))
-            .setReadTimeout(Duration.ofSeconds(30))
-            .build();
-    }
-
-    @Bean(name = "orderServiceRestTemplate")
-    public RestTemplate orderServiceRestTemplate(RestTemplateBuilder builder) {
-        log.info("Initializing RestTemplate for Order Service");
-        return builder
-            .setConnectTimeout(Duration.ofSeconds(10))
-            .setReadTimeout(Duration.ofSeconds(30))
-            .build();
-    }
 }

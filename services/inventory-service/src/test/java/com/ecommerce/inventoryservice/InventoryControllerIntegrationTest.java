@@ -1,234 +1,118 @@
 package com.ecommerce.inventoryservice;
 
-import com.ecommerce.inventoryservice.dto.CreateInventoryRequest;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
-import static org.hamcrest.Matchers.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.hamcrest.Matchers.hasSize;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest
 @AutoConfigureMockMvc(addFilters = false)
-@ActiveProfiles("test")
-@Tag("integration")
-@DisplayName("Inventory Controller Integration Tests")
+@PostgresIntegrationTest
+@WithMockUser(roles = "ADMIN")
+@DisplayName("Inventory API (full stack, PostgreSQL)")
 class InventoryControllerIntegrationTest {
+
+    private static final String INVENTORY = "/api/v1/inventory";
 
     @Autowired
     private MockMvc mockMvc;
-
     @Autowired
-    private InventoryRepository inventoryRepository;
-
+    private InventoryRepository inventory;
     @Autowired
-    private ObjectMapper objectMapper;
+    private InventoryReservationRepository reservations;
 
     @BeforeEach
     void setUp() {
-        inventoryRepository.deleteAll();
+        reservations.deleteAll();
+        inventory.deleteAll();
+    }
+
+    private long create(String sku, int quantity) throws Exception {
+        String body = mockMvc.perform(post(INVENTORY).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"productId\":\"" + sku + "\",\"quantity\":" + quantity + "}"))
+                .andExpect(status().isCreated()).andExpect(header().string("ETag", "\"0\""))
+                .andReturn().getResponse().getContentAsString();
+        return Long.parseLong(body.replaceAll(".*\"id\":(\\d+).*", "$1"));
     }
 
     @Test
-    @DisplayName("Should create inventory successfully")
-    void testCreateInventorySuccess() throws Exception {
-        CreateInventoryRequest request = CreateInventoryRequest.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-
-        mockMvc.perform(post("/api/inventory")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(request)))
-            .andExpect(status().isCreated())
-            .andExpect(jsonPath("$.id").exists())
-            .andExpect(jsonPath("$.productId").value("PROD-001"))
-            .andExpect(jsonPath("$.quantity").value(100))
-            .andExpect(jsonPath("$.createdAt").exists())
-            .andExpect(jsonPath("$.updatedAt").exists());
+    @DisplayName("an item can be created with zero stock")
+    void createWithZero() throws Exception {
+        mockMvc.perform(post(INVENTORY).contentType(MediaType.APPLICATION_JSON).content("{\"productId\":\"SKU-Z\",\"quantity\":0}"))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.quantity").value(0));
     }
 
     @Test
-    @DisplayName("Should fail to create inventory with blank product ID")
-    void testCreateInventoryBlankProductId() throws Exception {
-        CreateInventoryRequest request = CreateInventoryRequest.builder()
-            .productId("")
-            .quantity(100)
-            .build();
+    @DisplayName("a duplicate product is a 409 problem; a negative quantity is a 400 problem")
+    void createErrors() throws Exception {
+        create("SKU-1", 5);
 
-        mockMvc.perform(post("/api/inventory")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(request)))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
-            .andExpect(jsonPath("$.errors.productId").exists());
+        mockMvc.perform(post(INVENTORY).contentType(MediaType.APPLICATION_JSON).content("{\"productId\":\"SKU-1\",\"quantity\":1}"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("INVENTORY_ALREADY_EXISTS"));
+        mockMvc.perform(post(INVENTORY).contentType(MediaType.APPLICATION_JSON).content("{\"productId\":\"SKU-2\",\"quantity\":-1}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errors.quantity").exists());
     }
 
     @Test
-    @DisplayName("Should fail to create inventory with invalid quantity")
-    void testCreateInventoryInvalidQuantity() throws Exception {
-        CreateInventoryRequest request = CreateInventoryRequest.builder()
-            .productId("PROD-001")
-            .quantity(0)
-            .build();
+    @DisplayName("reserve and release move stock; reserving more than is left is a 409 and changes nothing")
+    void reserveAndRelease() throws Exception {
+        long id = create("SKU-1", 10);
 
-        mockMvc.perform(post("/api/inventory")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(objectMapper.writeValueAsString(request)))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.errorCode").value("VALIDATION_FAILED"))
-            .andExpect(jsonPath("$.errors.quantity").exists());
+        mockMvc.perform(post(INVENTORY + "/" + id + "/reserve").param("quantity", "4"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.quantity").value(6)).andExpect(header().string("ETag", "\"1\""));
+        mockMvc.perform(post(INVENTORY + "/" + id + "/reserve").param("quantity", "7"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_STOCK"));
+        mockMvc.perform(post(INVENTORY + "/" + id + "/reserve").param("quantity", "6"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.quantity").value(0));
+        mockMvc.perform(post(INVENTORY + "/" + id + "/release").param("quantity", "3"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.quantity").value(3));
     }
 
     @Test
-    @DisplayName("Should get inventory by ID")
-    void testGetInventoryById() throws Exception {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-002")
-            .quantity(250)
-            .build();
-        Inventory savedInventory = inventoryRepository.save(inventory);
+    @DisplayName("a stock-take may set the level to zero; a negative level is a 400")
+    void stockTake() throws Exception {
+        long id = create("SKU-1", 10);
 
-        mockMvc.perform(get("/api/inventory/" + savedInventory.getId())
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.id").value(savedInventory.getId()))
-            .andExpect(jsonPath("$.productId").value("PROD-002"))
-            .andExpect(jsonPath("$.quantity").value(250));
+        mockMvc.perform(put(INVENTORY + "/" + id).param("quantity", "0")).andExpect(status().isOk()).andExpect(jsonPath("$.quantity").value(0));
+        mockMvc.perform(put(INVENTORY + "/" + id).param("quantity", "-3")).andExpect(status().isBadRequest());
     }
 
     @Test
-    @DisplayName("Should return 404 when inventory not found")
-    void testGetInventoryNotFound() throws Exception {
-        mockMvc.perform(get("/api/inventory/999")
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isNotFound())
-            .andExpect(jsonPath("$.errorCode").value("RESOURCE_NOT_FOUND"))
-            .andExpect(jsonPath("$.message").value(containsString("Inventory not found")));
+    @DisplayName("If-Match protects against a lost update: a stale version is a 412, the current one is accepted")
+    void ifMatch() throws Exception {
+        long id = create("SKU-1", 10);
+
+        mockMvc.perform(put(INVENTORY + "/" + id).param("quantity", "20").header("If-Match", "\"0\"")).andExpect(status().isOk());
+        mockMvc.perform(put(INVENTORY + "/" + id).param("quantity", "30").header("If-Match", "\"0\""))
+                .andExpect(status().isPreconditionFailed());
+        mockMvc.perform(get(INVENTORY + "/" + id)).andExpect(jsonPath("$.quantity").value(20)).andExpect(header().string("ETag", "\"1\""));
     }
 
     @Test
-    @DisplayName("Should get all inventory items with pagination")
-    void testGetAllInventoryWithPagination() throws Exception {
-        for (int i = 1; i <= 5; i++) {
-            Inventory inventory = Inventory.builder()
-                .productId("PROD-" + i)
-                .quantity(i * 50)
-                .build();
-            inventoryRepository.save(inventory);
-        }
+    @DisplayName("a missing item is a 404 problem; listing is paged and sorts only by known fields")
+    void readingAndErrors() throws Exception {
+        create("SKU-1", 1);
+        create("SKU-2", 2);
 
-        mockMvc.perform(get("/api/inventory?page=0&size=2&sortBy=id")
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.content").isArray())
-            .andExpect(jsonPath("$.content.length()").value(2))
-            .andExpect(jsonPath("$.pageNumber").value(0))
-            .andExpect(jsonPath("$.pageSize").value(2))
-            .andExpect(jsonPath("$.totalElements").value(5))
-            .andExpect(jsonPath("$.totalPages").value(3))
-            .andExpect(jsonPath("$.isFirst").value(true));
-    }
-
-    @Test
-    @DisplayName("Should reserve stock successfully")
-    void testReserveStockSuccess() throws Exception {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-003")
-            .quantity(100)
-            .build();
-        Inventory savedInventory = inventoryRepository.save(inventory);
-
-        mockMvc.perform(post("/api/inventory/" + savedInventory.getId() + "/reserve?quantity=30")
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.quantity").value(70))
-            .andExpect(jsonPath("$.id").value(savedInventory.getId()));
-    }
-
-    @Test
-    @DisplayName("Should fail to reserve stock with insufficient quantity")
-    void testReserveStockInsufficientQuantity() throws Exception {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-004")
-            .quantity(50)
-            .build();
-        Inventory savedInventory = inventoryRepository.save(inventory);
-
-        mockMvc.perform(post("/api/inventory/" + savedInventory.getId() + "/reserve?quantity=100")
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isBadRequest())
-            .andExpect(jsonPath("$.errorCode").value("INSUFFICIENT_STOCK"));
-    }
-
-    @Test
-    @DisplayName("Should release stock successfully")
-    void testReleaseStockSuccess() throws Exception {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-005")
-            .quantity(70)
-            .build();
-        Inventory savedInventory = inventoryRepository.save(inventory);
-
-        mockMvc.perform(post("/api/inventory/" + savedInventory.getId() + "/release?quantity=20")
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.quantity").value(90));
-    }
-
-    @Test
-    @DisplayName("Should update inventory quantity")
-    void testUpdateInventoryQuantity() throws Exception {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-006")
-            .quantity(150)
-            .build();
-        Inventory savedInventory = inventoryRepository.save(inventory);
-
-        mockMvc.perform(put("/api/inventory/" + savedInventory.getId() + "?quantity=200")
-            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.quantity").value(200));
-    }
-
-    @Test
-    @DisplayName("Should handle pagination navigation")
-    void testPaginationNavigation() throws Exception {
-        for (int i = 1; i <= 30; i++) {
-            Inventory inventory = Inventory.builder()
-                .productId("PROD-" + i)
-                .quantity(i * 10)
-                .build();
-            inventoryRepository.save(inventory);
-        }
-
-        mockMvc.perform(get("/api/inventory?page=0&size=10&sortBy=id"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.pageNumber").value(0))
-            .andExpect(jsonPath("$.isFirst").value(true))
-            .andExpect(jsonPath("$.isLast").value(false))
-            .andExpect(jsonPath("$.totalPages").value(3));
-
-        mockMvc.perform(get("/api/inventory?page=1&size=10&sortBy=id"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.pageNumber").value(1))
-            .andExpect(jsonPath("$.isFirst").value(false))
-            .andExpect(jsonPath("$.isLast").value(false));
-
-        mockMvc.perform(get("/api/inventory?page=2&size=10&sortBy=id"))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.pageNumber").value(2))
-            .andExpect(jsonPath("$.isFirst").value(false))
-            .andExpect(jsonPath("$.isLast").value(true))
-            .andExpect(jsonPath("$.content.length()").value(10));
+        mockMvc.perform(get(INVENTORY + "/999999")).andExpect(status().isNotFound()).andExpect(jsonPath("$.errorCode").value("RESOURCE_NOT_FOUND"));
+        mockMvc.perform(get(INVENTORY).param("sortBy", "quantity")).andExpect(status().isOk()).andExpect(jsonPath("$.content", hasSize(2)));
+        mockMvc.perform(get(INVENTORY).param("sortBy", "password")).andExpect(status().isBadRequest());
     }
 }

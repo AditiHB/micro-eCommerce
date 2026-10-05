@@ -1,0 +1,43 @@
+# Activated by the `vault` Spring profile (docker-compose.vault.yml, k8s/overlays/secure).
+# Secrets come from HashiCorp Vault instead of the container environment:
+#   - secret/application and secret/<service> (KV v2): the Redis password, the Flyway migration login, ...
+#   - database/creds/<service>: a short-lived, DML-only Postgres login minted for this instance
+# The service authenticates with AppRole (compose) or its Kubernetes service account (cluster); the
+# role-id / secret-id are mounted as files and read through spring.config.import=configtree:.
+# Startup FAILS if Vault cannot be reached or refuses the login - never a silent fallback to defaults.
+#
+# The vault:// import lives HERE, in the profile file, not in an environment variable: Spring Boot resolves
+# an environment-supplied spring.config.import before it has read any application*.yml, so the Vault
+# settings below (authentication method, role, URI) would not exist yet and it would fall back to token
+# authentication. The credentials work the other way round: `optional:configtree:/run/secrets/` MUST be in
+# the environment's SPRING_CONFIG_IMPORT (docker-compose.vault.yml sets it), because every location inside
+# one spring.config.import list is resolved before any is loaded - a configtree listed next to vault://
+# would not yet be visible to it, and the login would fail with "Cannot configure RoleId".
+spring:
+  config:
+    import: "vault://"
+  cloud:
+    vault:
+      enabled: true
+      uri: ${VAULT_ADDR:http://vault:8200}
+      authentication: ${VAULT_AUTH_METHOD:APPROLE}
+      fail-fast: true
+      connection-timeout: 5000
+      read-timeout: 15000
+      app-role:
+        role: ${spring.application.name}
+      kubernetes:
+        role: ${spring.application.name}
+        service-account-token-file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      kv:
+        enabled: true
+        backend: secret
+        backend-version: 2
+        default-context: application
+        application-name: ${spring.application.name}
+      database:
+        enabled: ${VAULT_DATABASE_ENABLED:false}
+        role: ${spring.application.name}
+        backend: database
+        username-property: vault.db.username
+        password-property: vault.db.password

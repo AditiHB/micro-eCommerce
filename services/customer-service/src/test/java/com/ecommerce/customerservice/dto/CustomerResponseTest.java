@@ -1,71 +1,36 @@
 package com.ecommerce.customerservice.dto;
 
+import com.ecommerce.common.config.JacksonConfig;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
 
-@DisplayName("CustomerResponse DTO Tests")
+@DisplayName("Customer DTOs")
 class CustomerResponseTest {
 
     @Test
-    @DisplayName("Should create response with valid data")
-    void testValidResponse() {
-        CustomerResponse response = CustomerResponse.builder()
-            .id(1L)
-            .name("John Doe")
-            .email("john@example.com")
-            .build();
+    @DisplayName("a customer response carries the version that doubles as the ETag")
+    void responseWireFormat() {
+        CustomerResponse response = CustomerResponse.builder().id(1L).name("John").email("john@example.com").version(3L).build();
 
-        assertThat(response.getId()).isEqualTo(1L);
-        assertThat(response.getName()).isEqualTo("John Doe");
-        assertThat(response.getEmail()).isEqualTo("john@example.com");
+        JsonNode json = JacksonConfig.newObjectMapper().valueToTree(response);
+
+        assertThat(json.get("email").asText()).isEqualTo("john@example.com");
+        assertThat(json.get("version").asLong()).isEqualTo(3L);
     }
 
     @Test
-    @DisplayName("Should update name via setter")
-    void testSetName() {
-        CustomerResponse response = new CustomerResponse();
-        response.setName("Jane Doe");
+    @DisplayName("the update request is its own type and does not accept an id")
+    void updateRequestShape() throws Exception {
+        var mapper = JacksonConfig.newObjectMapper();
 
-        assertThat(response.getName()).isEqualTo("Jane Doe");
-    }
+        UpdateCustomerRequest ok = mapper.readValue("{\"name\":\"Jane\",\"email\":\"jane@example.com\"}", UpdateCustomerRequest.class);
 
-    @Test
-    @DisplayName("Should update email via setter")
-    void testSetEmail() {
-        CustomerResponse response = new CustomerResponse();
-        response.setEmail("jane@example.com");
-
-        assertThat(response.getEmail()).isEqualTo("jane@example.com");
-    }
-
-    @Test
-    @DisplayName("Should update ID via setter")
-    void testSetId() {
-        CustomerResponse response = new CustomerResponse();
-        response.setId(5L);
-
-        assertThat(response.getId()).isEqualTo(5L);
-    }
-
-    @Test
-    @DisplayName("Should support all-args constructor")
-    void testAllArgsConstructor() {
-        CustomerResponse response = new CustomerResponse(10L, "Bob Smith", "bob@example.com", null, null);
-
-        assertThat(response.getId()).isEqualTo(10L);
-        assertThat(response.getName()).isEqualTo("Bob Smith");
-        assertThat(response.getEmail()).isEqualTo("bob@example.com");
-    }
-
-    @Test
-    @DisplayName("Should support no-args constructor")
-    void testNoArgsConstructor() {
-        CustomerResponse response = new CustomerResponse();
-
-        assertThat(response.getId()).isNull();
-        assertThat(response.getName()).isNull();
-        assertThat(response.getEmail()).isNull();
+        assertThat(ok.getName()).isEqualTo("Jane");
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> mapper.readValue("{\"name\":\"Jane\",\"email\":\"jane@example.com\",\"id\":99}", UpdateCustomerRequest.class))
+                .isInstanceOf(com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException.class);
     }
 }

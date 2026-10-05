@@ -47,3 +47,14 @@ target/
 # Secret rotation logs
 infrastructure/scripts/*.log
 infrastructure/scripts/*.audit.json
+
+# Key material is generated, never committed (certificates come from the smallstep CA, see docs/SMALLSTEP_PKI.md)
+infrastructure/nginx/certs/*
+!infrastructure/nginx/certs/.gitkeep
+.vault/
+*.pem
+*.key
+*.p12
+*.jks
+k8s/base/generated/
+k8s/overlays/*/generated/

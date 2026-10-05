@@ -4,6 +4,7 @@ import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.customerservice.dto.CreateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
+import com.ecommerce.customerservice.dto.UpdateCustomerRequest;
 import com.ecommerce.customerservice.service.CustomerService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,11 +37,11 @@ class CustomerControllerUnitTest {
     @MockBean
     private CustomerService customerService;
 
+    // Object-level checks live in CurrentUser; this slice test runs without security filters, so
+    // the mock simply lets every request through. The real rules are covered by CurrentUserTest and
+    // the AuthorizationMatrixTest in the common module.
     @MockBean
-    private com.ecommerce.common.security.JwtAuthenticationFilter jwtAuthenticationFilter;
-
-    @MockBean
-    private com.ecommerce.common.security.CustomUserDetailsService customUserDetailsService;
+    private com.ecommerce.common.security.CurrentUser currentUser;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -70,7 +71,7 @@ class CustomerControllerUnitTest {
         when(customerService.createCustomer(any(CreateCustomerRequest.class)))
             .thenReturn(testResponse);
 
-        mockMvc.perform(post("/api/customers")
+        mockMvc.perform(post("/api/v1/customers")
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(createRequest)))
             .andExpect(status().isCreated())
@@ -86,7 +87,7 @@ class CustomerControllerUnitTest {
     void testGetCustomerByIdSuccess() throws Exception {
         when(customerService.getCustomer(1L)).thenReturn(testResponse);
 
-        mockMvc.perform(get("/api/customers/1")
+        mockMvc.perform(get("/api/v1/customers/1")
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.id").value(1L))
@@ -101,7 +102,7 @@ class CustomerControllerUnitTest {
         when(customerService.getCustomer(999L))
             .thenThrow(new ResourceNotFoundException("Customer", 999L));
 
-        mockMvc.perform(get("/api/customers/999")
+        mockMvc.perform(get("/api/v1/customers/999")
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isNotFound());
 
@@ -123,7 +124,7 @@ class CustomerControllerUnitTest {
 
         when(customerService.getAllCustomers(0, 20, "id")).thenReturn(pagedResponse);
 
-        mockMvc.perform(get("/api/customers?page=0&size=20&sortBy=id")
+        mockMvc.perform(get("/api/v1/customers?page=0&size=20&sortBy=id")
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.content", hasSize(1)))
@@ -142,21 +143,21 @@ class CustomerControllerUnitTest {
             .email("jane@example.com")
             .build();
 
-        CreateCustomerRequest updateRequest = CreateCustomerRequest.builder()
+        UpdateCustomerRequest updateRequest = UpdateCustomerRequest.builder()
             .name("Jane Doe")
             .email("jane@example.com")
             .build();
 
-        when(customerService.updateCustomer(eq(1L), any(CreateCustomerRequest.class)))
+        when(customerService.updateCustomer(eq(1L), any(UpdateCustomerRequest.class), any()))
             .thenReturn(updatedResponse);
 
-        mockMvc.perform(put("/api/customers/1")
+        mockMvc.perform(put("/api/v1/customers/1")
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(updateRequest)))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.name").value("Jane Doe"));
 
-        verify(customerService, times(1)).updateCustomer(eq(1L), any(CreateCustomerRequest.class));
+        verify(customerService, times(1)).updateCustomer(eq(1L), any(UpdateCustomerRequest.class), any());
     }
 
     @Test
@@ -164,7 +165,7 @@ class CustomerControllerUnitTest {
     void testDeleteCustomerSuccess() throws Exception {
         doNothing().when(customerService).deleteCustomer(1L);
 
-        mockMvc.perform(delete("/api/customers/1")
+        mockMvc.perform(delete("/api/v1/customers/1")
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isNoContent());
 
@@ -177,7 +178,7 @@ class CustomerControllerUnitTest {
         doThrow(new ResourceNotFoundException("Customer", 999L))
             .when(customerService).deleteCustomer(999L);
 
-        mockMvc.perform(delete("/api/customers/999")
+        mockMvc.perform(delete("/api/v1/customers/999")
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isNotFound());
     }
@@ -190,7 +191,7 @@ class CustomerControllerUnitTest {
             .email("invalid-email")
             .build();
 
-        mockMvc.perform(post("/api/customers")
+        mockMvc.perform(post("/api/v1/customers")
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(invalidRequest)))
             .andExpect(status().isBadRequest());
@@ -203,7 +204,7 @@ class CustomerControllerUnitTest {
             .name("John Doe")
             .build();
 
-        mockMvc.perform(post("/api/customers")
+        mockMvc.perform(post("/api/v1/customers")
             .contentType(MediaType.APPLICATION_JSON)
             .content(objectMapper.writeValueAsString(invalidRequest)))
             .andExpect(status().isBadRequest());
@@ -222,7 +223,7 @@ class CustomerControllerUnitTest {
 
         when(customerService.getAllCustomers(0, 20, "id")).thenReturn(pagedResponse);
 
-        mockMvc.perform(get("/api/customers")
+        mockMvc.perform(get("/api/v1/customers")
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk());
 
@@ -242,10 +243,34 @@ class CustomerControllerUnitTest {
 
         when(customerService.getAllCustomers(2, 50, "email")).thenReturn(pagedResponse);
 
-        mockMvc.perform(get("/api/customers?page=2&size=50&sortBy=email")
+        mockMvc.perform(get("/api/v1/customers?page=2&size=50&sortBy=email")
             .contentType(MediaType.APPLICATION_JSON))
             .andExpect(status().isOk());
 
         verify(customerService, times(1)).getAllCustomers(2, 50, "email");
+    }
+
+    @Test
+    @DisplayName("Reading a customer returns its version as the ETag")
+    void testEtagOnRead() throws Exception {
+        testResponse.setVersion(4L);
+        when(customerService.getCustomer(1L)).thenReturn(testResponse);
+
+        mockMvc.perform(get("/api/v1/customers/1"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("ETag", "\"4\""));
+    }
+
+    @Test
+    @DisplayName("PUT passes If-Match to the service, which refuses a stale one with 412")
+    void testIfMatchIsPassedAndStaleIsRefused() throws Exception {
+        UpdateCustomerRequest update = UpdateCustomerRequest.builder().name("Jane Doe").email("jane@example.com").build();
+        when(customerService.updateCustomer(eq(1L), any(UpdateCustomerRequest.class), eq("\"2\"")))
+            .thenThrow(new com.ecommerce.common.exception.PreconditionFailedException("changed since you read it"));
+
+        mockMvc.perform(put("/api/v1/customers/1").header("If-Match", "\"2\"")
+            .contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsString(update)))
+            .andExpect(status().isPreconditionFailed())
+            .andExpect(jsonPath("$.errorCode").value("PRECONDITION_FAILED"));
     }
 }
