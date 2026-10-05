@@ -28,7 +28,7 @@ servers:
 
 tags:
   - name: Authentication
-    description: User authentication and authorization
+    description: Authentication is handled by Keycloak, not by this API (no login endpoint). See docs/KEYCLOAK_IDENTITY.md.
   - name: Customer Management
     description: APIs for managing customers
   - name: Order Management
@@ -477,7 +477,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: JWT Bearer token for authentication
+      description: >-
+        RS256 access token issued by Keycloak (realm `ecommerce`). There is no login endpoint on this
+        API: obtain a token from Keycloak's token endpoint, then send it as `Authorization: Bearer <token>`.
+        See docs/KEYCLOAK_IDENTITY.md for roles and object-level rules.
 
   parameters:
     PageParam:
@@ -514,61 +517,6 @@ security:
   - BearerAuth: []
 
 paths:
-  /api/auth/login:
-    post:
-      tags:
-        - Authentication
-      summary: User login
-      description: Authenticate user with username and password to get JWT token
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/LoginRequest'
-      responses:
-        '200':
-          description: Login successful, JWT token returned
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          description: Invalid credentials
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-      security: []
-
-  /api/auth/me:
-    get:
-      tags:
-        - Authentication
-      summary: Get current user
-      description: Get authenticated user information
-      responses:
-        '200':
-          description: User information retrieved successfully
-        '401':
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Internal server error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
   /api/customers:
     get:
       tags:

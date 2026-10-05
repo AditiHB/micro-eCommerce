@@ -1,118 +1,111 @@
 package com.ecommerce.productservice.controller;
 
+import com.ecommerce.common.constants.ApiConstants;
+import com.ecommerce.common.exception.BusinessException;
+import com.ecommerce.common.web.EntityTags;
 import com.ecommerce.productservice.dto.CreateProductRequest;
 import com.ecommerce.productservice.dto.ProductDTO;
 import com.ecommerce.productservice.dto.UpdateProductRequest;
 import com.ecommerce.productservice.service.ProductService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
-import jakarta.validation.Valid;
+import java.net.URI;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
+/** The product catalogue. Read by every authenticated caller; changed by back office. It has no stock operations: inventory-service owns stock. */
 @RestController
-@RequestMapping("/api/products")
+@Validated
+@RequestMapping(ApiConstants.API_PREFIX + ApiConstants.PRODUCTS_ENDPOINT)
 @RequiredArgsConstructor
 @Slf4j
 public class ProductController {
+
+    static final int MAX_LOOKUP = 50;
+
     private final ProductService productService;
 
     @PostMapping
     public ResponseEntity<ProductDTO> createProduct(@Valid @RequestBody CreateProductRequest request) {
-        log.info("POST /api/products - Create product");
-        ProductDTO productDTO = productService.createProduct(request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(productDTO);
+        log.info("POST /products - Create product");
+        ProductDTO created = productService.createProduct(request);
+        return withEtag(ResponseEntity.created(URI.create(ApiConstants.API_PREFIX + ApiConstants.PRODUCTS_ENDPOINT + "/" + created.getId())), created);
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<ProductDTO> getProduct(@PathVariable Long id) {
-        log.info("GET /api/products/{} - Get product details", id);
-        ProductDTO productDTO = productService.getProductById(id);
-        return ResponseEntity.ok(productDTO);
+        return withEtag(ResponseEntity.ok(), productService.getProductById(id));
     }
 
     @GetMapping("/sku/{sku}")
     public ResponseEntity<ProductDTO> getProductBySku(@PathVariable String sku) {
-        log.info("GET /api/products/sku/{} - Get product by SKU", sku);
-        ProductDTO productDTO = productService.getProductBySku(sku);
-        return ResponseEntity.ok(productDTO);
+        return withEtag(ResponseEntity.ok(), productService.getProductBySku(sku));
+    }
+
+    /**
+     * The catalogue entries for a comma-separated list of SKUs, in one call - what an order uses to price its lines.
+     * SKUs that do not exist are simply absent from the result.
+     */
+    @GetMapping("/lookup")
+    public ResponseEntity<List<ProductDTO>> lookup(@RequestParam String skus) {
+        Set<String> wanted = new LinkedHashSet<>(Arrays.stream(skus.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList());
+        if (wanted.isEmpty() || wanted.size() > MAX_LOOKUP) {
+            throw new BusinessException("Provide between 1 and " + MAX_LOOKUP + " SKUs", "INVALID_LOOKUP");
+        }
+        return ResponseEntity.ok(productService.lookupBySkus(wanted));
     }
 
     @GetMapping
     public ResponseEntity<Page<ProductDTO>> getAllProducts(Pageable pageable) {
-        log.info("GET /api/products - List all products");
-        Page<ProductDTO> products = productService.getAllProducts(pageable);
-        return ResponseEntity.ok(products);
+        return ResponseEntity.ok(productService.getAllProducts(pageable));
     }
 
     @GetMapping("/category/{category}")
-    public ResponseEntity<Page<ProductDTO>> getProductsByCategory(
-            @PathVariable String category,
-            Pageable pageable) {
-        log.info("GET /api/products/category/{} - Get products by category", category);
-        Page<ProductDTO> products = productService.getProductsByCategory(category, pageable);
-        return ResponseEntity.ok(products);
+    public ResponseEntity<Page<ProductDTO>> getProductsByCategory(@PathVariable String category, Pageable pageable) {
+        return ResponseEntity.ok(productService.getProductsByCategory(category, pageable));
     }
 
     @GetMapping("/search")
-    public ResponseEntity<Page<ProductDTO>> searchProducts(
-            @RequestParam String term,
-            Pageable pageable) {
-        log.info("GET /api/products/search - Search products");
-        Page<ProductDTO> products = productService.searchProducts(term, pageable);
-        return ResponseEntity.ok(products);
-    }
-
-    @GetMapping("/available")
-    public ResponseEntity<Page<ProductDTO>> getAvailableProducts(Pageable pageable) {
-        log.info("GET /api/products/available - Get available products");
-        Page<ProductDTO> products = productService.getAvailableProducts(pageable);
-        return ResponseEntity.ok(products);
-    }
-
-    @GetMapping("/low-stock")
-    public ResponseEntity<List<ProductDTO>> getLowStockProducts() {
-        log.info("GET /api/products/low-stock - Get low stock products");
-        List<ProductDTO> products = productService.getLowStockProducts();
-        return ResponseEntity.ok(products);
+    public ResponseEntity<Page<ProductDTO>> searchProducts(@RequestParam String term, Pageable pageable) {
+        return ResponseEntity.ok(productService.searchProducts(term, pageable));
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<ProductDTO> updateProduct(
             @PathVariable Long id,
-            @Valid @RequestBody UpdateProductRequest request) {
-        log.info("PUT /api/products/{} - Update product", id);
-        ProductDTO productDTO = productService.updateProduct(id, request);
-        return ResponseEntity.ok(productDTO);
+            @Valid @RequestBody UpdateProductRequest request,
+            @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String ifMatch) {
+        log.info("PUT /products/{} - Update product", id);
+        return withEtag(ResponseEntity.ok(), productService.updateProduct(id, request, ifMatch));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteProduct(@PathVariable Long id) {
-        log.info("DELETE /api/products/{} - Delete product", id);
+        log.info("DELETE /products/{} - Delete product", id);
         productService.deleteProduct(id);
         return ResponseEntity.noContent().build();
     }
 
-    @PostMapping("/{id}/reserve")
-    public ResponseEntity<Void> reserveInventory(
-            @PathVariable Long id,
-            @RequestParam Integer quantity) {
-        log.info("POST /api/products/{}/reserve - Reserve inventory", id);
-        productService.reserveInventory(id, quantity);
-        return ResponseEntity.ok().build();
-    }
-
-    @PostMapping("/{id}/release")
-    public ResponseEntity<Void> releaseInventory(
-            @PathVariable Long id,
-            @RequestParam Integer quantity) {
-        log.info("POST /api/products/{}/release - Release inventory", id);
-        productService.releaseInventory(id, quantity);
-        return ResponseEntity.ok().build();
+    private static ResponseEntity<ProductDTO> withEtag(ResponseEntity.BodyBuilder builder, ProductDTO product) {
+        return builder.eTag(EntityTags.of(product.getVersion())).body(product);
     }
 }

@@ -36,13 +36,17 @@
         <micrometer.version>1.12.5</micrometer.version>
         <lombok.version>1.18.30</lombok.version>
         <springdoc-openapi.version>2.1.0</springdoc-openapi.version>
-        <jjwt.version>0.12.3</jjwt.version>
         <postgresql.version>42.7.3</postgresql.version>
+        <testcontainers.version>1.21.3</testcontainers.version>
+        <!-- Docker Engine 29 rejects the API version Testcontainers negotiates by default; pin one both accept.
+             Override with -Ddocker.api.version=... on an older engine. -->
+        <docker.api.version>1.44</docker.api.version>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <maven-compiler-plugin.version>3.12.1</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.2.5</maven-failsafe-plugin.version>
+        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
         <skipTests>false</skipTests>
         <skipUnitTests>${skipTests}</skipUnitTests>
         <skipITs>${skipTests}</skipITs>
@@ -76,12 +80,6 @@
                 <artifactId>flyway-core</artifactId>
                 <version>9.22.3</version>
             </dependency>
-            <!-- Flyway Oracle Support -->
-            <dependency>
-                <groupId>org.flywaydb</groupId>
-                <artifactId>flyway-database-oracle</artifactId>
-                <version>9.22.3</version>
-            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -108,25 +106,7 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
-        <!-- JWT Token -->
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-api</artifactId>
-            <version>${jjwt.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-impl</artifactId>
-            <version>${jjwt.version}</version>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.jsonwebtoken</groupId>
-            <artifactId>jjwt-jackson</artifactId>
-            <version>${jjwt.version}</version>
-            <scope>runtime</scope>
-        </dependency>
-        <!-- Distributed Tracing -->
+<!-- Distributed Tracing -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-tracing-bridge-brave</artifactId>
@@ -161,6 +141,11 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
             <scope>test</scope>
@@ -179,25 +164,25 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers</artifactId>
-            <version>1.19.7</version>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>postgresql</artifactId>
-            <version>1.19.7</version>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>kafka</artifactId>
-            <version>1.19.7</version>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>1.19.7</version>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
         <!-- Spring Kafka Test -->
@@ -210,12 +195,6 @@
         <dependency>
             <groupId>io.rest-assured</groupId>
             <artifactId>rest-assured</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <!-- H2 Database for testing -->
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
             <scope>test</scope>
         </dependency>
         <!-- JUnit Platform Suite support -->
@@ -269,14 +248,15 @@
                             <spring.cloud.config.enabled>false</spring.cloud.config.enabled>
                             <spring.cloud.discovery.enabled>false</spring.cloud.discovery.enabled>
                             <eureka.client.enabled>false</eureka.client.enabled>
-                            <spring.flyway.enabled>false</spring.flyway.enabled>
+                            <api.version>${docker.api.version}</api.version>
                         </systemPropertyVariables>
-                        <!-- Exclude integration tests from fast unit test suite -->
+                        <!-- Exclude integration tests (anything that needs a real Postgres) from the fast unit suite -->
                         <excludes>
                             <exclude>**/*IntegrationTest.java</exclude>
                             <exclude>**/*ApplicationTests.java</exclude>
                             <exclude>**/*IT.java</exclude>
                             <exclude>**/integration/**</exclude>
+                            <exclude>**/repository/**</exclude>
                         </excludes>
                         <excludedGroups>integration</excludedGroups>
                     </configuration>
@@ -295,14 +275,15 @@
                             <spring.cloud.config.enabled>false</spring.cloud.config.enabled>
                             <spring.cloud.discovery.enabled>false</spring.cloud.discovery.enabled>
                             <eureka.client.enabled>false</eureka.client.enabled>
-                            <spring.flyway.enabled>false</spring.flyway.enabled>
+                            <api.version>${docker.api.version}</api.version>
                         </systemPropertyVariables>
-                        <!-- Include integration tests for failsafe verify phase -->
+                        <!-- Integration tests run against a real PostgreSQL (Testcontainers) with the real Flyway migrations -->
                         <includes>
                             <include>**/*IntegrationTest.java</include>
                             <include>**/*ApplicationTests.java</include>
                             <include>**/*IT.java</include>
                             <include>**/integration/**</include>
+                            <include>**/repository/**</include>
                         </includes>
                     </configuration>
                     <executions>
@@ -310,6 +291,38 @@
                             <goals>
                                 <goal>integration-test</goal>
                                 <goal>verify</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <!-- Registers the "jacoco" plugin prefix so standalone invocations
+                         like `mvn jacoco:report` (as CI's "Generate code coverage report"
+                         step runs it) resolve at all - this plugin was never declared
+                         anywhere in the reactor, so that step has always failed with
+                         "No plugin found for prefix 'jacoco'" (confirmed failing on every
+                         main build for weeks, unrelated to any single PR). prepare-agent
+                         attaches the coverage javaagent during `mvn test`/`mvn verify` in
+                         the build job; the report goal run on its own here in the
+                         code-quality job has no exec data to read (that job never runs
+                         tests) and jacoco just skips with a warning rather than failing -
+                         real coverage numbers need a test run wired into this job too,
+                         which is a separate, bigger change than fixing this crash. -->
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco-maven-plugin.version}</version>
+                    <executions>
+                        <execution>
+                            <id>prepare-agent</id>
+                            <goals>
+                                <goal>prepare-agent</goal>
+                            </goals>
+                        </execution>
+                        <execution>
+                            <id>report</id>
+                            <phase>verify</phase>
+                            <goals>
+                                <goal>report</goal>
                             </goals>
                         </execution>
                     </executions>
@@ -324,6 +337,10 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
             </plugin>
         </plugins>
     </build>

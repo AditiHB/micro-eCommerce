@@ -13,6 +13,8 @@ public class CustomerResponse {
     private Long id;
     private String name;
     private String email;
+    /** Version of the customer record; also sent as the ETag. */
+    private Long version;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

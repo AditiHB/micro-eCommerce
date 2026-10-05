@@ -107,7 +107,13 @@ generate_secret() {
 }
 
 # Rotate JWT Secret
+# RETIRED: the platform no longer has a shared JWT signing secret. Tokens are RS256, issued by Keycloak
+# and verified against its public keys, so there is nothing to rotate here. Rotate Keycloak's signing keys
+# in its admin console (Realm settings -> Keys) and see docs/KEYCLOAK_IDENTITY.md. The body below is kept
+# only so the historical flow can be read; the function refuses to run.
 rotate_jwt_secret() {
+    error "JWT signing secrets were retired - tokens are issued by Keycloak (docs/KEYCLOAK_IDENTITY.md)"
+    exit 1
     log "Starting JWT secret rotation..."
 
     local current_secret

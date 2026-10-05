@@ -2,54 +2,37 @@ package com.ecommerce.common.config;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.cache.CacheManager;
+import org.springframework.cache.Cache;
+import org.springframework.cache.interceptor.CacheErrorHandler;
 
-import static org.assertj.core.api.Assertions.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.mock;
 
-@SpringBootTest(classes = CacheConfig.class)
-@DisplayName("CacheConfig Integration Tests")
+@DisplayName("Cache policy")
 class CacheConfigTest {
 
-    @Autowired(required = false)
-    private CacheManager cacheManager;
-
     @Test
-    @DisplayName("Should create cache manager bean")
-    void testCacheManagerBeanCreation() {
-        assertThat(cacheManager).isNotNull();
+    @DisplayName("only reference data is cached - never workflow state such as order, payment or stock")
+    void onlyReferenceDataHasACache() {
+        assertThat(CacheConfig.CUSTOMERS_CACHE).isEqualTo("customers");
+        assertThat(CacheConfig.PRODUCTS_CACHE).isEqualTo("products");
+        assertThat(CacheConfig.class.getDeclaredFields())
+                .filteredOn(f -> f.getType() == String.class)
+                .extracting(java.lang.reflect.Field::getName)
+                .containsExactlyInAnyOrder("CUSTOMERS_CACHE", "PRODUCTS_CACHE");
     }
 
     @Test
-    @DisplayName("Should have customers cache")
-    void testCustomersCacheExists() {
-        if (cacheManager != null) {
-            assertThat(cacheManager.getCacheNames()).contains("customers");
-        }
-    }
+    @DisplayName("a cache failure is a miss, never an error: reads, writes and evictions all degrade quietly")
+    void cacheFailuresDegrade() {
+        CacheErrorHandler handler = new RedisConfig().errorHandler();
+        Cache cache = mock(Cache.class);
+        RuntimeException redisDown = new RuntimeException("Unable to connect to Redis");
 
-    @Test
-    @DisplayName("Should have inventory cache")
-    void testInventoryCacheExists() {
-        if (cacheManager != null) {
-            assertThat(cacheManager.getCacheNames()).contains("inventory");
-        }
-    }
-
-    @Test
-    @DisplayName("Should have orders cache")
-    void testOrdersCacheExists() {
-        if (cacheManager != null) {
-            assertThat(cacheManager.getCacheNames()).contains("orders");
-        }
-    }
-
-    @Test
-    @DisplayName("Should have payments cache")
-    void testPaymentsCacheExists() {
-        if (cacheManager != null) {
-            assertThat(cacheManager.getCacheNames()).contains("payments");
-        }
+        assertThatCode(() -> handler.handleCacheGetError(redisDown, cache, "1")).doesNotThrowAnyException();
+        assertThatCode(() -> handler.handleCachePutError(redisDown, cache, "1", "value")).doesNotThrowAnyException();
+        assertThatCode(() -> handler.handleCacheEvictError(redisDown, cache, "1")).doesNotThrowAnyException();
+        assertThatCode(() -> handler.handleCacheClearError(redisDown, cache)).doesNotThrowAnyException();
     }
 }

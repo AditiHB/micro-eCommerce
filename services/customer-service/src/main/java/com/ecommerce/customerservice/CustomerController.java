@@ -2,7 +2,10 @@ package com.ecommerce.customerservice;
 
 import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
+import com.ecommerce.common.security.CurrentUser;
+import com.ecommerce.common.web.EntityTags;
 import com.ecommerce.customerservice.dto.CreateCustomerRequest;
+import com.ecommerce.customerservice.dto.UpdateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
 import com.ecommerce.customerservice.service.CustomerService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -15,6 +18,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -27,6 +31,7 @@ import org.springframework.web.bind.annotation.*;
 public class CustomerController {
 
     private final CustomerService customerService;
+    private final CurrentUser currentUser;
 
     /**
      * Get all customers with pagination.
@@ -45,7 +50,7 @@ public class CustomerController {
             @RequestParam(defaultValue = ApiConstants.DEFAULT_PAGE_SIZE + "") int size,
             @Parameter(description = "Field to sort by", example = "id")
             @RequestParam(defaultValue = "id") String sortBy) {
-        log.info("GET /api/customers - Retrieving customers - page: {}, size: {}, sortBy: {}", page, size, sortBy);
+        log.info("GET /customers - page: {}, size: {}, sortBy: {}", page, size, sortBy);
         return ResponseEntity.ok(customerService.getAllCustomers(page, size, sortBy));
     }
 
@@ -63,8 +68,10 @@ public class CustomerController {
     public ResponseEntity<CustomerResponse> getById(
             @Parameter(description = "Customer ID", example = "1")
             @PathVariable Long id) {
-        log.info("GET /api/customers/{} - Retrieving customer", id);
-        return ResponseEntity.ok(customerService.getCustomer(id));
+        log.info("GET /customers/{} - Retrieving customer", id);
+        // A USER may only read the customer record their token is bound to (OWASP API1 / BOLA).
+        currentUser.requireAccessToCustomer(id, "Customer", id);
+        return withEtag(ResponseEntity.ok(), customerService.getCustomer(id));
     }
 
     /**
@@ -81,9 +88,10 @@ public class CustomerController {
     public ResponseEntity<CustomerResponse> create(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Customer creation request", required = true)
             @Valid @RequestBody CreateCustomerRequest request) {
-        log.info("POST /api/customers - Creating new customer with email: {}", request.getEmail());
-        return ResponseEntity.status(HttpStatus.CREATED)
-            .body(customerService.createCustomer(request));
+        log.info("POST /customers - Creating new customer");
+        CustomerResponse created = customerService.createCustomer(request);
+        return withEtag(ResponseEntity.created(java.net.URI.create(
+            ApiConstants.API_PREFIX + ApiConstants.CUSTOMERS_ENDPOINT + "/" + created.getId())), created);
     }
 
     /**
@@ -96,15 +104,22 @@ public class CustomerController {
             content = @Content(schema = @Schema(implementation = CustomerResponse.class))),
         @ApiResponse(responseCode = "400", description = "Invalid input"),
         @ApiResponse(responseCode = "404", description = "Customer not found"),
-        @ApiResponse(responseCode = "500", description = "Internal server error")
+        @ApiResponse(responseCode = "409", description = "Email already used by another customer"),
+        @ApiResponse(responseCode = "412", description = "If-Match does not match the customer's current version")
     })
     public ResponseEntity<CustomerResponse> update(
             @Parameter(description = "Customer ID", example = "1")
             @PathVariable Long id,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Customer update request", required = true)
-            @Valid @RequestBody CreateCustomerRequest request) {
-        log.info("PUT /api/customers/{} - Updating customer", id);
-        return ResponseEntity.ok(customerService.updateCustomer(id, request));
+            @Valid @RequestBody UpdateCustomerRequest request,
+            @Parameter(description = "ETag from the GET; the update is refused (412) if the customer changed since")
+            @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String ifMatch) {
+        log.info("PUT /customers/{} - Updating customer", id);
+        return withEtag(ResponseEntity.ok(), customerService.updateCustomer(id, request, ifMatch));
+    }
+
+    private static ResponseEntity<CustomerResponse> withEtag(ResponseEntity.BodyBuilder builder, CustomerResponse customer) {
+        return builder.eTag(EntityTags.of(customer.getVersion())).body(customer);
     }
 
     /**
@@ -120,7 +135,7 @@ public class CustomerController {
     public ResponseEntity<Void> delete(
             @Parameter(description = "Customer ID", example = "1")
             @PathVariable Long id) {
-        log.info("DELETE /api/customers/{} - Deleting customer", id);
+        log.info("DELETE /customers/{} - Deleting customer", id);
         customerService.deleteCustomer(id);
         return ResponseEntity.noContent().build();
     }

@@ -36,14 +36,13 @@ public class KafkaFaultInjector {
     /**
      * @param topic the main topic to publish onto (e.g. "order-created")
      * @param key the record key (any non-null string is fine - these topics aren't compacted)
-     * @param eventClassName fully-qualified DomainEvent subclass name (e.g.
-     *                       "com.ecommerce.common.events.OrderCreatedEvent") - written to the
-     *                       __TypeId__ header, mirroring what Spring Kafka's JsonSerializer adds
-     *                       by default, which KafkaEventConfig's consumerFactory relies on to know
-     *                       which concrete class to deserialize the JSON into.
-     * @param json the event body, hand-crafted JSON matching that class's fields
+     * @param eventType the event's LOGICAL type name (e.g. "order.created") - written to the __TypeId__
+     *                  header, which is the only type information on the wire. The consumers map it to a
+     *                  class through an allow-list, so a name that is not in the event catalog (or a Java
+     *                  class name) is refused rather than instantiated.
+     * @param json the event body, hand-crafted JSON (or deliberately not JSON, to test poison messages)
      */
-    public static void publishRaw(String topic, String key, String eventClassName, String json) {
+    public static void publishRaw(String topic, String key, String eventType, String json) {
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
@@ -51,7 +50,7 @@ public class KafkaFaultInjector {
 
         try (KafkaProducer<String, String> producer = new KafkaProducer<>(props)) {
             ProducerRecord<String, String> record = new ProducerRecord<>(topic, key, json);
-            record.headers().add(new RecordHeader("__TypeId__", eventClassName.getBytes()));
+            record.headers().add(new RecordHeader("__TypeId__", eventType.getBytes()));
             producer.send(record).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

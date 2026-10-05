@@ -1,27 +1,26 @@
 package com.ecommerce.productservice;
 
-import com.ecommerce.common.config.CacheConfig;
 import com.ecommerce.common.config.JacksonConfig;
-import com.ecommerce.common.config.KafkaEventConfig;
+import com.ecommerce.common.config.RedisConfig;
+import com.ecommerce.common.messaging.MessagingConfig;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 /**
- * Wires up the shared {@code common} module's JPA-backed event sourcing repository/entity
- * and the safe subset of {@code common.config} (caching, Jackson, Kafka topics/listener
- * factories) for this service's full application context.
+ * Wires the shared {@code common} module into this service: the JPA entities and repositories it owns
+ * (event store, transactional outbox, idempotent-consumer ledger, dead letters), Jackson, and the messaging
+ * infrastructure (Kafka retry and dead-lettering, outbox relay) plus the one Redis-backed cache - this
+ * service caches reference data.
  *
- * <p>Deliberately kept as its own {@code @Configuration} bean (rather than annotating the
- * {@code @SpringBootApplication} class directly) so that {@code @WebMvcTest} slice tests -
- * which filter out non-web {@code @Configuration} beans but always process the main
- * application class verbatim - don't try to stand up JPA/EntityManagerFactory infrastructure
- * that a web-layer-only test slice never provides.
+ * <p>Deliberately its own {@code @Configuration} (not on the {@code @SpringBootApplication} class) so that
+ * {@code @WebMvcTest} slices - which skip non-web configuration but always process the main class - do not try
+ * to stand up JPA infrastructure that a web-layer test never provides.
  */
 @Configuration
-@EnableJpaRepositories(basePackages = {"com.ecommerce.productservice", "com.ecommerce.common.eventsourcing", "com.ecommerce.common.repository"})
-@EntityScan(basePackages = {"com.ecommerce.productservice", "com.ecommerce.common.eventsourcing", "com.ecommerce.common.entity"})
-@Import({CacheConfig.class, JacksonConfig.class, KafkaEventConfig.class})
+@EnableJpaRepositories(basePackages = {"com.ecommerce.productservice", "com.ecommerce.common.eventsourcing", "com.ecommerce.common.outbox", "com.ecommerce.common.inbox", "com.ecommerce.common.dlq"})
+@EntityScan(basePackages = {"com.ecommerce.productservice", "com.ecommerce.common.eventsourcing", "com.ecommerce.common.outbox", "com.ecommerce.common.inbox", "com.ecommerce.common.dlq"})
+@Import({RedisConfig.class, JacksonConfig.class, MessagingConfig.class})
 public class CommonIntegrationConfig {
 }

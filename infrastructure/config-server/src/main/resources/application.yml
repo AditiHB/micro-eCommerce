@@ -4,17 +4,28 @@ server:
 spring:
   application:
     name: config-server
+  security:
+    user:
+      name: ${CONFIG_SERVER_USERNAME:config}
+      # No default: never run with a known password.
+      password: ${CONFIG_SERVER_PASSWORD}
   cloud:
     config:
       server:
         git:
-          uri: file:///C:/Users/hardi/workspace/antigravity/micro-eCommerce/config-repo
+          uri: ${CONFIG_GIT_URI:file:///config-repo}
           # In a real environment, you would use a remote Git repository:
           # uri: https://github.com/your-username/ecommerce-config-repo.git
           default-label: main
           clone-on-start: true
 
 management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9888}
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
   endpoint:
     health:
       probes:

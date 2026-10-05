@@ -1,0 +1,105 @@
+# ===============================================================================
+# Overlay: a replicated Kafka cluster instead of the single dev broker.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.kafka-ha.yml up -d --build
+#
+# Three KRaft brokers (each is broker AND controller - there is no ZooKeeper), every topic with replication
+# factor 3 and min.insync.replicas 2, producers with acks=all. A topic stays writable with one broker down; it
+# refuses writes (instead of silently losing them) if two are. This is the shape any real deployment needs -
+# the single-broker default is for a laptop only. It costs about 1.3GB more RAM (see docs/RESILIENCE.md,
+# "Kafka durability", for what to try: stop a broker with `docker stop kafka-2` and keep placing orders).
+#
+# The brokers are named kafka, kafka-2 and kafka-3: the base file's `kafka` simply becomes node 1.
+# ===============================================================================
+
+x-kafka-ha-client: &kafka-ha-client
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "kafka:29092,kafka-2:29092,kafka-3:29092"
+  KAFKA_EVENT_REPLICATION_FACTOR: "3"
+  KAFKA_EVENT_MIN_INSYNC_REPLICAS: "2"
+
+x-kafka-ha-broker: &kafka-ha-broker
+  image: apache/kafka:3.9.0
+  environment: &kafka-ha-broker-env
+    CLUSTER_ID: "ZWNvbW1lcmNlLWRldi1rcmFmdA"
+    KAFKA_PROCESS_ROLES: broker,controller
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+    KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093,2@kafka-2:9093,3@kafka-3:9093"
+    KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    # The internal topics are replicated too, or a lost broker would take consumer groups down with it.
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+    KAFKA_MIN_INSYNC_REPLICAS: 2
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    KAFKA_LOG_DIRS: /var/lib/kafka/data
+    KAFKA_HEAP_OPTS: "-Xms192m -Xmx320m"
+  healthcheck:
+    test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+    interval: 10s
+    timeout: 10s
+    retries: 18
+    start_period: 30s
+  mem_limit: 640m
+  mem_reservation: 320m
+
+services:
+  kafka:
+    <<: *kafka-ha-broker
+    environment:
+      <<: *kafka-ha-broker-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093,PLAINTEXT_HOST://:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+
+  kafka-2:
+    <<: *kafka-ha-broker
+    container_name: kafka-2
+    ports:
+      - "127.0.0.1:9094:9094"
+    environment:
+      <<: *kafka-ha-broker-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093,PLAINTEXT_HOST://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:29092,PLAINTEXT_HOST://localhost:9094
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+
+  kafka-3:
+    <<: *kafka-ha-broker
+    container_name: kafka-3
+    ports:
+      - "127.0.0.1:9095:9095"
+    environment:
+      <<: *kafka-ha-broker-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093,PLAINTEXT_HOST://:9095
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:29092,PLAINTEXT_HOST://localhost:9095
+    volumes:
+      - kafka-3-data:/var/lib/kafka/data
+
+  # Every service that talks to Kafka learns the whole cluster and asks for the durable topic settings, and
+  # waits for all three brokers.
+  customer-service: &uses-kafka-ha
+    environment: *kafka-ha-client
+    depends_on: &kafka-ha-depends
+      kafka-2:
+        condition: service_healthy
+      kafka-3:
+        condition: service_healthy
+  inventory-service:
+    <<: *uses-kafka-ha
+  order-service:
+    <<: *uses-kafka-ha
+  payment-service:
+    <<: *uses-kafka-ha
+  product-service:
+    <<: *uses-kafka-ha
+  notification-service:
+    <<: *uses-kafka-ha
+
+volumes:
+  kafka-2-data:
+  kafka-3-data:

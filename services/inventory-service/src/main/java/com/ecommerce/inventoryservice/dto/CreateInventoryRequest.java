@@ -2,7 +2,7 @@ package com.ecommerce.inventoryservice.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import lombok.*;
 
 @Getter
@@ -15,6 +15,6 @@ public class CreateInventoryRequest {
     private String productId;
 
     @NotNull(message = "Quantity cannot be null")
-    @Positive(message = "Quantity must be positive")
+    @PositiveOrZero(message = "Quantity cannot be negative")
     private Integer quantity;
 }

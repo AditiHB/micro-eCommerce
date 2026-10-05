@@ -1,21 +1,16 @@
 package com.ecommerce.inventoryservice.service;
 
-import com.ecommerce.common.config.CacheConfig;
 import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.exception.BusinessException;
+import com.ecommerce.common.exception.ConflictException;
 import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.inventoryservice.Inventory;
 import com.ecommerce.inventoryservice.InventoryRepository;
-import com.ecommerce.inventoryservice.InventoryReservation;
-import com.ecommerce.inventoryservice.InventoryReservationRepository;
 import com.ecommerce.inventoryservice.dto.CreateInventoryRequest;
 import com.ecommerce.inventoryservice.dto.InventoryResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -24,267 +19,106 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Optional;
+import java.util.Set;
 
+/**
+ * Back-office stock operations. Stock levels are workflow state - they change on every order - so they are never
+ * cached. Taking and returning stock are single conditional statements (see {@link InventoryRepository}), not
+ * read-modify-write: two concurrent callers can never both take the last unit or lose each other's update.
+ * The saga's own stock handling, per order, is in {@link ReservationService}.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 @Transactional
 public class InventoryService {
 
-    private final InventoryRepository inventoryRepository;
-    private final InventoryReservationRepository reservationRepository;
+    static final Set<String> SORTABLE_FIELDS = Set.of("id", "productId", "quantity", "createdAt", "updatedAt");
 
-    /**
-     * Creates new inventory for a product.
-     *
-     * @param request the inventory creation request
-     * @return the created inventory response
-     */
-    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
+    private final InventoryRepository inventoryRepository;
+
     public InventoryResponse createInventory(CreateInventoryRequest request) {
         log.info("Creating inventory for product: {}", request.getProductId());
-
-        Inventory inventory = Inventory.builder()
-            .productId(request.getProductId())
-            .quantity(request.getQuantity())
-            .build();
-
-        Inventory savedInventory = inventoryRepository.save(inventory);
-        log.info("Inventory created successfully with ID: {}", savedInventory.getId());
-
-        return mapToResponse(savedInventory);
+        if (inventoryRepository.findByProductId(request.getProductId()).isPresent()) {
+            throw new ConflictException("Inventory already exists for product " + request.getProductId(), "INVENTORY_ALREADY_EXISTS");
+        }
+        Inventory saved = inventoryRepository.saveAndFlush(Inventory.builder()
+                .productId(request.getProductId())
+                .quantity(request.getQuantity())
+                .build());
+        return mapToResponse(saved);
     }
 
-    /**
-     * Retrieves inventory by ID.
-     *
-     * @param id the inventory ID
-     * @return the inventory response
-     * @throws ResourceNotFoundException if inventory not found
-     */
     @Transactional(readOnly = true)
-    @Cacheable(value = CacheConfig.INVENTORY_CACHE, key = "#id")
     public InventoryResponse getInventory(Long id) {
-        log.info("Fetching inventory with ID: {}", id);
-
-        Inventory inventory = inventoryRepository.findById(id)
-            .orElseThrow(() -> new ResourceNotFoundException("Inventory", id));
-
-        return mapToResponse(inventory);
+        return mapToResponse(find(id));
     }
 
-    /**
-     * Retrieves all inventory items with pagination.
-     *
-     * @param pageNumber the page number (0-indexed)
-     * @param pageSize the page size
-     * @param sortBy the field to sort by
-     * @return paged inventory responses
-     */
     @Transactional(readOnly = true)
-    @Cacheable(value = CacheConfig.INVENTORY_CACHE, key = "'all:' + #pageNumber + ':' + #pageSize + ':' + #sortBy")
     public PagedResponse<InventoryResponse> getAllInventory(int pageNumber, int pageSize, String sortBy) {
-        log.info("Fetching inventory items - page: {}, size: {}, sortBy: {}", pageNumber, pageSize, sortBy);
-
-        pageSize = Math.min(pageSize, ApiConstants.MAX_PAGE_SIZE);
-
-        Pageable pageable = PageRequest.of(pageNumber, pageSize, Sort.by(sortBy).ascending());
+        if (!SORTABLE_FIELDS.contains(sortBy)) {
+            throw new BusinessException("Cannot sort by '" + sortBy + "'. Allowed: " + SORTABLE_FIELDS, "INVALID_SORT_FIELD");
+        }
+        int size = Math.min(Math.max(pageSize, 1), ApiConstants.MAX_PAGE_SIZE);
+        Pageable pageable = PageRequest.of(Math.max(pageNumber, 0), size, Sort.by(sortBy).ascending());
         Page<Inventory> page = inventoryRepository.findAll(pageable);
-
-        List<InventoryResponse> responses = page.getContent()
-            .stream()
-            .map(this::mapToResponse)
-            .toList();
-
-        return PagedResponse.of(responses, pageNumber, pageSize, page.getTotalElements());
+        List<InventoryResponse> responses = page.getContent().stream().map(this::mapToResponse).toList();
+        return PagedResponse.of(responses, pageNumber, size, page.getTotalElements());
     }
 
     /**
-     * Reserves stock for an order.
-     *
-     * @param id the inventory ID
-     * @param quantity the quantity to reserve
-     * @return the updated inventory response
-     * @throws ResourceNotFoundException if inventory not found
-     * @throws BusinessException if insufficient stock
+     * Takes stock. Exactly what is left can be taken (down to zero); more than is left is a 409 and changes nothing.
      */
-    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
     public InventoryResponse reserveStock(Long id, Integer quantity) {
-        log.info("Reserving {} units from inventory {}", quantity, id);
-
-        Inventory inventory = inventoryRepository.findById(id)
-            .orElseThrow(() -> new ResourceNotFoundException("Inventory", id));
-
-        if (inventory.getQuantity() < quantity) {
-            log.warn("Insufficient stock for product: {}", inventory.getProductId());
-            throw new BusinessException(
-                "Insufficient stock. Available: " + inventory.getQuantity() + ", Requested: " + quantity,
-                "INSUFFICIENT_STOCK"
-            );
+        requirePositive(quantity);
+        if (inventoryRepository.decrementByIdIfAvailable(id, quantity) == 0) {
+            Inventory inventory = find(id);
+            throw new ConflictException(
+                    "Insufficient stock. Available: " + inventory.getQuantity() + ", Requested: " + quantity, "INSUFFICIENT_STOCK");
         }
-
-        inventory.setQuantity(inventory.getQuantity() - quantity);
-        Inventory updatedInventory = inventoryRepository.save(inventory);
-
-        log.info("Stock reserved successfully. Remaining quantity: {}", updatedInventory.getQuantity());
-        return mapToResponse(updatedInventory);
+        log.info("Took {} units from inventory {}", quantity, id);
+        return mapToResponse(find(id));
     }
 
-    /**
-     * Releases reserved stock (reversal of reservation).
-     *
-     * @param id the inventory ID
-     * @param quantity the quantity to release
-     * @return the updated inventory response
-     * @throws ResourceNotFoundException if inventory not found
-     */
-    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
+    /** Returns stock. */
     public InventoryResponse releaseStock(Long id, Integer quantity) {
-        log.info("Releasing {} units to inventory {}", quantity, id);
-
-        Inventory inventory = inventoryRepository.findById(id)
-            .orElseThrow(() -> new ResourceNotFoundException("Inventory", id));
-
-        inventory.setQuantity(inventory.getQuantity() + quantity);
-        Inventory updatedInventory = inventoryRepository.save(inventory);
-
-        log.info("Stock released successfully. Current quantity: {}", updatedInventory.getQuantity());
-        return mapToResponse(updatedInventory);
+        requirePositive(quantity);
+        if (inventoryRepository.incrementById(id, quantity) == 0) {
+            throw new ResourceNotFoundException("Inventory", id);
+        }
+        log.info("Returned {} units to inventory {}", quantity, id);
+        return mapToResponse(find(id));
     }
 
-    /**
-     * Updates inventory quantity.
-     *
-     * @param id the inventory ID
-     * @param newQuantity the new quantity
-     * @return the updated inventory response
-     * @throws ResourceNotFoundException if inventory not found
-     */
-    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
+    /** Sets the stock level to an absolute value (a stock-take). Zero is a valid level. */
     public InventoryResponse updateInventory(Long id, Integer newQuantity) {
-        log.info("Updating inventory {} to quantity {}", id, newQuantity);
-
-        Inventory inventory = inventoryRepository.findById(id)
-            .orElseThrow(() -> new ResourceNotFoundException("Inventory", id));
-
+        if (newQuantity == null || newQuantity < 0) {
+            throw new BusinessException("Quantity cannot be negative", "INVALID_QUANTITY");
+        }
+        Inventory inventory = find(id);
         inventory.setQuantity(newQuantity);
-        Inventory updatedInventory = inventoryRepository.save(inventory);
-
-        log.info("Inventory updated successfully");
-        return mapToResponse(updatedInventory);
+        return mapToResponse(inventoryRepository.saveAndFlush(inventory));
     }
 
-    /**
-     * Reserves stock for a product if it exists and has enough quantity on
-     * hand; empty otherwise. For the saga's Kafka listener
-     * (InventoryEventListener.handleOrderCreated), which previously wrote
-     * straight to InventoryRepository - bypassing this class and its
-     * @CacheEvict, so a reservation was invisible to GET /api/inventory for
-     * as long as that item stayed cached from an earlier read (same bug/fix
-     * as OrderService.updateOrderStatusIfPresent in order-service).
-     *
-     * Idempotent against Kafka redelivery of the same order-created event
-     * (a normal occurrence under AckMode.MANUAL, not a failure - see
-     * InventoryEventListener's javadoc): orderId is inserted into
-     * inventory_reservations FIRST, inside this same transaction, with a
-     * unique constraint on order_id - the same "insert as the atomic
-     * gatekeeper, catch the constraint violation" pattern already used by
-     * payment_service's one-payment-per-order constraint. A second
-     * delivery for an order already reserved hits that constraint and
-     * returns the current state without decrementing again; the first
-     * delivery's own reservation row is what makes that possible. If the
-     * stock check then fails (insufficient/not found), the just-inserted
-     * reservation row is removed - its existence must mean "stock was
-     * actually decremented for this order", nothing else.
-     *
-     * @param orderId the order this reservation is for - the idempotency key
-     * @param productId the product to reserve stock for
-     * @param quantity the quantity requested
-     * @return the updated inventory response, or empty if the product
-     *         doesn't exist or doesn't have enough stock
-     */
-    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
-    public Optional<InventoryResponse> reserveStockIfAvailable(Long orderId, String productId, Integer quantity) {
-        log.info("Reserving {} units of product {} for order {} (if available)", quantity, productId, orderId);
-
-        InventoryReservation reservation = InventoryReservation.builder()
-            .orderId(orderId)
-            .productId(productId)
-            .quantity(quantity)
-            .build();
-        try {
-            reservationRepository.saveAndFlush(reservation);
-        } catch (DataIntegrityViolationException dup) {
-            log.info("Reservation already exists for order {} - redelivery of an already-processed event, skipping decrement",
-                orderId);
-            return inventoryRepository.findByProductId(productId).map(this::mapToResponse);
-        }
-
-        Optional<InventoryResponse> result = inventoryRepository.findByProductId(productId)
-            .filter(inventory -> inventory.getQuantity() >= quantity)
-            .map(inventory -> {
-                inventory.setQuantity(inventory.getQuantity() - quantity);
-                return mapToResponse(inventoryRepository.save(inventory));
-            });
-
-        if (result.isEmpty()) {
-            // Nothing was actually reserved - this reservation row would otherwise
-            // be a false record of a decrement that never happened.
-            reservationRepository.delete(reservation);
-        }
-
-        return result;
+    private Inventory find(Long id) {
+        return inventoryRepository.findById(id).orElseThrow(() -> new ResourceNotFoundException("Inventory", id));
     }
 
-    /**
-     * Releases previously reserved stock for an order if a reservation
-     * exists for it; no-op otherwise (same rationale as
-     * reserveStockIfAvailable above).
-     *
-     * Idempotent against Kafka redelivery of the same payment-failed event
-     * the same way: markReleased's conditional UPDATE is the atomic
-     * gatekeeper (only one concurrent caller can ever see
-     * {@code updated == 1}), so a second delivery increments the stock back
-     * at most once per order, no matter how many times the event is
-     * redelivered.
-     *
-     * @param orderId the order whose reservation should be released
-     * @param productId the product to release stock back to
-     * @param quantity the quantity to add back
-     * @return the updated inventory response, or empty if no reservation
-     *         exists for this order (nothing to release) or the product
-     *         itself no longer exists
-     */
-    @CacheEvict(value = CacheConfig.INVENTORY_CACHE, allEntries = true)
-    public Optional<InventoryResponse> releaseStockIfPresent(Long orderId, String productId, Integer quantity) {
-        log.info("Releasing {} units of product {} for order {} (if present)", quantity, productId, orderId);
-
-        if (reservationRepository.findByOrderId(orderId).isEmpty()) {
-            log.warn("No reservation found for order {} - nothing to release", orderId);
-            return Optional.empty();
+    /** A movement of stock is a positive number of units; a negative "reservation" would otherwise ADD stock. */
+    private static void requirePositive(Integer quantity) {
+        if (quantity == null || quantity <= 0) {
+            throw new BusinessException("Quantity must be positive", "INVALID_QUANTITY");
         }
-
-        if (reservationRepository.markReleased(orderId) == 0) {
-            log.info("Reservation for order {} already released - redelivery of an already-processed event, skipping increment",
-                orderId);
-            return inventoryRepository.findByProductId(productId).map(this::mapToResponse);
-        }
-
-        return inventoryRepository.findByProductId(productId)
-            .map(inventory -> {
-                inventory.setQuantity(inventory.getQuantity() + quantity);
-                return mapToResponse(inventoryRepository.save(inventory));
-            });
     }
 
-    private InventoryResponse mapToResponse(Inventory inventory) {
+    InventoryResponse mapToResponse(Inventory inventory) {
         return InventoryResponse.builder()
-            .id(inventory.getId())
-            .productId(inventory.getProductId())
-            .quantity(inventory.getQuantity())
-            .createdAt(inventory.getCreatedAt())
-            .updatedAt(inventory.getUpdatedAt())
-            .build();
+                .id(inventory.getId())
+                .productId(inventory.getProductId())
+                .quantity(inventory.getQuantity())
+                .version(inventory.getVersion())
+                .createdAt(inventory.getCreatedAt())
+                .updatedAt(inventory.getUpdatedAt())
+                .build();
     }
 }

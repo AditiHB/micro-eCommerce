@@ -1,86 +1,121 @@
 server:
   port: 8083
+  shutdown: graceful
 
 spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   application:
     name: order-service
+  autoconfigure:
+    # Only customer-service and product-service cache (reference data); the others do not use Redis at all.
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+      - org.springframework.boot.actuate.autoconfigure.data.redis.RedisHealthContributorAutoConfiguration
+  cloud:
+    vault:
+      # Switched on by the `vault` profile (see application-vault.yml); off for plain local runs.
+      enabled: false
   config:
     import: "optional:configserver:http://localhost:8888/"
   flyway:
+    # Schema changes run as a separate owner role when one is provided (Vault mode); otherwise they
+    # fall back to the application role.
+    user: ${db.migration.username:${vault.db.username:${DB_USERNAME:}}}
+    password: ${db.migration.password:${vault.db.password:${DB_PASSWORD:}}}
     enabled: true
     baselineOnMigrate: true
     validateOnMigrate: true
-    locations: classpath:db/migration/{vendor}
+    locations: classpath:db/migration/postgresql
     outOfOrder: false
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
-    producer:
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
     consumer:
+      # (De)serialization is configured in KafkaEventConfig: logical event types, an allow-list of classes.
       group-id: order-group
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "*"
   datasource:
-    url: ${DB_URL:jdbc:h2:mem:order_db}
-    driverClassName: ${DB_DRIVER:org.h2.Driver}
-    username: ${DB_USERNAME:sa}
-    password: ${DB_PASSWORD:password}
+    # PostgreSQL is the only database engine. Credentials come from the environment, or from Vault as
+    # short-lived dynamic credentials when the vault profile is on.
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/order_db}
+    driverClassName: org.postgresql.Driver
+    username: ${vault.db.username:${DB_USERNAME:}}
+    password: ${vault.db.password:${DB_PASSWORD:}}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
   jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
+    # No lazy loading in the web layer: every response is built from DTOs inside a service transaction.
+    open-in-view: false
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: validate
-    show-sql: true
-  h2:
-    console:
-      enabled: true
-  redis:
-    host: ${REDIS_HOST:localhost}
-    port: ${REDIS_PORT:6379}
-    database: 0
-    timeout: 2000ms
-    lettuce:
-      pool:
-        max-active: 8
-        max-idle: 8
-        min-idle: 0
-    password: ${REDIS_PASSWORD:}
-  cache:
-    type: redis
-    redis:
-      time-to-live: 600000
-      key-prefix: "order-service:"
+    show-sql: false
 
+# Resilience is applied only where it is safe and useful: to READS of other services (the catalogue and the
+# customer directory). Creating an order is a local database write and is deliberately not retried - safety
+# there comes from the Idempotency-Key. Timeouts nest from the edge inward (gateway 10s > this service
+# 8s > one remote call ~3.2s worst case); see docs/RESILIENCE.md.
 resilience4j:
-  circuitbreaker:
-    instances:
-      orderService:
-        slidingWindowSize: 5
-        failureRateThreshold: 50
-        waitDurationInOpenState: 10s
   retry:
     instances:
-      orderService:
-        maxAttempts: 3
-        waitDuration: 2s
+      catalog: &remote-read-retry
+        maxAttempts: 2
+        waitDuration: 200ms
+        retryExceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+      customerDirectory: *remote-read-retry
+  circuitbreaker:
+    instances:
+      catalog: &remote-read-breaker
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        recordExceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+      customerDirectory: *remote-read-breaker
+
+services:
+  product:
+    url: ${PRODUCT_SERVICE_URL:http://localhost:8085}
+  customer:
+    url: ${CUSTOMER_SERVICE_URL:http://localhost:8081}
 
 eureka:
   client:
     service-url:
       defaultZone: http://localhost:8761/eureka/
 
-jwt:
-  secret: ${JWT_SECRET:local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
+ecommerce:
+  clients:
+    connect-timeout: 500ms
+    read-timeout: 1500ms
+  orders:
+    saga-timeout: ${ORDER_SAGA_TIMEOUT:5m}
+    idempotency-key-required: ${ORDER_IDEMPOTENCY_KEY_REQUIRED:false}
+  security:
+    # Identity provider (Keycloak). URLs are public configuration, not secrets; there is deliberately
+    # no signing secret anywhere any more - tokens are RS256 and verified against the provider's JWKS.
+    jwk-set-uri: ${SECURITY_JWK_SET_URI:http://localhost:8180/realms/ecommerce/protocol/openid-connect/certs}
+    issuer: ${SECURITY_ISSUER:http://localhost:8180/realms/ecommerce}
+    audience: ${SECURITY_AUDIENCE:ecommerce-api}
 
 management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9083}
   endpoints:
     web:
       exposure:
-        include: health,metrics,prometheus,info
+        include: health,prometheus,info
   endpoint:
     health:
-      show-details: always
-      show-components: always
+      show-details: never
       probes:
         enabled: true
   metrics:
@@ -101,8 +136,6 @@ management:
 
 logging:
   level:
-    com.ecommerce: DEBUG
-    org.springframework.web: DEBUG
-    org.springframework.data: DEBUG
+    com.ecommerce: INFO
   pattern:
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

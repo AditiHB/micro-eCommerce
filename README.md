@@ -1,6 +1,6 @@
 # micro-eCommerce
 
-A production-ready **E-Commerce Microservices Architecture** built with **Java 17**, **Spring Boot 3.2.5**, and **Spring Cloud 2023.0.1**. This project demonstrates a scalable, resilient, and event-driven architecture for modern e-commerce platforms.
+A **E-Commerce Microservices Architecture** (security-hardened reference implementation; see [docs/SECURITY_HARDENING.md](docs/SECURITY_HARDENING.md) for what is and is not production-grade) built with **Java 17**, **Spring Boot 3.2.5**, and **Spring Cloud 2023.0.1**. This project demonstrates a scalable, resilient, and event-driven architecture for modern e-commerce platforms.
 
 ## 📋 Table of Contents
 
@@ -29,6 +29,9 @@ This project implements a cloud-native microservices architecture for an e-comme
 - **SAGA pattern** for distributed transactions across services
 - **Resilience patterns** (Circuit Breaker, Retry) using Resilience4j
 - **Docker containerization** with Docker Compose orchestration
+- **Identity and access control** with Keycloak (OAuth2/OIDC, RS256 tokens, role + object-level authorization) - see [docs/KEYCLOAK_IDENTITY.md](docs/KEYCLOAK_IDENTITY.md)
+- **Secrets** from git-ignored generated files, or HashiCorp Vault (AppRole, dynamic short-lived database logins) - see [docs/VAULT_SECRETS.md](docs/VAULT_SECRETS.md)
+- **Internal PKI** with smallstep step-ca (24h auto-renewed certificates, edge TLS) - see [docs/SMALLSTEP_PKI.md](docs/SMALLSTEP_PKI.md)
 
 ---
 
@@ -151,6 +154,8 @@ micro-eCommerce/
 ├── pom.xml                                      # Parent Maven POM
 ├── docker-compose.yml                           # Single Compose file for ALL local scenarios (see docs/SETUP_AND_DEPLOYMENT.md)
 ├── .env.postgres                                # Env flags to switch the stack to Postgres
+├── .env                                         # (generated, git-ignored) your secrets - scripts/gen-env.sh
+├── docker-compose.vault.yml / .pki.yml / .vault-tls.yml   # optional overlays: Vault, internal CA, Vault over TLS
 ├── postman-collection.json                     # API test collection
 ├── postman_environment_http.json               # Postman/Insomnia env (HTTP)
 ├── postman_environment_https.json              # Postman/Insomnia env (HTTPS)
@@ -272,34 +277,52 @@ mvn spring-boot:run
 
 ### Quick Start with Docker Compose
 
-A single `docker-compose.yml` covers every local scenario (H2, Postgres, HTTPS, full observability stack) via Compose **profiles** - no separate compose files to maintain. This is a local-only project (Docker Compose here, or the Kubernetes manifests under `k8s/` if you'd rather run it in a cluster); there is no distinct "production" compose variant.
+No credential is stored in this repository. Generate your own secrets first (random, git-ignored `.env`):
 
 ```bash
-# Default: core stack, in-memory H2 (fastest to start)
-docker compose up -d
+scripts/gen-env.sh          # creates .env: database/Redis passwords, Keycloak admin, client secrets, test-user passwords
+```
 
-# Real PostgreSQL instead of H2
-docker compose --profile postgres --env-file .env.postgres up -d
+A single `docker-compose.yml` covers the local scenarios via Compose **profiles**, and two optional **overlay files** add Vault and the internal CA. This is a local-only project (Docker Compose here, or the Kubernetes manifests under `k8s/` for a cluster); there is no distinct "production" compose variant. Every published port is bound to `127.0.0.1`.
 
-# HTTPS locally via nginx + self-signed cert
-docker compose --profile https up -d
+```bash
+# Default: core stack, in-memory H2 (fastest to start). Keycloak is part of the core stack.
+docker compose up -d --build
 
-# Full stack: Postgres + HTTPS + observability (ELK/Prometheus/Grafana)
-docker compose --profile postgres --profile https --profile observability --env-file .env.postgres up -d
+# Real PostgreSQL instead of H2 (one least-privilege owner role per service)
+docker compose --env-file .env --env-file .env.postgres --profile postgres up -d --build
+
+# Secrets from HashiCorp Vault (+ short-lived DB logins with Postgres)
+docker compose -f docker-compose.yml -f docker-compose.vault.yml up -d --build
+
+# HTTPS: internal smallstep CA issues the certificates (nginx on :443, Keycloak on :8443)
+docker compose -f docker-compose.yml -f docker-compose.pki.yml --profile https up -d --build
+
+# Observability (ELK/Prometheus/Grafana) on top of any of the above
+#   ... --profile observability
 
 # Check service status / logs / stop
 docker compose ps
 docker compose logs -f
-docker compose down
+docker compose down            # add -v to also drop volumes (database, Keycloak, Vault, CA)
+```
+
+**Getting a token** (there is no login endpoint on the API - Keycloak issues every token):
+
+```bash
+set -a; . ./.env; set +a
+TOKEN=$(curl -s http://localhost:8180/realms/ecommerce/protocol/openid-connect/token   -d grant_type=password -d client_id=ecommerce-e2e -d "client_secret=$E2E_CLIENT_SECRET"   -d username=karate_admin -d "password=$E2E_ADMIN_PASSWORD" | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/customers
 ```
 
 See **[docs/SETUP_AND_DEPLOYMENT.md](docs/SETUP_AND_DEPLOYMENT.md)** for the full scenario matrix, memory budget per profile, and HTTPS certificate setup.
 
 ### Service Access via Docker Compose
 
-- **API Gateway:** http://localhost:8080
-- **Eureka Dashboard:** http://localhost:8761
-- **Config Server:** http://localhost:8888
+- **API Gateway:** http://localhost:8080 (the only public API entry point)
+- **Keycloak:** http://localhost:8180 (admin console; `KC_BOOTSTRAP_ADMIN_*` in `.env`)
+- **Eureka Dashboard:** http://localhost:8761 (HTTP Basic: user `eureka`, password `EUREKA_PASSWORD` in `.env`)
+- **Config Server:** http://localhost:8888 (HTTP Basic)
 - **Customer Service:** http://localhost:8081
 - **Inventory Service:** http://localhost:8082
 - **Order Service:** http://localhost:8083
@@ -328,7 +351,8 @@ A complete Postman collection is provided: `postman-collection.json` (also impor
 **Import steps:**
 1. Open Postman (or Insomnia)
 2. Click **Import** → select `postman-collection.json` and the environment file matching your setup
-3. Explore available endpoints for all microservices
+3. In the environment set `keycloak_client_secret`, `username` and `password` from your `.env`, then run *Authentication → Get access token* (see [docs/KEYCLOAK_IDENTITY.md](docs/KEYCLOAK_IDENTITY.md#4-getting-a-token))
+4. Explore available endpoints for all microservices
 
 ### Base URL
 ```

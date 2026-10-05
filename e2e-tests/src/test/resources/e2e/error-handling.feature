@@ -1,98 +1,119 @@
-Feature: Authentication, not-found and validation errors are clean, not 500s
-  Every other feature in this module drives the happy path or a specific
-  business failure (insufficient stock, a DB constraint, a saga rollback).
-  None of them ever check the basic contract every REST API needs to hold:
-  a missing/bad token, a nonexistent id, or malformed input should come
-  back as a clean 401/404/400 with a useful body - never an opaque 500.
-  Found by auditing this suite's own coverage; nothing here was exercised
-  anywhere else.
+Feature: One error contract across every service
+  Every failure - from every service, behind the gateway - is an RFC 9457 problem document
+  (application/problem+json) with the same members: type, title, status, detail, instance, errorCode, timestamp.
+  A client parses one shape whatever went wrong and whoever answered.
 
   Background:
     * url gatewayUrl
     * def showcase = Java.type('e2e.DataShowcase')
-    Given path '/api/auth/login'
-    And request { username: '#(testUsername)', password: '#(testPassword)' }
-    When method post
-    Then status 200
-    * def authToken = response.token
-    * configure headers = { Authorization: '#("Bearer " + authToken)' }
+    * def docker = Java.type('e2e.DockerControl')
+    * eval docker.clearRateLimitKeys()
+    * def login = call read('classpath:e2e/auth.feature') { username: '#(testUsername)', password: '#(testPassword)' }
+    * def token = login.accessToken
+    * configure headers = { Authorization: '#("Bearer " + token)' }
+    * def problem = { type: '#string', title: '#string', status: '#number', detail: '#string', instance: '#string', errorCode: '#string', timestamp: '#string' }
 
-  Scenario: Requests without a valid JWT are rejected with 401, not silently allowed
+  Scenario Outline: Unknown ids are 404 problems, whichever service owns the resource
+
+    Given path '<path>'
+    When method get
+    Then status 404
+    And match responseHeaders['Content-Type'][0] contains 'application/problem+json'
+    And match response contains problem
+    And match response.errorCode == 'RESOURCE_NOT_FOUND'
+    And match response.instance == '<path>'
+    * showcase.event('GET <path> -> 404 problem+json with errorCode RESOURCE_NOT_FOUND.')
+
+    Examples:
+      | path                                  |
+      | /api/v1/orders/999999999              |
+      | /api/v1/payments/999999999            |
+      | /api/v1/customers/999999999           |
+      | /api/v1/inventory/999999999           |
+      | /api/v1/products/999999999            |
+      | /api/v1/notifications/999999999       |
+
+  Scenario: Validation errors name the offending fields, in every service
+
+    Given path '/api/v1/customers'
+    And request { name: 'x', email: 'not-an-email' }
+    When method post
+    Then status 400
+    And match response contains problem
+    And match response.errorCode == 'VALIDATION_FAILED'
+    And match response.errors.email == '#string'
+    And match response.errors.name == '#string'
+
+    Given path '/api/v1/orders'
+    And request { items: [{ productId: '', quantity: 0 }] }
+    When method post
+    Then status 400
+    And match response.errorCode == 'VALIDATION_FAILED'
+    And match response.errors.customerId == '#string'
+
+    Given path '/api/v1/inventory'
+    And request { productId: '', quantity: -1 }
+    When method post
+    Then status 400
+    And match response.errors.quantity == '#string'
+
+    Given path '/api/v1/products'
+    And request { name: '', price: 0, sku: '', category: '' }
+    When method post
+    Then status 400
+    And match response.errors.price == '#string'
+
+  Scenario: Malformed JSON, a wrong method and a bad parameter are problems too
+
+    Given path '/api/v1/orders'
+    And header Content-Type = 'application/json'
+    And request '{ this is not json'
+    When method post
+    Then status 400
+    And match response.errorCode == 'MALFORMED_REQUEST'
+
+    Given path '/api/v1/payments'
+    And request { orderId: 1, amount: 0.01 }
+    When method post
+    Then status 405
+    And match response contains problem
+    And match response.errorCode == 'METHOD_NOT_ALLOWED'
+
+    Given path '/api/v1/inventory/1/reserve'
+    And param quantity = 'abc'
+    When method post
+    Then status 400
+    And match response.errorCode == '#string'
+
+    Given path '/api/v1/orders'
+    And param sortBy = 'customer.password'
+    When method get
+    Then status 400
+    And match response.errorCode == 'INVALID_SORT_FIELD'
+
+  Scenario: Conflicts (409) and failed preconditions (412) are problems
+
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    Given path '/api/v1/customers'
+    And request { name: 'Duplicate Email', email: '#(customer.email)' }
+    When method post
+    Then status 409
+    And match response.errorCode == 'CUSTOMER_EMAIL_EXISTS'
+
+    Given path '/api/v1/customers', customer.customerId
+    And header If-Match = '"999"'
+    And request { name: 'Someone Else', email: '#(customer.email)' }
+    When method put
+    Then status 412
+    And match response.errorCode == 'PRECONDITION_FAILED'
+
+  Scenario: No token and a Basic credential are refused at the edge
 
     * configure headers = {}
-    Given path '/api/orders'
+    Given path '/api/v1/orders'
     When method get
     Then status 401
-    * showcase.event('GET /api/orders with NO Authorization header at all -> 401.')
-
-    Given path '/api/customers'
-    And header Authorization = 'Bearer this-is-not-a-real-token'
+    Given path '/api/v1/orders'
+    And header Authorization = 'Basic YWRtaW46YWRtaW4='
     When method get
     Then status 401
-    * showcase.event('GET /api/customers with a garbage/unparseable JWT -> 401, not a 500 from a failed token parse.')
-
-  Scenario: GET for a nonexistent id returns a clean 404 across every service
-
-    Given path '/api/orders/999999999'
-    When method get
-    Then status 404
-    * showcase.event('GET /api/orders/999999999 -> 404.')
-
-    Given path '/api/payments/999999999'
-    When method get
-    Then status 404
-    * showcase.event('GET /api/payments/999999999 -> 404.')
-
-    Given path '/api/customers/999999999'
-    When method get
-    Then status 404
-    * showcase.event('GET /api/customers/999999999 -> 404.')
-
-    Given path '/api/inventory/999999999'
-    When method get
-    Then status 404
-    * showcase.event('GET /api/inventory/999999999 -> 404.')
-
-    * url notificationUrl
-    Given path '/api/notifications/999999999'
-    When method get
-    Then status 404
-    * showcase.event('GET /api/notifications/999999999 -> 404 - every GET-by-id endpoint in the system behaves the same way for a missing row.')
-
-  Scenario: Malformed input is rejected with a clean 400 before anything is persisted
-
-    Given url gatewayUrl
-    And path '/api/customers'
-    And request { name: 'Bad Email Customer', email: 'not-a-valid-email' }
-    When method post
-    Then status 400
-    * showcase.event('POST /api/customers with an invalid email -> 400 VALIDATION_FAILED, nothing persisted.')
-
-    Given path '/api/orders'
-    And request { customerId: 1, productId: 'SKU-001', quantity: -5 }
-    When method post
-    Then status 400
-    * showcase.event('POST /api/orders with a negative quantity -> 400 - rejected at the controller boundary before OrderCreatedEvent is ever published.')
-
-    * def uniqueSku = 'SKU-BAD-' + Java.type('java.lang.System').currentTimeMillis()
-    Given path '/api/inventory'
-    And request { productId: '#(uniqueSku)', quantity: 0 }
-    When method post
-    Then status 400
-    * showcase.event('POST /api/inventory with a zero quantity -> 400 (quantity must be positive).')
-
-    Given path '/api/payments'
-    And request { orderId: 123456789, amount: -10.00 }
-    When method post
-    Then status 400
-    * showcase.event('POST /api/payments with a negative amount -> 400, no payment row created for order 123456789.')
-    * showcase.show('Payments for order 123456789 - expect zero rows', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=123456789')
-
-  Scenario: Logging in with the wrong password is rejected cleanly, not with a token
-
-    * configure headers = {}
-    Given path '/api/auth/login'
-    And request { username: '#(testUsername)', password: 'definitely-the-wrong-password' }
-    When method post
-    Then status 400
-    * showcase.event('Login with a wrong password -> 400, no JWT issued.')

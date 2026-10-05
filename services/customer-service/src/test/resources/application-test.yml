@@ -1,3 +1,5 @@
+# Integration-test profile. The datasource comes from the shared Testcontainers PostgreSQL (see
+# common's SharedPostgres), the real Flyway migrations run, and Hibernate validates the entities against them.
 spring:
   application:
     name: customer-service-test
@@ -6,22 +8,15 @@ spring:
       enabled: false
     discovery:
       enabled: false
-  datasource:
-    url: jdbc:h2:mem:testdb
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
-    hibernate:
-      ddl-auto: create-drop
-    show-sql: false
-    properties:
-      hibernate:
-        format_sql: false
-  h2:
-    console:
+    vault:
       enabled: false
+  data:
+    redis:
+      # Nothing listens here by default: tests that do not need a cache run through the cache-outage path
+      # (every cache call fails fast and is treated as a miss). The cache tests point this at a real Redis.
+      host: localhost
+      port: 6399
+      timeout: 500ms
   kafka:
     admin:
       auto-create: false
@@ -33,6 +28,16 @@ kafka:
   listener:
     auto-startup: false
 
+ecommerce:
+  outbox:
+    # Tests inspect the outbox rows instead of letting a relay ship them.
+    relay-enabled: false
+  security:
+    # Tests never contact an identity provider: JwtDecoder is built lazily and slice tests use mock tokens.
+    jwk-set-uri: http://localhost:0/jwks
+    issuer: http://issuer.test/realms/ecommerce
+    audience: ecommerce-api
+
 server:
   port: 8081
 
@@ -40,10 +45,6 @@ logging:
   level:
     root: WARN
     com.ecommerce: WARN
-
-jwt:
-  secret: testSecretKeyForJWTTokenSigningPurposeOnlyForTesting1234567890
-  expiration: 3600000
 
 eureka:
   client:

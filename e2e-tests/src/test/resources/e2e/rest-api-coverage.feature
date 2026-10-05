@@ -1,211 +1,215 @@
-Feature: REST endpoints the saga never exercises
-  Every other feature in this module drives the system the way a real
-  customer would - through the Kafka saga. This one covers the REST
-  endpoints that are real, shipped capabilities but sit outside that path
-  entirely: direct admin/ops-style operations nothing else in this suite
-  ever calls. Found by auditing this suite's own coverage against every
-  REST controller in the codebase.
-
-  Each scenario is independent and narrates what it's proving, with a live
-  data showcase at each step - same conventions as every other feature here.
+Feature: REST API coverage - every public endpoint, through the gateway
+  One pass over each resource's API: customers, products (the catalogue), inventory, orders, payments and
+  notifications, plus the versioning contract (v1 is canonical; the old unversioned paths still work but say they
+  are deprecated). Business flows are in the other features; this one makes sure every endpoint is reachable and
+  behaves as documented.
 
   Background:
     * url gatewayUrl
-    * def showcase = Java.type('e2e.DataShowcase')
-    Given path '/api/auth/login'
-    And request { username: '#(testUsername)', password: '#(testPassword)' }
-    When method post
-    Then status 200
-    * def authToken = response.token
-    * configure headers = { Authorization: '#("Bearer " + authToken)' }
+    * def docker = Java.type('e2e.DockerControl')
+    * eval docker.clearRateLimitKeys()
+    * def login = call read('classpath:e2e/auth.feature') { username: '#(testUsername)', password: '#(testPassword)' }
+    * def token = login.accessToken
+    * configure headers = { Authorization: '#("Bearer " + token)' }
 
-  Scenario: GET /auth/me confirms the token is actually recognized as authenticated
+  Scenario: Customers - create, read, update with If-Match, list, delete
 
-    Given path '/api/auth/me'
-    When method get
-    Then status 200
-    * showcase.event('GET /auth/me succeeded - the gateway/service accepted this JWT as a valid, authenticated session.')
-
-  Scenario: Customer lifecycle - read, list, update, delete (only create is exercised elsewhere)
-
-    * def uniqueId = Java.type('java.util.UUID').randomUUID() + ''
-    Given path '/api/customers'
-    And request { name: '#("Lifecycle Customer " + uniqueId)', email: '#("lifecycle." + uniqueId + "@example.com")' }
+    * def uniq = java.util.UUID.randomUUID() + ''
+    Given path '/api/v1/customers'
+    And request { name: 'Coverage Customer', email: '#("cov." + uniq + "@example.com")' }
     When method post
     Then status 201
-    * def customerId = response.id
-    * showcase.event('Customer ' + customerId + ' created - now exercising the endpoints no other scenario touches: GET by id, GET list, PUT update, DELETE.')
+    And match header ETag == '"0"'
+    And match header Location == '#regex /api/v1/customers/\\d+'
+    * def id = response.id
 
-    Given path '/api/customers', customerId
+    Given path '/api/v1/customers', id
     When method get
     Then status 200
-    And match response.id == customerId
-    * showcase.event('GET /api/customers/' + customerId + ' returns the same customer just created.')
+    And match response == { id: '#(id)', name: 'Coverage Customer', email: '#string', version: 0, createdAt: '#string', updatedAt: '#string' }
 
-    Given path '/api/customers'
+    Given path '/api/v1/customers', id
+    And header If-Match = '"0"'
+    And request { name: 'Renamed Customer', email: '#("cov." + uniq + "@example.com")' }
+    When method put
+    Then status 200
+    And match response.name == 'Renamed Customer'
+    And match header ETag == '"1"'
+
+    Given path '/api/v1/customers'
+    And param sortBy = 'email'
     And param size = 5
     When method get
     Then status 200
-    And assert response.content.length >= 1
-    * showcase.event('GET /api/customers (list) returns a paginated page - ' + response.totalElements + ' customers exist in total.')
+    And match response.content == '#[_ <= 5]'
 
-    * def updatedEmail = 'updated.' + uniqueId + '@example.com'
-    Given path '/api/customers', customerId
-    And request { name: '#("Updated Lifecycle Customer " + uniqueId)', email: '#(updatedEmail)' }
-    When method put
-    Then status 200
-    And match response.email == updatedEmail
-    * showcase.event('PUT /api/customers/' + customerId + ' changed the email - confirmed in the response.')
-    * showcase.show('Customer ' + customerId + ' after update', 'customer_db', 'SELECT id, name, email FROM customers WHERE id=' + customerId)
-
-    Given path '/api/customers', customerId
+    Given path '/api/v1/customers', id
     When method delete
     Then status 204
-    * showcase.event('DELETE /api/customers/' + customerId + ' succeeded (204 No Content).')
-
-    Given path '/api/customers', customerId
+    Given path '/api/v1/customers', id
     When method get
     Then status 404
-    * showcase.event('GET /api/customers/' + customerId + ' now 404s - the delete was real, not just a soft flag the GET ignores.')
-    * showcase.show('Customer ' + customerId + ' after delete - expect zero rows', 'customer_db', 'SELECT id, name, email FROM customers WHERE id=' + customerId)
 
-  Scenario: Direct inventory management - create, reserve, insufficient-stock rejection, release, update
+  Scenario: Products - the catalogue: create, read by id and SKU, batch lookup, search, update, delete
 
-    * def uniqueSku = 'SKU-REST-' + Java.type('java.lang.System').currentTimeMillis()
-    Given path '/api/inventory'
-    And request { productId: '#(uniqueSku)', quantity: 50 }
+    * def sku = 'COV-' + java.util.UUID.randomUUID()
+    Given path '/api/v1/products'
+    And request { name: 'Coverage Gadget', description: 'for the coverage test', price: 19.99, sku: '#(sku)', category: 'Coverage' }
     When method post
     Then status 201
-    * def inventoryId = response.id
-    * showcase.event('Created ' + uniqueSku + ' with 50 units via POST /api/inventory - the REST-driven path, entirely separate from the Kafka saga\'s own reserve/release.')
-    * showcase.show('Inventory ' + inventoryId + ' created', 'inventory_db', 'SELECT id, product_id, quantity FROM inventory WHERE id=' + inventoryId)
+    And match response.currency == 'USD'
+    And match response.quantityAvailable == '#notpresent'
+    * def id = response.id
 
-    Given path '/api/inventory', inventoryId, 'reserve'
-    And param quantity = 20
-    When method post
+    Given path '/api/v1/products', id
+    When method get
     Then status 200
-    And match response.quantity == 30
-    * showcase.event('POST /api/inventory/' + inventoryId + '/reserve?quantity=20 succeeded - 50 -> 30.')
+    And match response.sku == sku
+    Given path '/api/v1/products/sku', sku
+    When method get
+    Then status 200
 
-    Given path '/api/inventory', inventoryId, 'reserve'
-    And param quantity = 999
-    When method post
+    # one call prices several SKUs; unknown ones are simply absent
+    Given path '/api/v1/products/lookup'
+    And param skus = sku + ',DOES-NOT-EXIST'
+    When method get
+    Then status 200
+    And match response == '#[1]'
+    And match response[0].price == 19.99
+
+    Given path '/api/v1/products/search'
+    And param term = 'coverage gadget'
+    When method get
+    Then status 200
+    And match response.content[*].sku contains sku
+    Given path '/api/v1/products/category/Coverage'
+    When method get
+    Then status 200
+
+    Given path '/api/v1/products', id
+    And request { price: 24.50 }
+    When method put
+    Then status 200
+    And match response.price == 24.50
+    And match response.name == 'Coverage Gadget'
+
+    # a client cannot sort the catalogue by an arbitrary property
+    Given path '/api/v1/products'
+    And param sort = 'description,desc'
+    When method get
     Then status 400
-    And match response.errorCode == 'INSUFFICIENT_STOCK'
-    * showcase.event('Reserving 999 units correctly rejected with 400 INSUFFICIENT_STOCK - stock untouched at 30.')
+    And match response.errorCode == 'INVALID_SORT_FIELD'
 
-    Given path '/api/inventory', inventoryId, 'release'
-    And param quantity = 20
+    # a duplicate SKU is a conflict
+    Given path '/api/v1/products'
+    And request { name: 'Again', price: 1.00, sku: '#(sku)', category: 'Coverage' }
     When method post
-    Then status 200
-    And match response.quantity == 50
-    * showcase.event('POST /api/inventory/' + inventoryId + '/release?quantity=20 succeeded - back to 50.')
+    Then status 409
+    And match response.errorCode == 'DUPLICATE_SKU'
 
-    Given path '/api/inventory', inventoryId
-    And param quantity = 200
-    When method put
-    Then status 200
-    And match response.quantity == 200
-    * showcase.event('PUT /api/inventory/' + inventoryId + '?quantity=200 directly overwrote the quantity (an admin/ops correction, not a reserve/release delta).')
-    * showcase.show('Inventory ' + inventoryId + ' final state', 'inventory_db', 'SELECT id, product_id, quantity FROM inventory WHERE id=' + inventoryId)
+    Given path '/api/v1/products', id
+    When method delete
+    Then status 204
 
-  Scenario: Manual order status override bypasses the saga entirely
+  Scenario: Inventory - create (including zero stock), read, reserve/release, stock-take
 
-    * def uniqueId = Java.type('java.util.UUID').randomUUID() + ''
-    Given path '/api/customers'
-    And request { name: '#("Status Override Customer " + uniqueId)', email: '#("override." + uniqueId + "@example.com")' }
+    * def sku = 'COV-INV-' + java.util.UUID.randomUUID()
+    Given path '/api/v1/inventory'
+    And request { productId: '#(sku)', quantity: 0 }
     When method post
     Then status 201
-    * def customerId = response.id
+    And match response.quantity == 0
+    * def id = response.id
 
-    Given path '/api/inventory'
-    And param size = 1
+    Given path '/api/v1/inventory', id
+    And param quantity = 25
+    When method put
+    Then status 200
+    And match response.quantity == 25
+    Given path '/api/v1/inventory', id, 'reserve'
+    And param quantity = 5
+    When method post
+    Then status 200
+    And match response.quantity == 20
+    Given path '/api/v1/inventory', id, 'release'
+    And param quantity = 2
+    When method post
+    Then status 200
+    And match response.quantity == 22
+
+    Given path '/api/v1/inventory'
+    And param sortBy = 'quantity'
     When method get
     Then status 200
-    * def productId = response.content[0].productId
 
-    Given path '/api/orders'
-    And request { customerId: '#(customerId)', productId: '#(productId)', quantity: 1 }
+  Scenario: Orders, payments and notifications - list and read
+
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 8.00, stock: 10 }
+    * def placed = call read('classpath:e2e/helpers/place-order.feature') { token: '#(token)', customerId: '#(customer.customerId)', items: [{ productId: '#(product.sku)', quantity: 2 }] }
+    * def orderId = placed.orderId
+    * def settled = call read('classpath:e2e/helpers/await-order.feature') { token: '#(token)', orderId: '#(orderId)', expected: 'COMPLETED' }
+
+    # the original single-product request shape is still accepted
+    Given path '/api/v1/orders'
+    And request { customerId: '#(customer.customerId)', productId: '#(product.sku)', quantity: 1 }
     When method post
     Then status 201
-    And match response.status == 'PENDING'
-    * def orderId = response.id
-    * showcase.event('Order ' + orderId + ' created as PENDING - instead of waiting for the saga, directly forcing it to COMPLETED via PUT /{id}/status.')
+    And match response.items == '#[1]'
 
-    Given path '/api/orders', orderId, 'status'
-    And param status = 'COMPLETED'
-    When method put
+    Given path '/api/v1/orders'
+    And param size = 5
+    And param sortBy = 'createdAt'
+    When method get
     Then status 200
-    And match response.status == 'COMPLETED'
-    * showcase.event('PUT /api/orders/' + orderId + '/status?status=COMPLETED succeeded immediately - no payment was ever processed, this is a direct administrative override.')
-    * showcase.show('Order ' + orderId + ' after manual status override', 'order_db', 'SELECT id, status FROM orders WHERE id=' + orderId)
+    And match response.content == '#[_ <= 5]'
 
-  Scenario: Manual payment refund is a distinct capability from the saga's automatic refund-on-cancellation
-
-    * def orderId = Java.type('java.lang.System').currentTimeMillis()
-    Given path '/api/payments'
-    And request { orderId: '#(orderId)', amount: 75.00 }
-    When method post
-    Then status 201
-    And match response.status == 'PROCESSED'
+    Given path '/api/v1/payments'
+    And param size = 5
+    When method get
+    Then status 200
+    Given path '/api/v1/payments/order', orderId
+    When method get
+    Then status 200
     * def paymentId = response.id
-    * showcase.event('Payment ' + paymentId + ' PROCESSED for synthetic order ' + orderId + ' - now refunding it directly via POST /{id}/refund, not by cancelling an order (see compensating-transaction.feature for that path instead).')
-    * showcase.show('Payment ' + paymentId + ' before refund', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE id=' + paymentId)
-
-    Given path '/api/payments', paymentId, 'refund'
-    When method post
-    Then status 200
-    And match response.status == 'REFUNDED'
-    * showcase.event('POST /api/payments/' + paymentId + '/refund succeeded - status is now REFUNDED, independent of any order-cancelled event.')
-    * showcase.show('Payment ' + paymentId + ' after refund', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE id=' + paymentId)
-
-  Scenario: Notification lookup endpoints - by id, by customer, and the full list
-
-    * def uniqueId = Java.type('java.util.UUID').randomUUID() + ''
-    Given path '/api/customers'
-    And request { name: '#("Notification Lookup Customer " + uniqueId)', email: '#("notiflookup." + uniqueId + "@example.com")' }
-    When method post
-    Then status 201
-    * def customerId = response.id
-
-    Given path '/api/inventory'
-    And param size = 1
+    Given path '/api/v1/payments', paymentId
     When method get
     Then status 200
-    * def productId = response.content[0].productId
+    And match header ETag == '#string'
 
-    Given path '/api/orders'
-    And request { customerId: '#(customerId)', productId: '#(productId)', quantity: 1 }
-    When method post
-    Then status 201
-    * def orderId = response.id
-    * showcase.event('Order ' + orderId + ' created for customer ' + customerId + ' - waiting for the order-created notification to exist, then exercising every lookup endpoint around it.')
-
-    # notification-service isn't routed through the gateway (see
-    # customer-journey.feature) - every call below needs its own direct URL.
-    * url notificationUrl
-    * configure retry = { count: 15, interval: 1000 }
-    Given path '/api/notifications/order', orderId
-    And retry until responseStatus == 200 && response.length >= 1
+    * configure retry = { count: 30, interval: 1000 }
+    Given path '/api/v1/notifications/order', orderId
+    And retry until responseStatus == 200 && response.length >= 2
     When method get
     Then status 200
     * def notificationId = response[0].id
-
-    Given path '/api/notifications', notificationId
+    Given path '/api/v1/notifications', notificationId
     When method get
     Then status 200
-    And match response.id == notificationId
-    * showcase.event('GET /api/notifications/' + notificationId + ' returns that exact notification by id.')
-
-    Given path '/api/notifications/customer', customerId
+    Given path '/api/v1/notifications/customer', customer.customerId
     When method get
     Then status 200
-    And assert response.content.length >= 1
-    * showcase.event('GET /api/notifications/customer/' + customerId + ' returns ' + response.content.length + ' notification(s) for this customer.')
-
-    Given path '/api/notifications'
-    And param size = 5
+    Given path '/api/v1/notifications'
+    And param sortBy = 'createdAt'
     When method get
     Then status 200
-    And assert response.content.length >= 1
-    * showcase.event('GET /api/notifications (list) returns a paginated page across all customers - ' + response.totalElements + ' notifications exist in total.')
+
+  Scenario: Versioning - v1 is canonical, the old unversioned paths still work but are marked deprecated
+
+    Given path '/api/customers'
+    And param size = 1
+    When method get
+    Then status 200
+    And match responseHeaders['Deprecation'][0] == 'true'
+    And match responseHeaders['Link'][0] contains '/api/v1/customers'
+
+    Given path '/api/v1/customers'
+    And param size = 1
+    When method get
+    Then status 200
+    And match responseHeaders contains { 'Deprecation': '#notpresent' }
+
+    # the service-name routes are gone
+    Given path '/customer-service/api/customers'
+    When method get
+    Then assert responseStatus == 403 || responseStatus == 404

@@ -1,265 +1,302 @@
 package com.ecommerce.inventoryservice.integration;
 
-import com.ecommerce.common.exception.BusinessException;
-import com.ecommerce.common.exception.ResourceNotFoundException;
+import com.ecommerce.common.events.LineItem;
+import com.ecommerce.common.events.OrderCreatedEvent;
+import com.ecommerce.common.exception.ConflictException;
+import com.ecommerce.common.exception.NonRetryableEventException;
+import com.ecommerce.common.inbox.ProcessedEventRepository;
+import com.ecommerce.common.outbox.OutboxRepository;
+import com.ecommerce.common.testsupport.EventSamples;
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
 import com.ecommerce.inventoryservice.Inventory;
 import com.ecommerce.inventoryservice.InventoryRepository;
+import com.ecommerce.inventoryservice.InventoryReservation;
+import com.ecommerce.inventoryservice.InventoryReservationRepository;
 import com.ecommerce.inventoryservice.dto.CreateInventoryRequest;
-import com.ecommerce.inventoryservice.dto.InventoryResponse;
+import com.ecommerce.inventoryservice.service.InventorySagaHandler;
 import com.ecommerce.inventoryservice.service.InventoryService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.AutoConfigureTestEntityManager;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 
-import static org.assertj.core.api.Assertions.*;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/**
+ * Stock handling against a real PostgreSQL: the properties that a mock cannot prove - no overselling under
+ * concurrency, the last unit being sellable, all-or-nothing multi-line reservations, exactly-once release, and
+ * the saga handlers' atomicity with the outbox and inbox.
+ */
 @SpringBootTest
-@AutoConfigureTestEntityManager
-@Transactional
-@ActiveProfiles("test")
-@Tag("integration")
-@DisplayName("Inventory Service Integration Tests")
+@PostgresIntegrationTest
+@DisplayName("Inventory (PostgreSQL)")
 class InventoryServiceIntegrationTest {
 
     @Autowired
     private InventoryService inventoryService;
-
     @Autowired
-    private InventoryRepository inventoryRepository;
+    private InventorySagaHandler saga;
+    @Autowired
+    private InventoryRepository inventory;
+    @Autowired
+    private InventoryReservationRepository reservations;
+    @Autowired
+    private OutboxRepository outbox;
+    @Autowired
+    private ProcessedEventRepository processed;
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @BeforeEach
     void setUp() {
-        inventoryRepository.deleteAll();
+        outbox.deleteAll();
+        processed.deleteAll();
+        reservations.deleteAll();
+        inventory.deleteAll();
+    }
+
+    private Inventory stock(String sku, int quantity) {
+        return inventory.saveAndFlush(Inventory.builder().productId(sku).quantity(quantity).build());
+    }
+
+    private int quantityOf(String sku) {
+        return inventory.findByProductId(sku).orElseThrow().getQuantity();
+    }
+
+    private static OrderCreatedEvent order(long orderId, String eventId, LineItem... lines) {
+        OrderCreatedEvent event = new OrderCreatedEvent(orderId, 7L, List.of(lines), new BigDecimal("100.00"), "USD");
+        event.setEventId(eventId);
+        return event;
+    }
+
+    private static LineItem line(String sku, int quantity) {
+        return new LineItem(sku, quantity, new BigDecimal("10.00"));
+    }
+
+    private List<String> outboxTypes() {
+        return outbox.findAll().stream().map(o -> o.getEventType()).toList();
+    }
+
+    // ------------------------------------------------------------------ the last unit (A7)
+
+    @Test
+    @DisplayName("reserving exactly what is left succeeds and leaves zero - the last unit is sellable")
+    void lastUnitIsSellable() {
+        Inventory item = stock("SKU-LAST", 3);
+
+        assertThat(inventoryService.reserveStock(item.getId(), 3).getQuantity()).isZero();
+        assertThat(quantityOf("SKU-LAST")).isZero();
     }
 
     @Test
-    @DisplayName("Should create and retrieve inventory with full context")
-    void testCreateAndRetrieveInventory() {
-        CreateInventoryRequest request = CreateInventoryRequest.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
+    @DisplayName("the saga reserves the last units of a product instead of failing on the zero")
+    void sagaTakesTheLastUnits() {
+        stock("SKU-LAST", 2);
 
-        InventoryResponse created = inventoryService.createInventory(request);
-        InventoryResponse retrieved = inventoryService.getInventory(created.getId());
+        saga.onOrderCreated(order(1L, "evt-1", line("SKU-LAST", 2)));
 
-        assertThat(retrieved).isNotNull();
-        assertThat(retrieved.getProductId()).isEqualTo("PROD-001");
-        assertThat(retrieved.getQuantity()).isEqualTo(100);
+        assertThat(quantityOf("SKU-LAST")).isZero();
+        assertThat(outboxTypes()).containsExactly("inventory.reserved");
     }
 
     @Test
-    @DisplayName("Should reserve stock and persist changes")
-    void testReserveStockPersistence() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
+    @DisplayName("asking for more than is left is refused and changes nothing")
+    void insufficientChangesNothing() {
+        Inventory item = stock("SKU-1", 5);
 
-        inventoryService.reserveStock(saved.getId(), 30);
+        assertThatThrownBy(() -> inventoryService.reserveStock(item.getId(), 6)).isInstanceOf(ConflictException.class);
 
-        Inventory verified = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getQuantity()).isEqualTo(70);
+        assertThat(quantityOf("SKU-1")).isEqualTo(5);
     }
 
     @Test
-    @DisplayName("Should release stock and persist changes")
-    void testReleaseStockPersistence() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(50)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
+    @DisplayName("the database refuses negative stock even if the application had a bug")
+    void databaseRefusesNegativeStock() {
+        stock("SKU-1", 5);
 
-        inventoryService.releaseStock(saved.getId(), 20);
-
-        Inventory verified = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getQuantity()).isEqualTo(70);
+        assertThatThrownBy(() -> jdbc.update("UPDATE inventory SET quantity = -1 WHERE product_id = 'SKU-1'"))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
-    @DisplayName("Should handle consecutive reservations")
-    void testConsecutiveReservations() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
-
-        inventoryService.reserveStock(saved.getId(), 30);
-        inventoryService.reserveStock(saved.getId(), 20);
-        inventoryService.reserveStock(saved.getId(), 10);
-
-        Inventory verified = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getQuantity()).isEqualTo(40);
-    }
-
-    @Test
-    @DisplayName("Should throw exception on insufficient stock")
-    void testInsufficientStockThrowsException() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(50)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
-
-        assertThatThrownBy(() -> inventoryService.reserveStock(saved.getId(), 100))
-            .isInstanceOf(BusinessException.class)
-            .hasMessageContaining("Insufficient stock");
-
-        Inventory verified = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getQuantity()).isEqualTo(50);
-    }
-
-    @Test
-    @DisplayName("Should retrieve all inventory with pagination")
-    void testInventoryPaginationWithMultipleItems() {
-        for (int i = 1; i <= 15; i++) {
-            Inventory inventory = Inventory.builder()
-                .productId("PROD-" + i)
-                .quantity(i * 10)
-                .build();
-            inventoryRepository.save(inventory);
+    @DisplayName("concurrent reservations of a hot product never oversell: exactly the stock is handed out")
+    void noOversellingUnderConcurrency() throws Exception {
+        stock("SKU-HOT", 50);
+        int orders = 80;
+        AtomicInteger reserved = new AtomicInteger();
+        AtomicInteger refused = new AtomicInteger();
+        ExecutorService pool = Executors.newFixedThreadPool(16);
+        List<Callable<Void>> calls = new ArrayList<>();
+        for (int i = 0; i < orders; i++) {
+            long orderId = 1000 + i;
+            calls.add(() -> {
+                saga.onOrderCreated(order(orderId, "evt-hot-" + orderId, line("SKU-HOT", 1)));
+                return null;
+            });
         }
+        for (Future<Void> f : pool.invokeAll(calls)) {
+            f.get();
+        }
+        pool.shutdown();
 
-        var page1 = inventoryService.getAllInventory(0, 5, "id");
-        var page2 = inventoryService.getAllInventory(1, 5, "id");
-        var page3 = inventoryService.getAllInventory(2, 5, "id");
+        outbox.findAll().forEach(o -> {
+            if (o.getEventType().equals("inventory.reserved")) {
+                reserved.incrementAndGet();
+            } else if (o.getEventType().equals("inventory.failed")) {
+                refused.incrementAndGet();
+            }
+        });
+        assertThat(reserved.get()).isEqualTo(50);
+        assertThat(refused.get()).isEqualTo(30);
+        assertThat(quantityOf("SKU-HOT")).isZero();
+        assertThat(reservations.count()).isEqualTo(50);
+    }
 
-        assertThat(page1.getContent()).hasSize(5);
-        assertThat(page2.getContent()).hasSize(5);
-        assertThat(page3.getContent()).hasSize(5);
-        assertThat(page1.getTotalElements()).isEqualTo(15);
+    // ------------------------------------------------------------------ all or nothing
+
+    @Test
+    @DisplayName("a multi-line order is reserved all-or-nothing: one short line reserves nothing at all")
+    void allOrNothing() {
+        stock("SKU-A", 10);
+        stock("SKU-B", 1);
+
+        saga.onOrderCreated(order(1L, "evt-1", line("SKU-A", 5), line("SKU-B", 2)));
+
+        assertThat(quantityOf("SKU-A")).as("the line that WAS available is untouched").isEqualTo(10);
+        assertThat(quantityOf("SKU-B")).isEqualTo(1);
+        assertThat(reservations.count()).isZero();
+        assertThat(outbox.findAll()).singleElement().satisfies(row -> {
+            assertThat(row.getEventType()).isEqualTo("inventory.failed");
+            assertThat(row.getPayload()).contains("SKU-B").contains("requested 2").contains("available 1");
+        });
     }
 
     @Test
-    @DisplayName("Should update inventory quantity and persist")
-    void testUpdateInventoryPersistence() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
+    @DisplayName("an unknown product fails the whole order")
+    void unknownProduct() {
+        stock("SKU-A", 10);
 
-        inventoryService.updateInventory(saved.getId(), 200);
+        saga.onOrderCreated(order(1L, "evt-1", line("SKU-A", 1), line("SKU-NOPE", 1)));
 
-        Inventory verified = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getQuantity()).isEqualTo(200);
+        assertThat(quantityOf("SKU-A")).isEqualTo(10);
+        assertThat(outbox.findAll()).singleElement().satisfies(row -> assertThat(row.getPayload()).contains("Unknown product SKU-NOPE"));
     }
 
     @Test
-    @DisplayName("Should handle reserve and release cycle")
-    void testReserveAndReleaseCycle() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
+    @DisplayName("a satisfiable multi-line order takes every line and announces it, with the priced total carried through")
+    void multiLineSuccess() {
+        stock("SKU-A", 10);
+        stock("SKU-B", 10);
 
-        inventoryService.reserveStock(saved.getId(), 30);
-        Inventory reserved = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(reserved.getQuantity()).isEqualTo(70);
+        saga.onOrderCreated(order(1L, "evt-1", line("SKU-A", 3), line("SKU-B", 4)));
 
-        inventoryService.releaseStock(saved.getId(), 30);
-        Inventory released = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(released.getQuantity()).isEqualTo(100);
+        assertThat(quantityOf("SKU-A")).isEqualTo(7);
+        assertThat(quantityOf("SKU-B")).isEqualTo(6);
+        assertThat(reservations.findByOrderId(1L)).extracting(InventoryReservation::getProductId).containsExactly("SKU-A", "SKU-B");
+        assertThat(outbox.findAll()).singleElement().satisfies(row -> {
+            assertThat(row.getEventType()).isEqualTo("inventory.reserved");
+            assertThat(row.getPayload()).contains("\"totalAmount\":100.00").contains("\"currency\":\"USD\"").contains("\"customerId\":7");
+        });
     }
 
     @Test
-    @DisplayName("Should handle zero quantity reservation edge case")
-    void testZeroQuantityReservation() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
+    @DisplayName("an order whose lines can never be valid is dead-lettered at once, not retried")
+    void invalidLinesAreNonRetryable() {
+        stock("SKU-A", 10);
 
-        inventoryService.reserveStock(saved.getId(), 0);
+        assertThatThrownBy(() -> saga.onOrderCreated(order(1L, "evt-1", line("SKU-A", 0)))).isInstanceOf(NonRetryableEventException.class);
+        assertThatThrownBy(() -> saga.onOrderCreated(order(2L, "evt-2"))).isInstanceOf(NonRetryableEventException.class);
+        assertThat(quantityOf("SKU-A")).isEqualTo(10);
+    }
 
-        Inventory verified = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getQuantity()).isEqualTo(100);
+    // ------------------------------------------------------------------ idempotency and compensation
+
+    @Test
+    @DisplayName("a redelivered order.created takes stock once")
+    void duplicateOrderCreated() {
+        stock("SKU-A", 10);
+        OrderCreatedEvent event = order(1L, "evt-1", line("SKU-A", 3));
+
+        saga.onOrderCreated(event);
+        saga.onOrderCreated(event);
+
+        assertThat(quantityOf("SKU-A")).isEqualTo(7);
+        assertThat(outbox.count()).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("Should handle exact quantity reservation")
-    void testExactQuantityReservation() {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
+    @DisplayName("cancelling returns exactly what the order held, once; a second cancellation changes nothing")
+    void releaseIsExactlyOnce() {
+        stock("SKU-A", 10);
+        stock("SKU-B", 10);
+        saga.onOrderCreated(order(1L, "evt-1", line("SKU-A", 3), line("SKU-B", 4)));
 
-        inventoryService.reserveStock(saved.getId(), 100);
+        saga.onOrderCancelled(EventSamples.orderCancelled(1L, "evt-cancel-1"));
+        saga.onOrderCancelled(EventSamples.orderCancelled(1L, "evt-cancel-2")); // a second, different cancellation event
 
-        Inventory verified = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(verified.getQuantity()).isEqualTo(0);
+        assertThat(quantityOf("SKU-A")).isEqualTo(10);
+        assertThat(quantityOf("SKU-B")).isEqualTo(10);
+        assertThat(reservations.findByOrderId(1L)).allSatisfy(r -> assertThat(r.getReleasedAt()).isNotNull());
+        assertThat(outboxTypes()).containsExactly("inventory.reserved", "inventory.released");
     }
 
     @Test
-    @DisplayName("Should throw exception when inventory not found on reserve")
-    void testReserveOnNonExistentInventory() {
-        assertThatThrownBy(() -> inventoryService.reserveStock(999L, 10))
-            .isInstanceOf(ResourceNotFoundException.class);
+    @DisplayName("cancelling an order that holds no stock is a harmless no-op")
+    void releaseNothing() {
+        stock("SKU-A", 10);
+
+        saga.onOrderCancelled(EventSamples.orderCancelled(99L, "evt-cancel-x"));
+
+        assertThat(quantityOf("SKU-A")).isEqualTo(10);
+        assertThat(outbox.count()).isZero();
     }
 
     @Test
-    @DisplayName("Should handle timestamps correctly")
-    void testTimestampHandling() {
-        CreateInventoryRequest request = CreateInventoryRequest.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
+    @DisplayName("concurrent cancellations of one order give the stock back only once")
+    void concurrentReleases() throws Exception {
+        stock("SKU-A", 10);
+        saga.onOrderCreated(order(1L, "evt-1", line("SKU-A", 4)));
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        List<Callable<Void>> calls = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            String eventId = "evt-cancel-" + i;
+            calls.add(() -> {
+                saga.onOrderCancelled(EventSamples.orderCancelled(1L, eventId));
+                return null;
+            });
+        }
+        for (Future<Void> f : pool.invokeAll(calls)) {
+            f.get();
+        }
+        pool.shutdown();
 
-        InventoryResponse response = inventoryService.createInventory(request);
-
-        assertThat(response.getCreatedAt()).isNotNull();
-        assertThat(response.getUpdatedAt()).isNotNull();
+        assertThat(quantityOf("SKU-A")).isEqualTo(10);
     }
 
-    @Test
-    @DisplayName("Should update timestamp on stock change")
-    void testTimestampUpdateOnStockChange() throws InterruptedException {
-        Inventory inventory = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-        Inventory saved = inventoryRepository.save(inventory);
-        var originalUpdatedAt = saved.getUpdatedAt();
-
-        Thread.sleep(100);
-
-        inventoryService.reserveStock(saved.getId(), 10);
-        inventoryRepository.flush();
-
-        Inventory updated = inventoryRepository.findById(saved.getId()).orElseThrow();
-        assertThat(updated.getUpdatedAt()).isAfter(originalUpdatedAt);
-    }
+    // ------------------------------------------------------------------ REST operations
 
     @Test
-    @DisplayName("Should maintain referential integrity on updates")
-    void testReferentialIntegrity() {
-        Inventory inv1 = Inventory.builder()
-            .productId("PROD-001")
-            .quantity(100)
-            .build();
-        Inventory inv2 = Inventory.builder()
-            .productId("PROD-002")
-            .quantity(50)
-            .build();
+    @DisplayName("creating, reading and stock-taking an item; a duplicate product is a 409")
+    void crud() {
+        Long id = inventoryService.createInventory(CreateInventoryRequest.builder().productId("SKU-N").quantity(0).build()).getId();
 
-        Inventory saved1 = inventoryRepository.save(inv1);
-        inventoryRepository.save(inv2);
-
-        inventoryService.reserveStock(saved1.getId(), 20);
-
-        long totalInventory = inventoryRepository.count();
-        assertThat(totalInventory).isEqualTo(2);
+        assertThat(inventoryService.getInventory(id).getQuantity()).isZero();
+        assertThat(inventoryService.updateInventory(id, 25).getQuantity()).isEqualTo(25);
+        assertThat(inventoryService.getInventory(id).getVersion()).isPositive();
+        assertThatThrownBy(() -> inventoryService.createInventory(CreateInventoryRequest.builder().productId("SKU-N").quantity(1).build()))
+                .isInstanceOf(ConflictException.class);
     }
 }

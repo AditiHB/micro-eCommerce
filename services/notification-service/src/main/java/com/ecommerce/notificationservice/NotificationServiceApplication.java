@@ -11,12 +11,11 @@ import org.springframework.boot.actuate.autoconfigure.security.servlet.Managemen
 /**
  * scanBasePackages/exclude mirror every other service's main class (see e.g.
  * InventoryServiceApplication): without them, this service never picked up
- * common.security's SecurityConfig/JwtAuthenticationFilter at all (its
- * @SpringBootApplication base package is com.ecommerce.notificationservice
- * only), so Spring Boot silently fell back to its own default security
- * auto-configuration - a random generated password over HTTP Basic,
- * completely unrelated to the JWTs the rest of the app issues. Every
- * endpoint here was effectively unreachable with a real login token.
+ * common.security's SecurityConfig at all (its @SpringBootApplication base
+ * package is com.ecommerce.notificationservice only), so Spring Boot silently
+ * fell back to its own default security auto-configuration - a random
+ * generated password over HTTP Basic, unrelated to the bearer tokens the rest
+ * of the platform uses.
  */
 @SpringBootApplication(
     scanBasePackages = {

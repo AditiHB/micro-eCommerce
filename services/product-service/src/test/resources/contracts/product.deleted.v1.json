@@ -1,0 +1,10 @@
+{
+  "eventId" : "evt-product.deleted",
+  "occurredAt" : "2026-01-01T10:15:30Z",
+  "aggregateId" : "7",
+  "aggregateType" : "Product",
+  "version" : 1,
+  "productId" : 7,
+  "sku" : "SKU-001",
+  "eventType" : "product.deleted"
+}

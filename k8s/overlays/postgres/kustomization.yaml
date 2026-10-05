@@ -34,6 +34,14 @@ patches:
                 value: postgres
               - name: DB_HOST
                 value: postgres
+              # One least-privilege owner role per service (see the init script); password from the Secret.
+              - name: DB_USERNAME
+                value: customer_owner
+              - name: DB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ecommerce-secrets
+                    key: customer-db-password
   - target:
       kind: Deployment
       name: order-service
@@ -52,6 +60,14 @@ patches:
                 value: postgres
               - name: DB_HOST
                 value: postgres
+              # One least-privilege owner role per service (see the init script); password from the Secret.
+              - name: DB_USERNAME
+                value: order_owner
+              - name: DB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ecommerce-secrets
+                    key: order-db-password
   - target:
       kind: Deployment
       name: inventory-service
@@ -70,6 +86,14 @@ patches:
                 value: postgres
               - name: DB_HOST
                 value: postgres
+              # One least-privilege owner role per service (see the init script); password from the Secret.
+              - name: DB_USERNAME
+                value: inventory_owner
+              - name: DB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ecommerce-secrets
+                    key: inventory-db-password
   - target:
       kind: Deployment
       name: payment-service
@@ -88,6 +112,14 @@ patches:
                 value: postgres
               - name: DB_HOST
                 value: postgres
+              # One least-privilege owner role per service (see the init script); password from the Secret.
+              - name: DB_USERNAME
+                value: payment_owner
+              - name: DB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ecommerce-secrets
+                    key: payment-db-password
   - target:
       kind: Deployment
       name: notification-service
@@ -106,3 +138,19 @@ patches:
                 value: postgres
               - name: DB_HOST
                 value: postgres
+              # One least-privilege owner role per service (see the init script); password from the Secret.
+              - name: DB_USERNAME
+                value: notification_owner
+              - name: DB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: ecommerce-secrets
+                    key: notification-db-password
+
+configMapGenerator:
+  - name: postgres-init-script
+    namespace: ecommerce
+    files:
+      - init-multiple-postgres-databases.sh=generated/init-multiple-postgres-databases.sh
+generatorOptions:
+  disableNameSuffixHash: true

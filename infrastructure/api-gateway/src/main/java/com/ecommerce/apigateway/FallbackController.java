@@ -1,47 +1,41 @@
 package com.ecommerce.apigateway;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.Map;
+import java.net.URI;
+import java.time.Instant;
 
+/**
+ * What a caller gets when a route's circuit breaker is open or its time limit ran out: a 503 as an RFC 9457
+ * problem document - the same error shape every service uses - with {@code Retry-After}, never an invented
+ * success body.
+ */
 @RestController
 @RequestMapping("/fallback")
 @Slf4j
 public class FallbackController {
 
-    @GetMapping("/service")
-    public ResponseEntity<Map<String, Object>> serviceFallback() {
-        log.warn("Service fallback triggered - circuit breaker activated");
+    /** Seconds a client should wait before retrying; matches the breaker's open-state wait. */
+    static final String RETRY_AFTER_SECONDS = "30";
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("error", "Service Unavailable");
-        response.put("message", "The requested service is currently unavailable. Please try again later.");
-        response.put("status", HttpStatus.SERVICE_UNAVAILABLE.value());
-        response.put("timestamp", LocalDateTime.now());
-        response.put("circuitBreakerStatus", "OPEN");
+    @RequestMapping("/service")
+    public ResponseEntity<ProblemDetail> serviceFallback() {
+        log.warn("Service fallback triggered - circuit breaker open or time limit exceeded");
 
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(response);
-    }
-
-    @PostMapping("/service")
-    public ResponseEntity<Map<String, Object>> servicePostFallback() {
-        log.warn("Service fallback triggered for POST - circuit breaker activated");
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("error", "Service Unavailable");
-        response.put("message", "The requested service is currently unavailable. Please try again later.");
-        response.put("status", HttpStatus.SERVICE_UNAVAILABLE.value());
-        response.put("timestamp", LocalDateTime.now());
-        response.put("circuitBreakerStatus", "OPEN");
-
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(response);
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+                "The requested service is currently unavailable. Please try again shortly.");
+        problem.setTitle("Service Unavailable");
+        problem.setType(URI.create("urn:ecommerce:problem:dependency-unavailable"));
+        problem.setProperty("errorCode", "DEPENDENCY_UNAVAILABLE");
+        problem.setProperty("timestamp", Instant.now().toString());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, RETRY_AFTER_SECONDS)
+                .body(problem);
     }
 }

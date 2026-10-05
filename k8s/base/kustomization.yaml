@@ -3,7 +3,6 @@ kind: Kustomization
 
 resources:
   - 00-namespace.yaml
-  - 01-secrets.yaml
   - 02-rbac.yaml
   - 03-messaging.yaml
   - 04-redis.yaml
@@ -16,3 +15,23 @@ resources:
   - 11-payment-service.yaml
   - 12-notification-service.yaml
   - 13-hpa.yaml
+  - 14-keycloak.yaml
+
+# The Secret and the Keycloak ConfigMaps are built from git-ignored files that scripts/gen-k8s-secrets.sh
+# writes into ./generated/ from your own .env. No credential is committed to this repository.
+generatorOptions:
+  disableNameSuffixHash: true
+secretGenerator:
+  - name: ecommerce-secrets
+    namespace: ecommerce
+    envs:
+      - generated/secrets.env
+configMapGenerator:
+  - name: keycloak-realm
+    namespace: ecommerce
+    files:
+      - realm-ecommerce.json=generated/realm-ecommerce.json
+  - name: keycloak-seed-script
+    namespace: ecommerce
+    files:
+      - seed-dev.sh=generated/seed-dev.sh

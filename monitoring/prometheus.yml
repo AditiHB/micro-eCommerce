@@ -24,7 +24,7 @@ scrape_configs:
   - job_name: 'api-gateway'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['api-gateway:8080']
+      - targets: ['api-gateway:9080']
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance
@@ -35,7 +35,7 @@ scrape_configs:
   - job_name: 'customer-service'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['customer-service:8081']
+      - targets: ['customer-service:9081']
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance
@@ -45,23 +45,33 @@ scrape_configs:
   # Inventory Service (with service discovery)
   - job_name: 'inventory-service'
     metrics_path: '/actuator/prometheus'
+    # Eureka requires credentials. The password is read from a file (mounted from the compose secret),
+    # never inlined in this config.
     eureka_sd_configs:
       - server: 'http://discovery-server:8761/eureka'
+        basic_auth:
+          username: eureka
+          password_file: /run/secrets/eureka_password
     relabel_configs:
+      # Eureka advertises the public API port; metrics are served on the internal management port.
+      - source_labels: [__address__]
+        regex: '(.+):\d+'
+        target_label: __address__
+        replacement: '$1:9082'
       - source_labels: [__meta_eureka_app_name]
         target_label: service
       - source_labels: [__meta_eureka_instance_id]
         target_label: instance
     metric_relabel_configs:
       - source_labels: [__name__]
-        regex: 'inventory_.*'
+        regex: '(inventory|ecommerce)_.*'
         action: keep
 
   # Order Service
   - job_name: 'order-service'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['order-service:8083']
+      - targets: ['order-service:9083']
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance
@@ -72,7 +82,29 @@ scrape_configs:
   - job_name: 'payment-service'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['payment-service:8084']
+      - targets: ['payment-service:9084']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [job]
+        target_label: service
+
+  # Product Service
+  - job_name: 'product-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['product-service:9085']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [job]
+        target_label: service
+
+  # Notification Service
+  - job_name: 'notification-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['notification-service:9086']
     relabel_configs:
       - source_labels: [__address__]
         target_label: instance

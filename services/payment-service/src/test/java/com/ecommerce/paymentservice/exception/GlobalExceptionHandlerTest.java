@@ -1,78 +1,53 @@
 package com.ecommerce.paymentservice.exception;
 
-import com.ecommerce.common.dto.ErrorResponse;
-import com.ecommerce.common.exception.ResourceNotFoundException;
-import com.ecommerce.common.exception.ValidationException;
+import com.ecommerce.common.enums.PaymentStatus;
+import com.ecommerce.common.exception.ProblemDetailsAdvice;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.context.request.WebRequest;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@ExtendWith(MockitoExtension.class)
-@DisplayName("GlobalExceptionHandler Unit Tests")
+@DisplayName("Payment service error handling")
 class GlobalExceptionHandlerTest {
 
-    @InjectMocks
-    private GlobalExceptionHandler exceptionHandler;
-
-    private WebRequest webRequest;
+    private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
-        webRequest = mock(WebRequest.class);
-        when(webRequest.getDescription(false)).thenReturn("uri=/api/test");
+        mvc = MockMvcBuilders.standaloneSetup(new Thrower()).setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 
     @Test
-    @DisplayName("Should handle ResourceNotFoundException")
-    void testHandleResourceNotFoundException() {
-        ResourceNotFoundException exception = new ResourceNotFoundException("Payment", 1L);
-
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleResourceNotFound(exception, webRequest);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getMessage()).contains("not found");
+    @DisplayName("it is the shared Problem Details advice")
+    void isTheSharedAdvice() {
+        assertThat(new GlobalExceptionHandler()).isInstanceOf(ProblemDetailsAdvice.class);
     }
 
     @Test
-    @DisplayName("Should handle ValidationException")
-    void testHandleValidationException() {
-        ValidationException exception = new ValidationException("Invalid payment data");
-
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleBusinessException(exception, webRequest);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().getMessage()).contains("Invalid payment data");
+    @DisplayName("an illegal payment transition is a 409 problem")
+    void invalidTransition() throws Exception {
+        mvc.perform(get("/refund"))
+                .andExpect(status().isConflict())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.errorCode").value("PAYMENT_INVALID_TRANSITION"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("PENDING")));
     }
 
-    @Test
-    @DisplayName("Should handle general Exception")
-    void testHandleGeneralException() {
-        Exception exception = new RuntimeException("Internal error");
-
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleGenericException(exception, webRequest);
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
-        assertThat(response.getBody()).isNotNull();
-    }
-
-    @Test
-    @DisplayName("Should include HTTP status code in error response")
-    void testErrorResponseIncludesStatusCode() {
-        ValidationException exception = new ValidationException("Invalid amount");
-
-        ResponseEntity<ErrorResponse> response = exceptionHandler.handleBusinessException(exception, webRequest);
-
-        assertThat(response.getBody().getStatus()).isEqualTo(HttpStatus.BAD_REQUEST.value());
+    @RestController
+    static class Thrower {
+        @GetMapping("/refund")
+        String refund() {
+            throw new InvalidPaymentTransitionException(3L, PaymentStatus.PENDING, PaymentStatus.REFUNDED);
+        }
     }
 }

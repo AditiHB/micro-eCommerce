@@ -3,96 +3,63 @@ package com.ecommerce.notificationservice;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
-import com.ecommerce.notificationservice.client.OrderClient;
-import com.ecommerce.notificationservice.client.OrderInfo;
-import com.ecommerce.notificationservice.service.NotificationService;
-import org.junit.jupiter.api.BeforeEach;
+import com.ecommerce.common.events.Topics;
+import com.ecommerce.common.testsupport.EventSamples;
+import com.ecommerce.notificationservice.service.NotificationIntake;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.annotation.KafkaListener;
 
-import java.math.BigDecimal;
-import java.util.Optional;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.stream.Collectors;
 
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
-@ExtendWith(MockitoExtension.class)
-@DisplayName("NotificationEventListener Unit Tests")
+@DisplayName("NotificationEventListener")
 class NotificationEventListenerTest {
 
-    @Mock
-    private NotificationService notificationService;
-
-    @Mock
-    private OrderClient orderClient;
-
-    @Mock
-    private Acknowledgment acknowledgment;
-
-    @InjectMocks
-    private NotificationEventListener listener;
+    private final NotificationIntake intake = mock(NotificationIntake.class);
+    private final NotificationEventListener listener = new NotificationEventListener(intake);
 
     @Test
-    @DisplayName("Should notify on order created and acknowledge")
-    void testHandleOrderCreated() {
-        OrderCreatedEvent event = new OrderCreatedEvent(100L, 10L, "PROD-001", 2);
+    @DisplayName("each event is handed to the intake")
+    void delegates() {
+        OrderCreatedEvent created = EventSamples.orderCreated();
+        PaymentProcessedEvent processed = EventSamples.paymentProcessed();
+        PaymentFailedEvent failed = EventSamples.paymentFailed();
 
-        listener.handleOrderCreated(event, acknowledgment);
+        listener.handleOrderCreated(created);
+        listener.handlePaymentProcessed(processed);
+        listener.handlePaymentFailed(failed);
 
-        verify(notificationService).notifyOrderCreated(event.getEventId(), 100L, 10L, "PROD-001", 2);
-        verify(acknowledgment).acknowledge();
+        verify(intake).onOrderCreated(created);
+        verify(intake).onPaymentProcessed(processed);
+        verify(intake).onPaymentFailed(failed);
     }
 
     @Test
-    @DisplayName("Should resolve customer via Order Service and notify on payment processed")
-    void testHandlePaymentProcessed() {
-        PaymentProcessedEvent event = new PaymentProcessedEvent(1L, 100L, new BigDecimal("49.99"));
-        when(orderClient.getOrder(100L)).thenReturn(Optional.of(new OrderInfo(100L, 10L)));
+    @DisplayName("a failure is NOT swallowed - that used to lose the notification - it reaches the container for retry and dead-lettering")
+    void failuresPropagate() {
+        PaymentProcessedEvent processed = EventSamples.paymentProcessed();
+        doThrow(new IllegalStateException("customer service down")).when(intake).onPaymentProcessed(processed);
 
-        listener.handlePaymentProcessed(event, acknowledgment);
-
-        verify(notificationService).notifyPaymentSuccess(event.getEventId(), 100L, 10L, new BigDecimal("49.99"));
-        verify(acknowledgment).acknowledge();
+        assertThatThrownBy(() -> listener.handlePaymentProcessed(processed)).hasMessage("customer service down");
     }
 
     @Test
-    @DisplayName("Should skip notifying when the order can't be resolved")
-    void testHandlePaymentProcessedOrderNotFound() {
-        PaymentProcessedEvent event = new PaymentProcessedEvent(1L, 100L, new BigDecimal("49.99"));
-        when(orderClient.getOrder(100L)).thenReturn(Optional.empty());
+    @DisplayName("it listens to the three customer-facing events, in its own group")
+    void subscriptions() {
+        Map<String, String> topicToGroup = Arrays.stream(NotificationEventListener.class.getDeclaredMethods())
+                .map(m -> m.getAnnotation(KafkaListener.class))
+                .filter(a -> a != null)
+                .collect(Collectors.toMap(a -> a.topics()[0], KafkaListener::groupId));
 
-        listener.handlePaymentProcessed(event, acknowledgment);
-
-        verify(notificationService, never()).notifyPaymentSuccess(any(), any(), any(), any());
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should resolve customer via Order Service and notify on payment failed")
-    void testHandlePaymentFailed() {
-        PaymentFailedEvent event = new PaymentFailedEvent(100L, "PROD-001", 2, "Card declined");
-        when(orderClient.getOrder(100L)).thenReturn(Optional.of(new OrderInfo(100L, 10L)));
-
-        listener.handlePaymentFailed(event, acknowledgment);
-
-        verify(notificationService).notifyPaymentFailed(event.getEventId(), 100L, 10L, "Card declined");
-        verify(acknowledgment).acknowledge();
-    }
-
-    @Test
-    @DisplayName("Should acknowledge even when notification handling throws")
-    void testHandleOrderCreatedException() {
-        OrderCreatedEvent event = new OrderCreatedEvent(100L, 10L, "PROD-001", 2);
-        doThrow(new RuntimeException("boom"))
-            .when(notificationService).notifyOrderCreated(anyString(), anyLong(), anyLong(), anyString(), anyInt());
-
-        listener.handleOrderCreated(event, acknowledgment);
-
-        verify(acknowledgment).acknowledge();
+        assertThat(topicToGroup).containsOnlyKeys(Topics.ORDER_CREATED, Topics.PAYMENT_PROCESSED, Topics.PAYMENT_FAILED);
+        assertThat(topicToGroup.values()).containsOnly(Topics.GROUP_NOTIFICATION);
     }
 }

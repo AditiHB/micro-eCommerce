@@ -1,72 +1,79 @@
 package com.ecommerce.productservice.service;
 
+import com.ecommerce.common.events.DomainEvent;
+import com.ecommerce.common.events.EventPublisher;
+import com.ecommerce.common.events.Topics;
+import com.ecommerce.common.events.EventCatalog;
+import com.ecommerce.productservice.entity.Product;
 import com.ecommerce.productservice.event.ProductCreatedEvent;
 import com.ecommerce.productservice.event.ProductDeletedEvent;
 import com.ecommerce.productservice.event.ProductUpdatedEvent;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.kafka.core.KafkaTemplate;
+import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 
-import static org.mockito.ArgumentMatchers.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
-@ExtendWith(MockitoExtension.class)
+@DisplayName("ProductEventPublisher")
 class ProductEventPublisherTest {
-    @Mock
-    private KafkaTemplate<String, Object> kafkaTemplate;
 
-    @InjectMocks
-    private ProductEventPublisher eventPublisher;
+    private final EventPublisher outbox = mock(EventPublisher.class);
+    private final ProductEventPublisher publisher = new ProductEventPublisher(outbox);
 
-    @Test
-    void testPublishProductCreatedEvent() {
-        ProductCreatedEvent event = ProductCreatedEvent.builder()
-                .productId(1L)
-                .name("Test Product")
-                .sku("SKU-001")
-                .price(new BigDecimal("99.99"))
-                .category("Electronics")
-                .quantityAvailable(50)
-                .eventTime(LocalDateTime.now())
-                .build();
+    private Product product() {
+        return Product.builder().id(7L).name("Headphones").price(new BigDecimal("79.99")).currency("EUR")
+                .sku("SKU-001").category("Electronics").build();
+    }
 
-        eventPublisher.publishProductCreatedEvent(event);
-
-        verify(kafkaTemplate).send("product-events", "1", event);
+    private <E extends DomainEvent> E captured(Class<E> type) {
+        ArgumentCaptor<DomainEvent> captor = ArgumentCaptor.forClass(DomainEvent.class);
+        verify(outbox).publish(captor.capture());
+        return type.cast(captor.getValue());
     }
 
     @Test
-    void testPublishProductUpdatedEvent() {
-        ProductUpdatedEvent event = ProductUpdatedEvent.builder()
-                .productId(1L)
-                .name("Updated Product")
-                .price(new BigDecimal("109.99"))
-                .category("Electronics")
-                .quantityAvailable(45)
-                .eventTime(LocalDateTime.now())
-                .build();
+    @DisplayName("created: the product's current state, keyed by its id")
+    void created() {
+        publisher.created(product());
 
-        eventPublisher.publishProductUpdatedEvent(event);
-
-        verify(kafkaTemplate).send("product-events", "1", event);
+        ProductCreatedEvent event = captured(ProductCreatedEvent.class);
+        assertThat(event.getSku()).isEqualTo("SKU-001");
+        assertThat(event.getPrice()).isEqualByComparingTo("79.99");
+        assertThat(event.getCurrency()).isEqualTo("EUR");
+        assertThat(event.getAggregateId()).isEqualTo("7");
+        assertThat(event.getEventType()).isEqualTo("product.created");
     }
 
     @Test
-    void testPublishProductDeletedEvent() {
-        ProductDeletedEvent event = ProductDeletedEvent.builder()
-                .productId(1L)
-                .sku("SKU-001")
-                .eventTime(LocalDateTime.now())
-                .build();
+    @DisplayName("updated carries the new state so a consumer needs no call back")
+    void updated() {
+        publisher.updated(product());
 
-        eventPublisher.publishProductDeletedEvent(event);
+        ProductUpdatedEvent event = captured(ProductUpdatedEvent.class);
+        assertThat(event.getName()).isEqualTo("Headphones");
+        assertThat(event.getEventType()).isEqualTo("product.updated");
+    }
 
-        verify(kafkaTemplate).send("product-events", "1", event);
+    @Test
+    @DisplayName("deleted names the product and its SKU")
+    void deleted() {
+        publisher.deleted(7L, "SKU-001");
+
+        ProductDeletedEvent event = captured(ProductDeletedEvent.class);
+        assertThat(event.getProductId()).isEqualTo(7L);
+        assertThat(event.getSku()).isEqualTo("SKU-001");
+    }
+
+    @Test
+    @DisplayName("all three product events are registered in the event catalog on the product topic")
+    void catalogued() {
+        assertThat(EventCatalog.topicOf(ProductCreatedEvent.class)).isEqualTo(Topics.PRODUCT_EVENTS);
+        assertThat(EventCatalog.classFor("product.created")).contains(ProductCreatedEvent.class);
+        assertThat(EventCatalog.classFor("product.updated")).contains(ProductUpdatedEvent.class);
+        assertThat(EventCatalog.classFor("product.deleted")).contains(ProductDeletedEvent.class);
     }
 }

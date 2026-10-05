@@ -1,0 +1,164 @@
+# ===============================================================================
+# Overlay: secrets served by HashiCorp Vault instead of the container environment.
+#
+#   scripts/gen-env.sh                      # once: generates the seed secrets in .env
+#   docker compose -f docker-compose.yml -f docker-compose.vault.yml up -d --build
+#   # with Postgres (dynamic, short-lived database logins):
+#   docker compose -f docker-compose.yml -f docker-compose.vault.yml \
+#       --env-file .env --env-file .env.postgres --profile postgres up -d --build
+#
+# What changes compared with the base stack
+#   - `vault` runs a real (sealed-at-rest, Raft-backed) Vault server; `vault-init` initialises it,
+#     writes a least-privilege policy and an AppRole per service, seeds the secrets from .env, and
+#     revokes the root token.
+#   - Each service starts with the `vault` Spring profile: it logs in with its own AppRole
+#     (role-id/secret-id mounted as files, never environment variables), then reads its Redis
+#     password and Flyway migration login from KV v2 and receives a DML-only Postgres login that
+#     Vault creates for that instance and revokes when its lease ends.
+#   - The corresponding variables are REMOVED from each container's environment (`!reset`), so
+#     `docker inspect` no longer shows them. Startup fails if Vault is unreachable - there is no
+#     silent fallback to a default.
+#
+# What does not change: Keycloak still receives its admin password and the notification client
+# secret from the environment (it has no Vault integration without extensions). See
+# docs/VAULT_SECRETS.md for the operating model, rotation and the production differences.
+# ===============================================================================
+
+x-vault-env: &vault-env
+  # configtree exposes the AppRole role-id / secret-id files in /run/secrets as properties. It has to be
+  # imported HERE (environment), ahead of the vault:// import in application-vault.yml - see that file.
+  SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888/,optional:configtree:/run/secrets/"
+  SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:+${SPRING_PROFILES_ACTIVE},}vault"
+  VAULT_ADDR: "http://vault:8200"
+  VAULT_DATABASE_ENABLED: "${VAULT_DATABASE_ENABLED:-true}"
+  REDIS_PASSWORD: !reset null
+  DB_PASSWORD: !reset null
+
+services:
+  vault:
+    image: hashicorp/vault:1.20
+    container_name: vault
+    command: ["vault", "server", "-config=/vault/config/vault.hcl"]
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_ADDR: "http://127.0.0.1:8200"
+    volumes:
+      - vault-data:/vault/file
+      - vault-logs:/vault/logs
+      - ./infrastructure/vault/vault.hcl:/vault/config/vault.hcl:ro
+    ports:
+      - "127.0.0.1:8200:8200"
+    healthcheck:
+      # Healthy as soon as the API answers, even while sealed/uninitialised: vault-init handles that.
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:8200/v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 256m
+    mem_reservation: 128m
+
+  vault-init:
+    image: hashicorp/vault:1.20
+    container_name: vault-init
+    depends_on:
+      vault:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+        required: false
+    entrypoint: ["/bin/sh", "/init/bootstrap.sh"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?run scripts/gen-env.sh}"
+      NOTIFICATION_CLIENT_SECRET: "${NOTIFICATION_CLIENT_SECRET:?run scripts/gen-env.sh}"
+      CUSTOMER_DB_PASSWORD: "${CUSTOMER_DB_PASSWORD:?run scripts/gen-env.sh}"
+      ORDER_DB_PASSWORD: "${ORDER_DB_PASSWORD:?run scripts/gen-env.sh}"
+      INVENTORY_DB_PASSWORD: "${INVENTORY_DB_PASSWORD:?run scripts/gen-env.sh}"
+      PAYMENT_DB_PASSWORD: "${PAYMENT_DB_PASSWORD:?run scripts/gen-env.sh}"
+      NOTIFICATION_DB_PASSWORD: "${NOTIFICATION_DB_PASSWORD:?run scripts/gen-env.sh}"
+      PRODUCT_DB_PASSWORD: "${PRODUCT_DB_PASSWORD:?run scripts/gen-env.sh}"
+      VAULT_DB_ADMIN_PASSWORD: "${VAULT_DB_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
+    volumes:
+      - ./infrastructure/vault/bootstrap.sh:/init/bootstrap.sh:ro
+      - ./infrastructure/vault/policies:/policies:ro
+      # Unseal key, operator token and the per-service AppRole credentials land here (git-ignored).
+      - ./.vault:/bootstrap
+    restart: "no"
+    mem_limit: 128m
+
+  api-gateway:
+    environment:
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888/,optional:configtree:/run/secrets/"
+      SPRING_PROFILES_ACTIVE: "vault"
+      VAULT_ADDR: "http://vault:8200"
+      REDIS_PASSWORD: !reset null
+    volumes:
+      # This service's AppRole credentials (files named after the Spring properties), read via configtree.
+      - ./.vault/approle/api-gateway:/run/secrets:ro
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  customer-service:
+    environment: *vault-env
+    volumes:
+      # This service's AppRole credentials (files named after the Spring properties), read via configtree.
+      - ./.vault/approle/customer-service:/run/secrets:ro
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  inventory-service:
+    environment: *vault-env
+    volumes:
+      # This service's AppRole credentials (files named after the Spring properties), read via configtree.
+      - ./.vault/approle/inventory-service:/run/secrets:ro
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  order-service:
+    environment: *vault-env
+    volumes:
+      # This service's AppRole credentials (files named after the Spring properties), read via configtree.
+      - ./.vault/approle/order-service:/run/secrets:ro
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  payment-service:
+    environment: *vault-env
+    volumes:
+      # This service's AppRole credentials (files named after the Spring properties), read via configtree.
+      - ./.vault/approle/payment-service:/run/secrets:ro
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  product-service:
+    environment: *vault-env
+    volumes:
+      # This service's AppRole credentials (files named after the Spring properties), read via configtree.
+      - ./.vault/approle/product-service:/run/secrets:ro
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  notification-service:
+    environment:
+      <<: *vault-env
+      # Delivered by Vault (secret/notification-service) instead.
+      NOTIFICATION_CLIENT_SECRET: !reset null
+    volumes:
+      # This service's AppRole credentials (files named after the Spring properties), read via configtree.
+      - ./.vault/approle/notification-service:/run/secrets:ro
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+volumes:
+  vault-data:
+    driver: local
+  vault-logs:
+    driver: local

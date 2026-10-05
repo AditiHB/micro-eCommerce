@@ -1,17 +1,25 @@
 package com.ecommerce.productservice.event;
 
-import lombok.*;
+import com.ecommerce.common.events.DomainEvent;
+import com.ecommerce.common.events.EventSchema;
+import com.ecommerce.common.events.Topics;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-import java.time.LocalDateTime;
-
+/** A product was removed from the catalogue. */
 @Getter
 @Setter
 @NoArgsConstructor
-@AllArgsConstructor
-@Builder
-@ToString
-public class ProductDeletedEvent {
+@EventSchema(type = "product.deleted", topic = Topics.PRODUCT_EVENTS)
+public class ProductDeletedEvent extends DomainEvent {
+
     private Long productId;
     private String sku;
-    private LocalDateTime eventTime;
+
+    public ProductDeletedEvent(Long productId, String sku) {
+        super(String.valueOf(productId), "Product");
+        this.productId = productId;
+        this.sku = sku;
+    }
 }

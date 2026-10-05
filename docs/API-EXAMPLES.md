@@ -18,69 +18,49 @@ All endpoints (except login) require a Bearer token in the Authorization header:
 Authorization: Bearer {JWT_TOKEN}
 ```
 
-## Authentication API
+## Authentication
 
-### Login
+There is **no login endpoint on this API**. Access tokens are issued by Keycloak (realm `ecommerce`); send the token
+as `Authorization: Bearer <token>`. Roles, the access matrix and the object-level rules are in
+[KEYCLOAK_IDENTITY.md](KEYCLOAK_IDENTITY.md). Credentials are never written in this repo: source your git-ignored `.env`
+(`scripts/gen-env.sh`) first.
+
+### Get an access token (development: password grant on the `ecommerce-e2e` client)
 
 #### cURL
 ```bash
-curl -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "john_doe",
-    "password": "securePassword123"
-  }'
+set -a; . ./.env; set +a
+curl -s http://localhost:8180/realms/ecommerce/protocol/openid-connect/token   -d grant_type=password -d client_id=ecommerce-e2e -d "client_secret=$E2E_CLIENT_SECRET"   -d username=karate_admin -d "password=$E2E_ADMIN_PASSWORD"
 ```
 
-#### Response
+#### Response (abridged)
 ```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "expiresIn": 3600,
-  "user": {
-    "username": "john_doe",
-    "email": "john@example.com",
-    "roles": ["USER"]
-  }
-}
+{ "access_token": "eyJhbGciOiJSUzI1NiIs...", "expires_in": 300, "token_type": "Bearer", "refresh_token": "..." }
 ```
+The token is an RS256 JWT with `iss`, `aud: ["ecommerce-api", ...]`, `realm_access.roles`, and, for customers, `customer_id`.
 
-#### JavaScript
+#### JavaScript (browser apps)
+Browsers must **not** use the password grant. Use the authorization-code flow with PKCE against the public
+`ecommerce-web` client (a library such as `oidc-client-ts` or `keycloak-js` does this):
 ```javascript
-const login = async (username, password) => {
-  const response = await fetch('/api/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password })
-  });
-  return response.json();
-};
-
-const auth = await login('john_doe', 'securePassword123');
-localStorage.setItem('authToken', auth.token);
+import Keycloak from 'keycloak-js';
+const keycloak = new Keycloak({ url: 'http://localhost:8180', realm: 'ecommerce', clientId: 'ecommerce-web' });
+await keycloak.init({ onLoad: 'login-required', pkceMethod: 'S256' });
+const res = await fetch('http://localhost:8080/api/orders', { headers: { Authorization: `Bearer ${keycloak.token}` } });
 ```
 
 #### Python
 ```python
-import requests
-
-response = requests.post(
-    'http://localhost:8080/api/auth/login',
-    json={
-        'username': 'john_doe',
-        'password': 'securePassword123'
-    }
-)
-auth = response.json()
-token = auth['token']
+import os, requests
+tok = requests.post('http://localhost:8180/realms/ecommerce/protocol/openid-connect/token', data={
+    'grant_type': 'password', 'client_id': 'ecommerce-e2e', 'client_secret': os.environ['E2E_CLIENT_SECRET'],
+    'username': 'karate_admin', 'password': os.environ['E2E_ADMIN_PASSWORD']}).json()['access_token']
+orders = requests.get('http://localhost:8080/api/orders', headers={'Authorization': f'Bearer {tok}'}).json()
 ```
 
-### Get Current User
-
-```bash
-curl -X GET http://localhost:8080/api/auth/me \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
+> The remaining examples below were written for the earlier self-issued-token design. Wherever they show a
+> login call or a `token` from `/api/auth/login`, substitute a Keycloak access token as above; endpoint paths and
+> payloads are unchanged, but some operations now need a back-office role (see the access matrix).
 
 ## Customer API
 

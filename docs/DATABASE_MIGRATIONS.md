@@ -72,8 +72,8 @@ java -Dspring.profiles.active=postgres -jar customer-service.jar
 
 Configuration in `application-postgres.yml`:
 - **URL**: `jdbc:postgresql://localhost:5432/customer_db`
-- **User**: `ecommerce_user` (configure as needed)
-- **Password**: `ecommerce_password` (use environment variable in production)
+- **Users**: one owner role per service (`customer_owner`, `order_owner`, ...) plus a no-login `<service>_app` group role, created by `infrastructure/postgres/init-multiple-postgres-databases.sh`
+- **Passwords**: generated into your git-ignored `.env` by `scripts/gen-env.sh` (`CUSTOMER_DB_PASSWORD`, ...) - nothing is hard-coded
 - **Connection Pool**: HikariCP with 20 max connections
 - **Batch Size**: 20 for performance optimization
 

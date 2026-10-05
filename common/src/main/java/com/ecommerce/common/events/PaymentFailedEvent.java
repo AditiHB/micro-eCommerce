@@ -1,38 +1,24 @@
 package com.ecommerce.common.events;
 
-/**
- * Event published when payment processing fails (triggers compensating transactions).
- * Includes product and quantity for inventory release compensation.
- */
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+/** The payment processor declined the charge (a business outcome, not an error). */
+@Getter
+@Setter
+@NoArgsConstructor
+@EventSchema(type = "payment.failed", topic = Topics.PAYMENT_FAILED)
 public class PaymentFailedEvent extends DomainEvent {
+
     private Long orderId;
-    private String productId;
-    private Integer quantity;
+    private Long customerId;
     private String reason;
 
-    public PaymentFailedEvent() {
-        super();
-    }
-
-    public PaymentFailedEvent(Long orderId) {
-        super(String.valueOf(orderId), "Order");
+    public PaymentFailedEvent(Long orderId, Long customerId, String reason) {
+        super(String.valueOf(orderId), "Payment");
         this.orderId = orderId;
-    }
-
-    public PaymentFailedEvent(Long orderId, String productId, Integer quantity, String reason) {
-        super(String.valueOf(orderId), "Order");
-        this.orderId = orderId;
-        this.productId = productId;
-        this.quantity = quantity;
+        this.customerId = customerId;
         this.reason = reason;
     }
-
-    public Long getOrderId() { return orderId; }
-    public void setOrderId(Long orderId) { this.orderId = orderId; }
-    public String getProductId() { return productId; }
-    public void setProductId(String productId) { this.productId = productId; }
-    public Integer getQuantity() { return quantity; }
-    public void setQuantity(Integer quantity) { this.quantity = quantity; }
-    public String getReason() { return reason; }
-    public void setReason(String reason) { this.reason = reason; }
 }

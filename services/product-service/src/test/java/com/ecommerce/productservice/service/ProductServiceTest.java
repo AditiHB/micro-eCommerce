@@ -1,5 +1,8 @@
 package com.ecommerce.productservice.service;
 
+import com.ecommerce.common.config.CacheConfig;
+import com.ecommerce.common.exception.BusinessException;
+import com.ecommerce.common.exception.PreconditionFailedException;
 import com.ecommerce.productservice.dto.CreateProductRequest;
 import com.ecommerce.productservice.dto.ProductDTO;
 import com.ecommerce.productservice.dto.UpdateProductRequest;
@@ -8,274 +11,155 @@ import com.ecommerce.productservice.exception.DuplicateSkuException;
 import com.ecommerce.productservice.exception.ProductNotFoundException;
 import com.ecommerce.productservice.repository.ProductRepository;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@DisplayName("ProductService")
 class ProductServiceTest {
-    @Mock
-    private ProductRepository productRepository;
 
     @Mock
-    private ProductEventPublisher eventPublisher;
+    private ProductRepository repository;
+    @Mock
+    private ProductEventPublisher events;
+    @Mock
+    private CacheManager cacheManager;
+    @Mock
+    private Cache cache;
 
-    @InjectMocks
-    private ProductService productService;
-
-    private Product testProduct;
-    private CreateProductRequest createRequest;
-    private UpdateProductRequest updateRequest;
+    private ProductService service;
 
     @BeforeEach
     void setUp() {
-        testProduct = Product.builder()
-                .id(1L)
-                .name("Test Product")
-                .description("Test Description")
-                .price(new BigDecimal("99.99"))
-                .sku("SKU-TEST-001")
-                .category("Electronics")
-                .quantityAvailable(100)
-                .createdAt(LocalDateTime.now())
-                .updatedAt(LocalDateTime.now())
-                .build();
+        service = new ProductService(repository, events, cacheManager);
+        org.mockito.Mockito.lenient().when(cacheManager.getCache(CacheConfig.PRODUCTS_CACHE)).thenReturn(cache);
+        org.mockito.Mockito.lenient().when(repository.saveAndFlush(any(Product.class))).thenAnswer(inv -> {
+            Product p = inv.getArgument(0);
+            if (p.getId() == null) {
+                p.setId(1L);
+                p.setVersion(0L);
+            }
+            return p;
+        });
+    }
 
-        createRequest = CreateProductRequest.builder()
-                .name("New Product")
-                .description("New Description")
-                .price(new BigDecimal("49.99"))
-                .sku("SKU-NEW-001")
-                .category("Electronics")
-                .quantityAvailable(50)
-                .build();
+    private Product stored() {
+        return Product.builder().id(1L).name("Headphones").price(new BigDecimal("79.99")).currency("USD")
+                .sku("SKU-001").category("Electronics").version(2L).build();
+    }
 
-        updateRequest = UpdateProductRequest.builder()
-                .name("Updated Product")
-                .price(new BigDecimal("59.99"))
-                .build();
+    private CreateProductRequest createRequest() {
+        return CreateProductRequest.builder().name("Headphones").price(new BigDecimal("79.99")).sku("SKU-001").category("Electronics").build();
     }
 
     @Test
-    void testCreateProduct_Success() {
-        when(productRepository.existsBySku(createRequest.getSku())).thenReturn(false);
-        when(productRepository.save(any(Product.class))).thenReturn(testProduct);
+    @DisplayName("creating a product stores it (USD by default) and announces product.created in the same transaction")
+    void create() {
+        when(repository.existsBySku("SKU-001")).thenReturn(false);
 
-        ProductDTO result = productService.createProduct(createRequest);
+        ProductDTO created = service.createProduct(createRequest());
 
-        assertThat(result).isNotNull();
-        assertThat(result.getName()).isEqualTo(testProduct.getName());
-        assertThat(result.getSku()).isEqualTo(testProduct.getSku());
-        verify(productRepository).existsBySku(createRequest.getSku());
-        verify(productRepository).save(any(Product.class));
-        verify(eventPublisher).publishProductCreatedEvent(any());
+        assertThat(created.getCurrency()).isEqualTo("USD");
+        assertThat(created.getId()).isEqualTo(1L);
+        verify(events).created(any(Product.class));
     }
 
     @Test
-    void testCreateProduct_DuplicateSku() {
-        when(productRepository.existsBySku(createRequest.getSku())).thenReturn(true);
+    @DisplayName("a duplicate SKU is a 409 and nothing is announced")
+    void duplicate() {
+        when(repository.existsBySku("SKU-001")).thenReturn(true);
 
-        assertThatThrownBy(() -> productService.createProduct(createRequest))
-                .isInstanceOf(DuplicateSkuException.class)
-                .hasMessageContaining("already exists");
+        assertThatThrownBy(() -> service.createProduct(createRequest())).isInstanceOf(DuplicateSkuException.class);
 
-        verify(productRepository).existsBySku(createRequest.getSku());
-        verify(productRepository, never()).save(any());
+        verify(events, never()).created(any());
     }
 
     @Test
-    void testGetProductById_Success() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(testProduct));
+    @DisplayName("a partial update changes only the fields that are sent, evicts both cache keys and announces it")
+    void partialUpdate() {
+        Product product = stored();
+        when(repository.findById(1L)).thenReturn(Optional.of(product));
 
-        ProductDTO result = productService.getProductById(1L);
+        ProductDTO updated = service.updateProduct(1L, UpdateProductRequest.builder().price(new BigDecimal("89.99")).build(), "\"2\"");
 
-        assertThat(result).isNotNull();
-        assertThat(result.getId()).isEqualTo(1L);
-        assertThat(result.getName()).isEqualTo("Test Product");
-        verify(productRepository).findById(1L);
+        assertThat(updated.getPrice()).isEqualByComparingTo("89.99");
+        assertThat(updated.getName()).as("untouched").isEqualTo("Headphones");
+        verify(cache).evict("id:1");
+        verify(cache).evict("sku:SKU-001");
+        verify(events).updated(product);
     }
 
     @Test
-    void testGetProductById_NotFound() {
-        when(productRepository.findById(999L)).thenReturn(Optional.empty());
+    @DisplayName("an update with a stale If-Match is a 412: nothing changes, nothing is evicted or announced")
+    void staleUpdate() {
+        Product product = stored();
+        when(repository.findById(1L)).thenReturn(Optional.of(product));
 
-        assertThatThrownBy(() -> productService.getProductById(999L))
-                .isInstanceOf(ProductNotFoundException.class);
+        assertThatThrownBy(() -> service.updateProduct(1L, UpdateProductRequest.builder().price(BigDecimal.ONE).build(), "\"1\""))
+                .isInstanceOf(PreconditionFailedException.class);
 
-        verify(productRepository).findById(999L);
+        assertThat(product.getPrice()).isEqualByComparingTo("79.99");
+        verify(cache, never()).evict(any());
+        verify(events, never()).updated(any());
     }
 
     @Test
-    void testGetProductBySku_Success() {
-        when(productRepository.findBySku("SKU-TEST-001")).thenReturn(Optional.of(testProduct));
+    @DisplayName("deleting evicts both cache keys and announces product.deleted with the SKU")
+    void delete() {
+        Product product = stored();
+        when(repository.findById(1L)).thenReturn(Optional.of(product));
 
-        ProductDTO result = productService.getProductBySku("SKU-TEST-001");
+        service.deleteProduct(1L);
 
-        assertThat(result).isNotNull();
-        assertThat(result.getSku()).isEqualTo("SKU-TEST-001");
-        verify(productRepository).findBySku("SKU-TEST-001");
+        verify(repository).delete(product);
+        verify(cache).evict("id:1");
+        verify(cache).evict("sku:SKU-001");
+        verify(events).deleted(1L, "SKU-001");
     }
 
     @Test
-    void testGetAllProducts_Success() {
-        Pageable pageable = PageRequest.of(0, 10);
-        List<Product> products = List.of(testProduct);
-        Page<Product> productPage = new PageImpl<>(products, pageable, 1);
+    @DisplayName("an unknown product is a 404 for read, update and delete")
+    void unknown() {
+        when(repository.findById(9L)).thenReturn(Optional.empty());
+        when(repository.findBySku("NOPE")).thenReturn(Optional.empty());
 
-        when(productRepository.findAll(pageable)).thenReturn(productPage);
-
-        Page<ProductDTO> result = productService.getAllProducts(pageable);
-
-        assertThat(result).isNotNull();
-        assertThat(result.getContent()).hasSize(1);
-        assertThat(result.getTotalElements()).isEqualTo(1);
-        verify(productRepository).findAll(pageable);
+        assertThatThrownBy(() -> service.getProductById(9L)).isInstanceOf(ProductNotFoundException.class);
+        assertThatThrownBy(() -> service.getProductBySku("NOPE")).isInstanceOf(ProductNotFoundException.class);
+        assertThatThrownBy(() -> service.updateProduct(9L, new UpdateProductRequest(), null)).isInstanceOf(ProductNotFoundException.class);
+        assertThatThrownBy(() -> service.deleteProduct(9L)).isInstanceOf(ProductNotFoundException.class);
     }
 
     @Test
-    void testGetProductsByCategory_Success() {
-        Pageable pageable = PageRequest.of(0, 10);
-        List<Product> products = List.of(testProduct);
-        Page<Product> productPage = new PageImpl<>(products, pageable, 1);
+    @DisplayName("the batch lookup returns whichever of the SKUs exist")
+    void lookup() {
+        when(repository.findBySkuIn(List.of("SKU-001", "NOPE"))).thenReturn(List.of(stored()));
 
-        when(productRepository.findByCategory("Electronics", pageable)).thenReturn(productPage);
-
-        Page<ProductDTO> result = productService.getProductsByCategory("Electronics", pageable);
-
-        assertThat(result).isNotNull();
-        assertThat(result.getContent()).hasSize(1);
-        verify(productRepository).findByCategory("Electronics", pageable);
+        assertThat(service.lookupBySkus(List.of("SKU-001", "NOPE"))).extracting(ProductDTO::getSku).containsExactly("SKU-001");
     }
 
     @Test
-    void testUpdateProduct_Success() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(testProduct));
-        when(productRepository.save(any(Product.class))).thenReturn(testProduct);
-
-        ProductDTO result = productService.updateProduct(1L, updateRequest);
-
-        assertThat(result).isNotNull();
-        verify(productRepository).findById(1L);
-        verify(productRepository).save(any(Product.class));
-        verify(eventPublisher).publishProductUpdatedEvent(any());
-    }
-
-    @Test
-    void testUpdateProduct_NotFound() {
-        when(productRepository.findById(999L)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> productService.updateProduct(999L, updateRequest))
-                .isInstanceOf(ProductNotFoundException.class);
-
-        verify(productRepository).findById(999L);
-        verify(productRepository, never()).save(any());
-    }
-
-    @Test
-    void testDeleteProduct_Success() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(testProduct));
-
-        productService.deleteProduct(1L);
-
-        verify(productRepository).findById(1L);
-        verify(productRepository).deleteById(1L);
-        verify(eventPublisher).publishProductDeletedEvent(any());
-    }
-
-    @Test
-    void testDeleteProduct_NotFound() {
-        when(productRepository.findById(999L)).thenReturn(Optional.empty());
-
-        assertThatThrownBy(() -> productService.deleteProduct(999L))
-                .isInstanceOf(ProductNotFoundException.class);
-
-        verify(productRepository).findById(999L);
-        verify(productRepository, never()).deleteById(any());
-    }
-
-    @Test
-    void testReserveInventory_Success() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(testProduct));
-        when(productRepository.save(any(Product.class))).thenReturn(testProduct);
-
-        productService.reserveInventory(1L, 10);
-
-        verify(productRepository).findById(1L);
-        verify(productRepository).save(any(Product.class));
-    }
-
-    @Test
-    void testReserveInventory_InsufficientStock() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(testProduct));
-
-        assertThatThrownBy(() -> productService.reserveInventory(1L, 200))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Insufficient inventory");
-
-        verify(productRepository).findById(1L);
-        verify(productRepository, never()).save(any());
-    }
-
-    @Test
-    void testReleaseInventory_Success() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(testProduct));
-        when(productRepository.save(any(Product.class))).thenReturn(testProduct);
-
-        productService.releaseInventory(1L, 10);
-
-        verify(productRepository).findById(1L);
-        verify(productRepository).save(any(Product.class));
-    }
-
-    @Test
-    void testGetLowStockProducts_Success() {
-        Product lowStockProduct = Product.builder()
-                .id(testProduct.getId())
-                .name(testProduct.getName())
-                .description(testProduct.getDescription())
-                .price(testProduct.getPrice())
-                .sku(testProduct.getSku())
-                .category(testProduct.getCategory())
-                .quantityAvailable(5)
-                .createdAt(testProduct.getCreatedAt())
-                .updatedAt(testProduct.getUpdatedAt())
-                .build();
-        when(productRepository.findLowStockProducts()).thenReturn(List.of(lowStockProduct));
-
-        List<ProductDTO> result = productService.getLowStockProducts();
-
-        assertThat(result).isNotNull();
-        assertThat(result).hasSize(1);
-        verify(productRepository).findLowStockProducts();
-    }
-
-    @Test
-    void testGetAvailableProducts_Success() {
-        Pageable pageable = PageRequest.of(0, 10);
-        List<Product> products = List.of(testProduct);
-        Page<Product> productPage = new PageImpl<>(products, pageable, 1);
-
-        when(productRepository.findAvailableProducts(pageable)).thenReturn(productPage);
-
-        Page<ProductDTO> result = productService.getAvailableProducts(pageable);
-
-        assertThat(result).isNotNull();
-        assertThat(result.getContent()).hasSize(1);
-        verify(productRepository).findAvailableProducts(pageable);
+    @DisplayName("sorting is limited to known fields: a client cannot sort by an arbitrary property")
+    void sortAllowList() {
+        assertThatThrownBy(() -> service.getAllProducts(PageRequest.of(0, 10, Sort.by("description"))))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo("INVALID_SORT_FIELD");
     }
 }

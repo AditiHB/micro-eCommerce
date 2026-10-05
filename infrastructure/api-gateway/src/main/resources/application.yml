@@ -1,5 +1,6 @@
 server:
   port: 8080
+  shutdown: graceful
   http2:
     enabled: true
 
@@ -12,6 +13,7 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       timeout: 2000ms
+      password: ${REDIS_PASSWORD:}
       jedis:
         pool:
           max-active: 20
@@ -20,15 +22,19 @@ spring:
           max-wait: -1ms
 
   cloud:
+    vault:
+      # Switched on by the `vault` profile (see application-vault.yml); off for plain local runs.
+      enabled: false
     gateway:
+      # Only the explicit routes below exist. The discovery locator used to publish every registered
+      # service at /<service-id>/** - unfiltered, bypassing the rate limiter and circuit breaker.
       discovery:
         locator:
-          enabled: true
-          lower-case-service-id: true
+          enabled: false
       globalcors:
         corsConfigurations:
           '[/**]':
-            allowed-origins: "*"
+            allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
             allowed-methods:
               - GET
               - POST
@@ -36,27 +42,24 @@ spring:
               - DELETE
               - PATCH
               - OPTIONS
-            allowed-headers: "*"
+            allowed-headers:
+              - Authorization
+              - Content-Type
+              - Idempotency-Key
             allow-credentials: false
+      # Timeouts nest from the edge inward (see docs/RESILIENCE.md): the caller's time limiter (10s) is the
+      # outermost bound, the gateway's own response timeout (9s) fires just before it, and the services finish
+      # inside 8s. There is deliberately NO Retry filter on any route - a gateway that retried POST /orders would
+      # create duplicate orders; retries belong to the client (with an Idempotency-Key) and to idempotent reads.
+      httpclient:
+        connect-timeout: 1000
+        response-timeout: 9s
       routes:
-        - id: auth-service
-          uri: lb://customer-service
-          predicates:
-            - Path=/api/auth/**
-          filters:
-            - name: CircuitBreaker
-              args:
-                name: authCircuitBreaker
-                fallbackUri: forward:/fallback/service
-            - name: RateLimitingFilter
-              args:
-                requestsPerMinute: 150
-            - name: AuthenticationFilter
-
+        # --- order-service: canonical, versioned
         - id: order-service
           uri: lb://order-service
           predicates:
-            - Path=/api/orders/**
+            - Path=/api/v1/orders/**
           filters:
             - name: CircuitBreaker
               args:
@@ -65,12 +68,12 @@ spring:
             - name: RateLimitingFilter
               args:
                 requestsPerMinute: 100
-            - name: AuthenticationFilter
 
+        # --- customer-service: canonical, versioned
         - id: customer-service
           uri: lb://customer-service
           predicates:
-            - Path=/api/customers/**
+            - Path=/api/v1/customers/**
           filters:
             - name: CircuitBreaker
               args:
@@ -79,12 +82,12 @@ spring:
             - name: RateLimitingFilter
               args:
                 requestsPerMinute: 150
-            - name: AuthenticationFilter
 
+        # --- inventory-service: canonical, versioned
         - id: inventory-service
           uri: lb://inventory-service
           predicates:
-            - Path=/api/inventory/**
+            - Path=/api/v1/inventory/**
           filters:
             - name: CircuitBreaker
               args:
@@ -93,12 +96,12 @@ spring:
             - name: RateLimitingFilter
               args:
                 requestsPerMinute: 200
-            - name: AuthenticationFilter
 
+        # --- payment-service: canonical, versioned
         - id: payment-service
           uri: lb://payment-service
           predicates:
-            - Path=/api/payments/**
+            - Path=/api/v1/payments/**
           filters:
             - name: CircuitBreaker
               args:
@@ -107,7 +110,184 @@ spring:
             - name: RateLimitingFilter
               args:
                 requestsPerMinute: 50
-            - name: AuthenticationFilter
+
+        # --- product-service: canonical, versioned
+        - id: product-service
+          uri: lb://product-service
+          predicates:
+            - Path=/api/v1/products/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: productCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 200
+
+        # --- notification-service: canonical, versioned
+        - id: notification-service
+          uri: lb://notification-service
+          predicates:
+            - Path=/api/v1/notifications/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: notificationCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 100
+
+        # --- order-service: the original unversioned path, rewritten to v1 and marked deprecated
+        - id: order-service-legacy
+          uri: lb://order-service
+          predicates:
+            - Path=/api/orders/**
+          filters:
+            - RewritePath=/api/(?<segment>.*), /api/v1/$\{segment}
+            - AddResponseHeader=Deprecation, true
+            - AddResponseHeader=Link, </api/v1/orders>; rel="successor-version"
+            - name: CircuitBreaker
+              args:
+                name: orderCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 100
+
+        # --- customer-service: the original unversioned path, rewritten to v1 and marked deprecated
+        - id: customer-service-legacy
+          uri: lb://customer-service
+          predicates:
+            - Path=/api/customers/**
+          filters:
+            - RewritePath=/api/(?<segment>.*), /api/v1/$\{segment}
+            - AddResponseHeader=Deprecation, true
+            - AddResponseHeader=Link, </api/v1/customers>; rel="successor-version"
+            - name: CircuitBreaker
+              args:
+                name: customerCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 150
+
+        # --- inventory-service: the original unversioned path, rewritten to v1 and marked deprecated
+        - id: inventory-service-legacy
+          uri: lb://inventory-service
+          predicates:
+            - Path=/api/inventory/**
+          filters:
+            - RewritePath=/api/(?<segment>.*), /api/v1/$\{segment}
+            - AddResponseHeader=Deprecation, true
+            - AddResponseHeader=Link, </api/v1/inventory>; rel="successor-version"
+            - name: CircuitBreaker
+              args:
+                name: inventoryCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 200
+
+        # --- payment-service: the original unversioned path, rewritten to v1 and marked deprecated
+        - id: payment-service-legacy
+          uri: lb://payment-service
+          predicates:
+            - Path=/api/payments/**
+          filters:
+            - RewritePath=/api/(?<segment>.*), /api/v1/$\{segment}
+            - AddResponseHeader=Deprecation, true
+            - AddResponseHeader=Link, </api/v1/payments>; rel="successor-version"
+            - name: CircuitBreaker
+              args:
+                name: paymentCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 50
+
+        # --- product-service: the original unversioned path, rewritten to v1 and marked deprecated
+        - id: product-service-legacy
+          uri: lb://product-service
+          predicates:
+            - Path=/api/products/**
+          filters:
+            - RewritePath=/api/(?<segment>.*), /api/v1/$\{segment}
+            - AddResponseHeader=Deprecation, true
+            - AddResponseHeader=Link, </api/v1/products>; rel="successor-version"
+            - name: CircuitBreaker
+              args:
+                name: productCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 200
+
+        # --- notification-service: the original unversioned path, rewritten to v1 and marked deprecated
+        - id: notification-service-legacy
+          uri: lb://notification-service
+          predicates:
+            - Path=/api/notifications/**
+          filters:
+            - RewritePath=/api/(?<segment>.*), /api/v1/$\{segment}
+            - AddResponseHeader=Deprecation, true
+            - AddResponseHeader=Link, </api/v1/notifications>; rel="successor-version"
+            - name: CircuitBreaker
+              args:
+                name: notificationCircuitBreaker
+                fallbackUri: forward:/fallback/service
+            - name: RateLimitingFilter
+              args:
+                requestsPerMinute: 100
+
+        # --- operator tooling: the dead letters of order-service's own consumers (ADMIN only, enforced by the service)
+        - id: order-service-dead-letters
+          uri: lb://order-service
+          predicates:
+            - Path=/api/v1/admin/order/dead-letters/**
+          filters:
+            - RewritePath=/api/v1/admin/order/(?<segment>.*), /api/v1/$\{segment}
+            - name: CircuitBreaker
+              args:
+                name: orderCircuitBreaker
+                fallbackUri: forward:/fallback/service
+
+        # --- operator tooling: the dead letters of inventory-service's own consumers (ADMIN only, enforced by the service)
+        - id: inventory-service-dead-letters
+          uri: lb://inventory-service
+          predicates:
+            - Path=/api/v1/admin/inventory/dead-letters/**
+          filters:
+            - RewritePath=/api/v1/admin/inventory/(?<segment>.*), /api/v1/$\{segment}
+            - name: CircuitBreaker
+              args:
+                name: inventoryCircuitBreaker
+                fallbackUri: forward:/fallback/service
+
+        # --- operator tooling: the dead letters of payment-service's own consumers (ADMIN only, enforced by the service)
+        - id: payment-service-dead-letters
+          uri: lb://payment-service
+          predicates:
+            - Path=/api/v1/admin/payment/dead-letters/**
+          filters:
+            - RewritePath=/api/v1/admin/payment/(?<segment>.*), /api/v1/$\{segment}
+            - name: CircuitBreaker
+              args:
+                name: paymentCircuitBreaker
+                fallbackUri: forward:/fallback/service
+
+        # --- operator tooling: the dead letters of notification-service's own consumers (ADMIN only, enforced by the service)
+        - id: notification-service-dead-letters
+          uri: lb://notification-service
+          predicates:
+            - Path=/api/v1/admin/notification/dead-letters/**
+          filters:
+            - RewritePath=/api/v1/admin/notification/(?<segment>.*), /api/v1/$\{segment}
+            - name: CircuitBreaker
+              args:
+                name: notificationCircuitBreaker
+                fallbackUri: forward:/fallback/service
 
 resilience4j:
   circuitbreaker:
@@ -129,6 +309,10 @@ resilience4j:
         baseConfig: default
       paymentCircuitBreaker:
         baseConfig: default
+      productCircuitBreaker:
+        baseConfig: default
+      notificationCircuitBreaker:
+        baseConfig: default
 
   timelimiter:
     configs:
@@ -144,10 +328,18 @@ resilience4j:
         baseConfig: default
       paymentCircuitBreaker:
         baseConfig: default
+      productCircuitBreaker:
+        baseConfig: default
+      notificationCircuitBreaker:
+        baseConfig: default
 
-jwt:
-  secret: ${JWT_SECRET}
-  expiration: 86400000
+ecommerce:
+  security:
+    # Identity provider (Keycloak). Public configuration, not secrets: tokens are RS256 and verified
+    # against the provider's JWKS; there is no shared signing secret to leak or default.
+    jwk-set-uri: ${SECURITY_JWK_SET_URI:http://localhost:8180/realms/ecommerce/protocol/openid-connect/certs}
+    issuer: ${SECURITY_ISSUER:http://localhost:8180/realms/ecommerce}
+    audience: ${SECURITY_AUDIENCE:ecommerce-api}
 
 eureka:
   client:
@@ -160,13 +352,15 @@ eureka:
     instance-id: ${spring.application.name}:${spring.application.instance_id:${random.value}}
 
 management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9080}
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,circuitbreakers,circuitbreaker-events
+        include: health,info,prometheus,circuitbreakers,circuitbreaker-events
   endpoint:
     health:
-      show-details: always
+      show-details: never
       probes:
         enabled: true
   metrics:

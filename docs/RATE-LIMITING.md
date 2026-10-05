@@ -22,7 +22,7 @@ All API endpoints follow these default rate limits:
 
 #### Authentication Service
 ```
-POST /api/auth/login       : 5 requests/minute (prevents brute force)
+# Login/brute-force protection now lives in Keycloak (realm brute-force detection, 5 failures -> lockout)
 GET  /api/auth/me          : 120 requests/minute
 ```
 

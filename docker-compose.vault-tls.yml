@@ -1,0 +1,78 @@
+# ===============================================================================
+# Overlay: Vault served over TLS with a certificate from the internal smallstep CA, and every client
+# (vault-init, each service) verifying it against the platform CA. Requires BOTH other overlays:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.pki.yml -f docker-compose.vault.yml \
+#       -f docker-compose.vault-tls.yml --profile https up -d --build
+# ===============================================================================
+
+x-vault-tls-env: &vault-tls-env
+  VAULT_ADDR: "https://vault:8200"
+  # Spring Cloud Vault can only read a Java keystore, hence the PKCS12 truststore pki-truststore builds.
+  SPRING_CLOUD_VAULT_SSL_TRUSTSTORE: "file:/certs/ca/truststore.p12"
+  SPRING_CLOUD_VAULT_SSL_TRUSTSTOREPASSWORD: "changeit"
+  SPRING_CLOUD_VAULT_SSL_TRUSTSTORETYPE: "PKCS12"
+
+services:
+  vault:
+    # Vault re-reads its certificate on SIGHUP: send one every 6h, well inside the 24h lifetime.
+    command:
+      - /bin/sh
+      - -c
+      - "(while :; do sleep 21600; kill -HUP 1; done) & exec docker-entrypoint.sh vault server -config=/vault/config/vault.hcl"
+    environment:
+      VAULT_ADDR: "https://127.0.0.1:8200"
+      VAULT_CACERT: "/certs/ca/ca-bundle.crt"
+    volumes:
+      - ./infrastructure/vault/vault-tls.hcl:/vault/config/vault.hcl:ro
+      - type: volume
+        source: pki-certs
+        target: /certs/vault
+        read_only: true
+        volume:
+          subpath: vault
+      - type: volume
+        source: pki-certs
+        target: /certs/ca
+        read_only: true
+        volume:
+          subpath: ca
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+    healthcheck:
+      # `vault status` exits 1 only when it cannot talk to the server (0 unsealed, 2 sealed).
+      test: ["CMD-SHELL", "vault status >/dev/null 2>&1; [ $$? -ne 1 ]"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  vault-init:
+    environment:
+      VAULT_ADDR: "https://vault:8200"
+      VAULT_CACERT: "/certs/ca/ca-bundle.crt"
+    volumes:
+      - type: volume
+        source: pki-certs
+        target: /certs/ca
+        read_only: true
+        volume:
+          subpath: ca
+
+  api-gateway:
+    environment: *vault-tls-env
+
+  customer-service:
+    environment: *vault-tls-env
+
+  inventory-service:
+    environment: *vault-tls-env
+
+  order-service:
+    environment: *vault-tls-env
+
+  payment-service:
+    environment: *vault-tls-env
+
+  notification-service:
+    environment: *vault-tls-env

@@ -1,0 +1,13 @@
+{
+  "eventId" : "evt-refund.completed",
+  "occurredAt" : "2026-01-01T10:15:30Z",
+  "aggregateId" : "42",
+  "aggregateType" : "Payment",
+  "version" : 1,
+  "orderId" : 42,
+  "paymentId" : 9,
+  "customerId" : 7,
+  "refundAmount" : 172.97,
+  "currency" : "USD",
+  "eventType" : "refund.completed"
+}

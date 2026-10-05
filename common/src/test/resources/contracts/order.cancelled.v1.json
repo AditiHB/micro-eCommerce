@@ -1,0 +1,11 @@
+{
+  "eventId" : "evt-order.cancelled",
+  "occurredAt" : "2026-01-01T10:15:30Z",
+  "aggregateId" : "42",
+  "aggregateType" : "Order",
+  "version" : 1,
+  "orderId" : 42,
+  "customerId" : 7,
+  "reason" : "Payment declined",
+  "eventType" : "order.cancelled"
+}

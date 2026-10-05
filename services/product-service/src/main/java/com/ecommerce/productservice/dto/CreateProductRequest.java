@@ -31,7 +31,7 @@ public class CreateProductRequest {
     @Size(max = 100, message = "Category must not exceed 100 characters")
     private String category;
 
-    @NotNull(message = "Quantity available is required")
-    @PositiveOrZero(message = "Quantity available must be zero or positive")
-    private Integer quantityAvailable;
+    @Pattern(regexp = "[A-Z]{3}", message = "Currency must be a 3-letter ISO code")
+    @Builder.Default
+    private String currency = "USD";
 }

@@ -1,3 +1,9 @@
+> **Update:** the sections below describe an earlier, Kubernetes-Secret-centred approach with a shared `JWT_SECRET`.
+> That secret no longer exists (tokens are issued by Keycloak - [KEYCLOAK_IDENTITY.md](KEYCLOAK_IDENTITY.md)), the
+> repository carries no credentials (`scripts/gen-env.sh` generates them), and secrets can be served by Vault
+> ([VAULT_SECRETS.md](VAULT_SECRETS.md)) with certificates from an internal CA ([SMALLSTEP_PKI.md](SMALLSTEP_PKI.md)).
+> Read those three first; treat anything below that mentions `JWT_SECRET` as historical.
+
 # Secrets Management Guide
 
 ## Overview

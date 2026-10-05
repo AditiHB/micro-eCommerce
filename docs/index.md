@@ -80,7 +80,7 @@ Production:   https://api.ecommerce.local
 
 ## Authentication
 
-All endpoints (except `/api/auth/login`) require Bearer token authentication:
+All endpoints require a Bearer access token issued by Keycloak (there is no login endpoint on the API - see [KEYCLOAK_IDENTITY.md](KEYCLOAK_IDENTITY.md)):
 
 ```bash
 Authorization: Bearer {JWT_TOKEN}

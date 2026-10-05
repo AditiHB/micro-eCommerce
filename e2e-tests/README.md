@@ -2,188 +2,96 @@
 
 Karate features exercising the live, **already-running** Docker Compose
 stack over real HTTP - no mocks, no Spring context, nothing started by this
-module itself.
+module itself. They go through the API gateway, authenticate against Keycloak, and use the same
+`/api/v1/...` contract a real client uses.
 
 ## Scenarios
 
-[`customer-journey.feature`](src/test/resources/e2e/customer-journey.feature):
+| Feature | What it proves |
+|---|---|
+| [`customer-journey`](src/test/resources/e2e/customer-journey.feature) | Create a customer and a product, place an order, and watch the choreography saga run: stock is reserved, the **real total** is charged, the order completes, and the customer is notified. Also a multi-line order priced line by line. |
+| [`compensating-transaction`](src/test/resources/e2e/compensating-transaction.feature) | The saga's rollback paths. Not enough stock; one short line cancels the whole order (reservation is all-or-nothing); the payment processor declines (stock comes back, customer told); a completed order cannot be cancelled and its payment can be refunded exactly once. |
+| [`inventory-idempotency`](src/test/resources/e2e/inventory-idempotency.feature) | Stock is never oversold, never negative, and the **last unit is sellable**. Redelivered events change nothing. Stale `If-Match` cannot overwrite a newer stock-take (412). |
+| [`transactional-rollback`](src/test/resources/e2e/transactional-rollback.feature) | A rejected request leaves no order behind; the same `Idempotency-Key` returns the same order, however many times it is retried. |
+| [`resilience`](src/test/resources/e2e/resilience.feature) | Stops **real containers**: orders are accepted while Kafka is down and complete when it returns (transactional outbox); a late cancellation still ends fully compensated; a dependency outage is a clean `503 DEPENDENCY_UNAVAILABLE`; the gateway answers 503/429 as problem documents. Needs `docker` on PATH ([DockerControl](src/test/java/e2e/DockerControl.java)). |
+| [`dlq-routing`](src/test/resources/e2e/dlq-routing.feature) | Poison messages published straight onto the real topics ([KafkaFaultInjector](src/test/java/e2e/KafkaFaultInjector.java)): retried or dead-lettered, parked in the owning service's own database, listed and replayable by an admin, never blocking the partition. A hostile type header is refused. |
+| [`error-handling`](src/test/resources/e2e/error-handling.feature) | One error contract: every failure from every service is an RFC 9457 `application/problem+json` with the same members and a stable `errorCode` (404, 400 + field errors, 405, 409, 412, 401). |
+| [`authorization`](src/test/resources/e2e/authorization.feature) | A customer token is kept out of every back-office endpoint, sees and creates only their own data, cannot cancel someone else's order; dead letters are admin-only; the old login endpoint and service-name routes are gone. |
+| [`rest-api-coverage`](src/test/resources/e2e/rest-api-coverage.feature) | One pass over every public endpoint (customers with `ETag`/`If-Match`, products incl. batch lookup and SKU, inventory, orders, payments, notifications) and the versioning contract: `/api/v1` is canonical, the old unversioned paths still work but carry a `Deprecation` header. |
 
-1. Log in (gets a JWT)
-2. Create a customer
-3. See the product catalogue (Inventory Service)
-4. Create an order for a catalogue item
-5. Invoke the Payment Service for that order
-6. Poll Notification Service until it shows both the order-created and
-   payment-processed notifications it reacted to over Kafka
-
-[`resilience.feature`](src/test/resources/e2e/resilience.feature): the
-gateway's circuit breaker (stop/restart payment-service, confirm it opens
-then recovers) and rate limiter (burst past a route's per-minute budget).
-Needs `docker` on PATH - see [DockerControl](src/test/java/e2e/DockerControl.java).
-
-[`compensating-transaction.feature`](src/test/resources/e2e/compensating-transaction.feature):
-the choreography saga's rollback path. Orders more stock than Inventory
-Service has on hand, which fails the forward transaction mid-saga, then
-confirms the compensating transaction actually undoes the order that was
-already created - CANCELLED status, inventory left untouched (nothing was
-ever reserved), and Payment Service never reached.
-
-[`transactional-rollback.feature`](src/test/resources/e2e/transactional-rollback.feature):
-a single service's own `@Transactional` rollback, as opposed to the
-cross-service saga rollback above. A second payment for the same order
-hits a DB unique constraint partway through `PaymentService.processPayment`,
-and the whole transaction must roll back cleanly - a clean 400 business
-error, and the original payment left completely untouched rather than
-partially overwritten. Uses a synthetic orderId so it's fully isolated from
-the Kafka saga (no race with PaymentEventListener's own automatic payment).
-
-[`dlq-routing.feature`](src/test/resources/e2e/dlq-routing.feature): the
-saga listeners' Dead Letter Queue safety net (DlqPublisher). Publishes a
-hand-crafted, deliberately malformed event straight onto a main topic via
-[KafkaFaultInjector](src/test/java/e2e/KafkaFaultInjector.java) (a raw
-Kafka client, bypassing every service's own producer), making the real
-`@KafkaListener` method throw in its actual business logic, then confirms
-the event lands in that topic's `<topic>-dlq` instead of being silently
-dropped. Covers 5 of the saga's 8 listener methods - the other 3 are
-guarded against this kind of data-only fault injection by design (see the
-feature file's own header for which, and why).
-
-[`inventory-idempotency.feature`](src/test/resources/e2e/inventory-idempotency.feature):
-proves the fix for a real gap this suite's own coverage audit found -
-`InventoryEventListener.handleOrderCreated`/`handlePaymentFailed` had no
-protection against Kafka redelivering the same event twice (a normal
-occurrence under `AckMode.MANUAL`, not a failure), so redelivery would
-decrement or release the same order's stock a second time - the same bug
-class as the double-payment race fixed earlier (commit `0c4f488`), just
-never fixed on the inventory side. The fix adds an `inventory_reservations`
-idempotency ledger (one row per orderId, unique constraint) to
-`InventoryService`. Each scenario here publishes the exact same event twice
-in a row via `KafkaFaultInjector` - faithfully simulating redelivery - and
-proves the stock only moves once.
-
-[`rest-api-coverage.feature`](src/test/resources/e2e/rest-api-coverage.feature):
-every REST endpoint the saga itself never calls - direct admin/ops-style
-operations found missing by the same coverage audit. Customer lifecycle
-(read/list/update/delete), direct inventory management (create/reserve/
-release/update, independent of the Kafka-driven reserve/release), a manual
-order status override, a manual payment refund (distinct from the saga's
-automatic refund-on-cancellation - see `compensating-transaction.feature`),
-notification lookups (by id/customer/list), and `GET /auth/me`.
-
-[`error-handling.feature`](src/test/resources/e2e/error-handling.feature):
-the basic REST contract (401/404/400) that every other feature's happy and
-business-failure paths never touch - missing/garbage JWT, a nonexistent id
-on every service, and malformed input on every POST endpoint. Running this
-is what actually found a real bug: logging in with a wrong password
-returned a raw 500 instead of the 400 `AuthController`'s own Swagger doc
-promised, because `GlobalExceptionHandler` had no handler for Spring
-Security's `AuthenticationException` - fixed, with a deliberately generic
-error message so the endpoint can't be used to enumerate valid usernames.
+The `helpers/` features (`create-customer`, `create-product`, `place-order`, `await-order`, ...) are
+small reusable steps the scenarios call; they are not run on their own.
 
 ## Data showcase
 
-Every scenario above prints a live snapshot of the exact rows it just
-created or changed - straight from each service's own Postgres database,
-for the specific IDs that run produced - right after the HTTP assertions
-that confirm them. For example, `customer-journey.feature` prints the new
-customer row, the order's PENDING→COMPLETED transition, the payment row,
-the notification rows, and the inventory row before/after, every single
-run. See [DataShowcase](src/test/java/e2e/DataShowcase.java): it connects
-over JDBC to postgres's host-exposed port (5432) and renders a compact,
-aligned table for whatever columns the calling step's SQL selects - so a
-Karate HTML report or a terminal run both show exactly what landed in the
-database, not just what the API echoed back. Best-effort: if postgres
-isn't reachable (e.g. the H2 profile is running instead), it prints a note
-and the scenario continues unaffected - this is diagnostic output, never
-an assertion.
-
-`dlq-routing.feature` uses the same class's `showRaw` to print the actual
-Kafka message bodies instead (the input crafted event and what landed in
-the DLQ topic), since that scenario's data lives in Kafka, not Postgres.
+Scenarios print a live snapshot of the exact rows they just created or changed, straight from each
+service's own Postgres database, right after the HTTP assertions that confirm them
+(see [DataShowcase](src/test/java/e2e/DataShowcase.java): it connects over JDBC to postgres's
+host-exposed port and renders a compact table for whatever columns the calling step selects).
+It is best-effort diagnostic output, never an assertion: if postgres is not reachable the scenario
+carries on unaffected. It reads `POSTGRES_ADMIN_PASSWORD` from the environment.
 
 ## Prerequisites
 
 Start the stack first (see [docs/SETUP_AND_DEPLOYMENT.md](../docs/SETUP_AND_DEPLOYMENT.md)):
 
 ```bash
-docker compose --profile postgres --env-file .env.postgres up -d
+scripts/gen-env.sh        # once: generates .env (secrets + test-user passwords)
+docker compose up -d --build
+
+# The suite reads its credentials from the environment - source your .env first:
+set -a; . ./.env; set +a
 ```
 
-The HTTP assertions in every scenario work the same under the default H2
-profile, but the data showcase above needs the `postgres` profile - H2 is
-in-memory per-service and has no container/port for DataShowcase to query.
-HTTPS/observability profiles are irrelevant here (the test talks to the
-gateway on plain HTTP).
-
-The login step authenticates as `karate_admin`, a test-only ADMIN account
-seeded by a Flyway migration into every service's own local `users` table
-(see [../db/README.md](../db/README.md)) - ADMIN satisfies every role check
-used by this scenario (customers, orders, payments, inventory).
+PostgreSQL is the only database; there is no profile to select. The sign-in step gets a token from
+**Keycloak** (`auth.feature`, password grant on the development-only `ecommerce-e2e` client) as
+`karate_admin`, a test-only ADMIN user created by `infrastructure/keycloak/seed-dev.sh` with a password from
+your `.env`. `authorization.feature` additionally signs in as `karate_user` (a plain customer bound to
+customer 1) to prove what a customer may *not* do.
 
 ## Running it
 
-Run everything in one go:
+Everything in one go:
 
 ```bash
-mvn -f e2e-tests/pom.xml test -Dtest='*Runner'
+mvn -f e2e-tests/pom.xml test -Dtest='*Runner' \
+  -Dgateway.url=http://localhost:8080 -Dnotification.url=http://localhost:8086 -Dkeycloak.url=http://localhost:8180
 ```
 
-Surefire's `-Dtest` wildcard matches every `*Runner` class, so this picks up
-new scenarios automatically as they're added - no need to update this list.
-Scenario order matters for `resilience.feature` internally (see its own
-header comment), but the five feature files themselves have no ordering
-dependency on each other and are safe to run together like this.
-
-Or run one feature at a time:
+Surefire's `-Dtest` wildcard matches every `*Runner` class, so new features are picked up automatically.
+`resilience.feature` restarts containers, so run it on its own if you want to watch it:
 
 ```bash
 mvn -f e2e-tests/pom.xml test -Dtest=CustomerJourneyRunner
-mvn -f e2e-tests/pom.xml test -Dtest=ResilienceRunner
 mvn -f e2e-tests/pom.xml test -Dtest=CompensatingTransactionRunner
-mvn -f e2e-tests/pom.xml test -Dtest=TransactionalRollbackRunner
-mvn -f e2e-tests/pom.xml test -Dtest=DlqRoutingRunner
 mvn -f e2e-tests/pom.xml test -Dtest=InventoryIdempotencyRunner
-mvn -f e2e-tests/pom.xml test -Dtest=RestApiCoverageRunner
+mvn -f e2e-tests/pom.xml test -Dtest=TransactionalRollbackRunner
+mvn -f e2e-tests/pom.xml test -Dtest=ResilienceRunner
+mvn -f e2e-tests/pom.xml test -Dtest=DlqRoutingRunner
 mvn -f e2e-tests/pom.xml test -Dtest=ErrorHandlingRunner
+mvn -f e2e-tests/pom.xml test -Dtest=AuthorizationRunner
+mvn -f e2e-tests/pom.xml test -Dtest=RestApiCoverageRunner
 ```
 
-This module is **not** wired into the root reactor (`pom.xml`'s `<modules>`)
-and none of the `*Runner` classes are named `*Test`/`*IT` - so none of them
-run as a side effect of `mvn clean install` or any other normal build, here
-or in any other service's Dockerfile. Run them explicitly, after the stack
-is up, exactly as above.
+This module is **not** wired into the root reactor and none of the runners are named `*Test`/`*IT`, so none
+of them run as a side effect of `mvn clean install`. Run them explicitly, after the stack is up.
 
 ## Notes
 
-- Override the target URLs with `-Dgateway.url=... -Dnotification.url=...`
-  if the gateway or notification-service aren't on `localhost:8080`/`:8086`.
-- Every scenario creates fresh data (UUID-suffixed customers, timestamp-based
-  synthetic orderIds), so it's safe to run repeatedly without cleanup.
-- If you see a `503` from the gateway right after rebuilding/restarting
-  services, that's Resilience4j's circuit breaker tripped from earlier
-  failed requests (its state is in-memory) - restart `api-gateway` and retry.
-- If you see a `429` instead, that's the gateway's rate limiter - its
-  per-client-IP counter is shared across every route (see
-  `resilience.feature`'s own header), so running feature files back-to-back
-  many times in a short window (as this README's examples do, repeatedly,
-  while developing) can exhaust it. Clear it and retry:
-  `docker exec redis redis-cli eval "for _,k in ipairs(redis.call('keys','rate_limit:*')) do redis.call('del',k) end" 0`
+- Every scenario creates fresh data (UUID-suffixed customers, products and SKUs), so it is safe to run
+  repeatedly without cleanup.
+- The gateway's rate limiter counter is per client IP and shared across routes. Each feature clears it in its
+  `Background`; if you still see a `429`, clear it:
+  `docker exec redis redis-cli -a "$REDIS_PASSWORD" --no-auth-warning eval "for _,k in ipairs(redis.call('keys','rate_limit:*')) do redis.call('del',k) end" 0`
+- A `503` from the gateway right after restarting services is Resilience4j's circuit breaker (in-memory
+  state) - give it its wait duration or restart `api-gateway`.
+- Saga completion is asynchronous: scenarios poll (`helpers/await-order.feature`) rather than sleep.
 
 ## Known gaps
 
-Found by auditing this suite's coverage against the full codebase - not
-fixed here, listed for visibility:
-
-- `InventoryEventListener.handlePaymentFailed`, `PaymentEventListener.
-  handleInventoryReserved`/`handleOrderCancelled` - 3 of the saga's 8
-  listener methods DLQ routing can't be proven for via data-only fault
-  injection (see `dlq-routing.feature`'s header for why).
-- `NotificationService.notify`'s `FAILED` branch (unresolvable customer
-  email, or the sender itself throwing) - every scenario here only ever
-  sees `SENT`.
-- DLQ *reprocessing/replay* - this suite proves routing, never recovery.
-- Redis-backed caching correctness (the local `ConcurrentMapCacheManager`
-  vs. the unused distributed `RedisCacheManager` - see `RedisConfig`'s own
-  TODO javadoc) - never asserted here.
-- `product-service` - a separate service, not part of this compose stack
-  at all (see `docs/SETUP_AND_DEPLOYMENT.md`).
+- Redis-backed caching correctness under a Redis outage is proven by the Java integration tests
+  (`FailSafeCacheTest`, `*CacheIntegrationTest`), not here.
+- `NotificationService`'s `FAILED` branch (the sender itself throwing) is covered by unit and integration
+  tests; every scenario here only ever sees `SENT`.
+- The Kafka HA overlay (`docker-compose.kafka-ha.yml`) and the Vault / step-ca overlays are validated by
+  `docker compose config` and their own docs, not by this suite.

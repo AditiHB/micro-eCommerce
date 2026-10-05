@@ -2,12 +2,12 @@ package com.ecommerce.notificationservice.service;
 
 import com.ecommerce.common.enums.NotificationStatus;
 import com.ecommerce.common.enums.NotificationType;
+import com.ecommerce.common.exception.BusinessException;
+import com.ecommerce.common.exception.ResourceNotFoundException;
+import com.ecommerce.common.events.Topics;
+import com.ecommerce.common.inbox.InboxService;
 import com.ecommerce.notificationservice.Notification;
 import com.ecommerce.notificationservice.NotificationRepository;
-import com.ecommerce.notificationservice.client.CustomerClient;
-import com.ecommerce.notificationservice.client.CustomerInfo;
-import com.ecommerce.notificationservice.sender.NotificationDeliveryException;
-import com.ecommerce.notificationservice.sender.NotificationSender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,96 +20,92 @@ import java.math.BigDecimal;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("NotificationService Unit Tests")
+@DisplayName("NotificationService")
 class NotificationServiceTest {
 
     @Mock
-    private NotificationRepository notificationRepository;
-
+    private NotificationRepository repository;
     @Mock
-    private CustomerClient customerClient;
+    private InboxService inbox;
 
-    @Mock
-    private NotificationSender notificationSender;
-
-    private NotificationService notificationService;
-
-    private CustomerInfo customer;
+    private NotificationService service;
 
     @BeforeEach
     void setUp() {
-        notificationService = new NotificationService(notificationRepository, customerClient, notificationSender);
-        customer = new CustomerInfo(10L, "Jane Doe", "jane@example.com");
+        service = new NotificationService(repository, inbox);
+    }
+
+    private Notification recorded() {
+        ArgumentCaptor<Notification> saved = ArgumentCaptor.forClass(Notification.class);
+        verify(repository).save(saved.capture());
+        return saved.getValue();
     }
 
     @Test
-    @DisplayName("Should send and save a SENT notification when order is created")
-    void testNotifyOrderCreatedSuccess() {
-        when(notificationRepository.existsBySourceEventId("evt-1")).thenReturn(false);
-        when(customerClient.getCustomer(10L)).thenReturn(Optional.of(customer));
+    @DisplayName("a notification with an address is recorded PENDING and due immediately, for the dispatcher to send")
+    void recordsPending() {
+        when(inbox.firstDelivery(Topics.GROUP_NOTIFICATION, "evt-1")).thenReturn(true);
 
-        notificationService.notifyOrderCreated("evt-1", 100L, 10L, "PROD-001", 2);
+        service.record("evt-1", 7L, 42L, NotificationType.PAYMENT_SUCCESS, "Subject", "Body", "jane@example.com");
 
-        ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
-        verify(notificationRepository).save(captor.capture());
-        verify(notificationSender).send(eq("jane@example.com"), anyString(), anyString());
-
-        Notification saved = captor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(NotificationStatus.SENT);
-        assertThat(saved.getType()).isEqualTo(NotificationType.ORDER_CREATED);
-        assertThat(saved.getRecipient()).isEqualTo("jane@example.com");
-        assertThat(saved.getCustomerId()).isEqualTo(10L);
-        assertThat(saved.getOrderId()).isEqualTo(100L);
+        Notification notification = recorded();
+        assertThat(notification.getStatus()).isEqualTo(NotificationStatus.PENDING);
+        assertThat(notification.getRecipient()).isEqualTo("jane@example.com");
+        assertThat(notification.getAttempts()).isZero();
+        assertThat(notification.getNextAttemptAt()).isNotNull();
+        assertThat(notification.getSourceEventId()).isEqualTo("evt-1");
     }
 
     @Test
-    @DisplayName("Should skip notification when the source event was already processed")
-    void testIdempotencySkipsDuplicateEvent() {
-        when(notificationRepository.existsBySourceEventId("evt-dup")).thenReturn(true);
+    @DisplayName("without an address it is recorded FAILED straight away - retrying cannot conjure an email")
+    void noAddress() {
+        when(inbox.firstDelivery(any(), any())).thenReturn(true);
 
-        notificationService.notifyOrderCreated("evt-dup", 100L, 10L, "PROD-001", 2);
+        service.record("evt-1", 7L, 42L, NotificationType.ORDER_CREATED, "Subject", "Body", " ");
 
-        verifyNoInteractions(customerClient, notificationSender);
-        verify(notificationRepository, never()).save(any());
+        Notification notification = recorded();
+        assertThat(notification.getStatus()).isEqualTo(NotificationStatus.FAILED);
+        assertThat(notification.getErrorMessage()).contains("email address");
     }
 
     @Test
-    @DisplayName("Should record a FAILED notification when the customer's email can't be resolved")
-    void testNotifyWhenCustomerNotFound() {
-        when(notificationRepository.existsBySourceEventId("evt-2")).thenReturn(false);
-        when(customerClient.getCustomer(10L)).thenReturn(Optional.empty());
+    @DisplayName("a redelivered event records nothing a second time (inbox)")
+    void duplicate() {
+        when(inbox.firstDelivery(any(), eq("evt-1"))).thenReturn(false);
 
-        notificationService.notifyPaymentSuccess("evt-2", 100L, 10L, new BigDecimal("49.99"));
+        service.record("evt-1", 7L, 42L, NotificationType.ORDER_CREATED, "S", "B", "jane@example.com");
 
-        ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
-        verify(notificationRepository).save(captor.capture());
-        verifyNoInteractions(notificationSender);
-
-        Notification saved = captor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(NotificationStatus.FAILED);
-        assertThat(saved.getErrorMessage()).isNotBlank();
+        verify(repository, never()).save(any());
     }
 
     @Test
-    @DisplayName("Should record a FAILED notification when delivery throws")
-    void testNotifyWhenDeliveryFails() {
-        when(notificationRepository.existsBySourceEventId("evt-3")).thenReturn(false);
-        when(customerClient.getCustomer(10L)).thenReturn(Optional.of(customer));
-        doThrow(new NotificationDeliveryException("SMTP down"))
-            .when(notificationSender).send(anyString(), anyString(), anyString());
+    @DisplayName("message texts carry the order, the item count, and the amount with its currency")
+    void messages() {
+        assertThat(NotificationService.orderCreatedSubject(42L)).isEqualTo("Your order #42 has been received");
+        assertThat(NotificationService.orderCreatedMessage(42L, 2, new BigDecimal("172.97"), "USD"))
+                .contains("#42").contains("2 items").contains("172.97 USD");
+        assertThat(NotificationService.orderCreatedMessage(42L, 1, BigDecimal.TEN, "EUR")).contains("1 item,");
+        assertThat(NotificationService.paymentSuccessMessage(42L, new BigDecimal("50.00"), "GBP")).contains("50.00 GBP");
+        assertThat(NotificationService.paymentFailedMessage(42L, "Card declined")).contains("(Card declined)");
+        assertThat(NotificationService.paymentFailedMessage(42L, null)).doesNotContain("(");
+    }
 
-        notificationService.notifyPaymentFailed("evt-3", 100L, 10L, "Card declined");
+    @Test
+    @DisplayName("an unknown notification is a 404; sorting is limited to known fields")
+    void reading() {
+        when(repository.findById(9L)).thenReturn(Optional.empty());
 
-        ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
-        verify(notificationRepository).save(captor.capture());
-
-        Notification saved = captor.getValue();
-        assertThat(saved.getStatus()).isEqualTo(NotificationStatus.FAILED);
-        assertThat(saved.getErrorMessage()).isEqualTo("SMTP down");
-        assertThat(saved.getType()).isEqualTo(NotificationType.PAYMENT_FAILED);
+        assertThatThrownBy(() -> service.getNotification(9L)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.getAllNotifications(0, 10, "recipient"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo("INVALID_SORT_FIELD");
     }
 }

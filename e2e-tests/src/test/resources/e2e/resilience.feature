@@ -1,117 +1,148 @@
-Feature: Gateway resilience patterns
-  Exercises the gateway's circuit breaker/fallback and rate limiter against
-  the live stack.
+Feature: Resilience - what happens when Kafka or a service is down
+  These scenarios stop real containers of the running stack and prove the design's promises:
 
-  Both of these were actually NON-FUNCTIONAL for 4 of 5 routes until a real
-  bug was found and fixed while building this feature: infrastructure/
-  api-gateway's GatewayConfiguration used to define a second, programmatic
-  RouteLocator bean whose routes for order/customer/inventory/payment-service
-  shared the exact same route IDs as the properly-filtered ones in
-  application.yml but had NO filters attached at all (no CircuitBreaker, no
-  RateLimitingFilter). Spring Cloud Gateway does not deduplicate routes by ID
-  across different RouteLocator sources, and the filter-less duplicates were
-  winning the match for those 4 routes - silently bypassing the circuit
-  breaker and rate limiter while requests still worked normally (each
-  backend independently validates its own JWT regardless of what the gateway
-  does, so a missing/bad token still correctly 401'd and masked the gap).
-  Confirmed via /actuator/circuitbreakers (bufferedCalls stuck at 0 for every
-  route except auth-service) and redis-cli MONITOR (rate limit key never
-  incremented past 1 under load) before the fix; both now work correctly -
-  see GatewayConfiguration.java's history for the full writeup.
+  * Orders are ACCEPTED while Kafka is down, and complete by themselves when it comes back: the order and its
+    event are written to the database in one transaction (the outbox); the relay delivers the event when the
+    broker returns. Nothing is lost, nothing is duplicated.
+  * A late cancellation is safe: an order cancelled while its saga events are stuck in the outbox ends up fully
+    compensated once everything flows again.
+  * A dependency outage is a clean 503 problem with a stable error code - never a 500, never a fabricated success
+    body - and does not leave a half-created order behind.
 
-  Separately: RateLimitingFilter's own read-then-write (GET then a separate
-  INCR) was also fixed to a single atomic INCR, since the old version could
-  under-count a genuine burst of concurrent requests arriving between the
-  read and the write.
-
-  Bulkhead is NOT covered here - it isn't implemented anywhere in this app
-  (no Bulkhead annotation, no bulkhead config, anywhere in the repo).
-  order-service's OWN circuit breaker/retry (a direct AOP proxy around
-  createOrder's method body, separate from the gateway's) is also not
-  covered - it can only be tripped by making Kafka itself fail, and Kafka is
-  a shared dependency for 4 services with a documented history of flaky
-  restarts in this project, too large a blast radius for this feature.
-
-  Scenario order matters: the circuit-breaker scenario runs FIRST, with the
-  rate-limit scenario's heavy traffic LAST - the gateway's rate limiter
-  counter is keyed only by client IP and shared across every route, so
-  exhausting it early would make the circuit-breaker scenario's own payment
-  calls get 429'd before they ever reach the backend.
+  Needs `docker` on PATH (see DockerControl). Each scenario restarts whatever it stopped, even if it fails.
 
   Background:
     * url gatewayUrl
     * def showcase = Java.type('e2e.DataShowcase')
-    Given path '/api/auth/login'
-    And request { username: '#(testUsername)', password: '#(testPassword)' }
+    * def docker = Java.type('e2e.DockerControl')
+    * eval docker.clearRateLimitKeys()
+    * def login = call read('classpath:e2e/auth.feature') { username: '#(testUsername)', password: '#(testPassword)' }
+    * def token = login.accessToken
+    * configure headers = { Authorization: '#("Bearer " + token)' }
+
+  Scenario: Orders are accepted while Kafka is down and complete after it comes back (transactional outbox)
+
+    * configure afterScenario = function(){ docker.start('kafka') }
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 30.00, stock: 10 }
+
+    * showcase.event('Stopping Kafka: the broker is genuinely gone, not mocked.')
+    * eval docker.stop('kafka')
+
+    # The API still answers: the order and its event are committed to order_db; only the relay's delivery waits.
+    * def placed = call read('classpath:e2e/helpers/place-order.feature') { token: '#(token)', customerId: '#(customer.customerId)', items: [{ productId: '#(product.sku)', quantity: 2 }] }
+    * def orderId = placed.orderId
+    * match placed.order.status == 'PENDING'
+    * showcase.show('The event waits in order-service\'s outbox while Kafka is down', 'order_db', "SELECT event_type, status, attempts FROM outbox_event WHERE aggregate_id='" + orderId + "'")
+
+    # Nothing can happen while the broker is down...
+    * eval java.lang.Thread.sleep(4000)
+    Given path '/api/v1/orders', orderId
+    When method get
+    Then status 200
+    And match response.status == 'PENDING'
+
+    * showcase.event('Starting Kafka again.')
+    * eval docker.start('kafka')
+    * assert docker.waitUntilHealthy('kafka', 120)
+
+    # ... and once it is back the saga simply runs: nothing was lost.
+    * def settled = call read('classpath:e2e/helpers/await-order.feature') { token: '#(token)', orderId: '#(orderId)', expected: 'COMPLETED', attempts: 150 }
+    Given path '/api/v1/payments/order', orderId
+    When method get
+    Then status 200
+    And match response.status == 'CAPTURED'
+    And match response.amount == 60.00
+    * showcase.show('The event was published once the broker returned', 'order_db', "SELECT event_type, status, attempts FROM outbox_event WHERE aggregate_id='" + orderId + "' ORDER BY id")
+
+  Scenario: An order cancelled while its events are still stuck ends fully compensated (late-event safety net)
+
+    * configure afterScenario = function(){ docker.start('kafka') }
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 15.00, stock: 6 }
+    * eval docker.stop('kafka')
+
+    * def placed = call read('classpath:e2e/helpers/place-order.feature') { token: '#(token)', customerId: '#(customer.customerId)', items: [{ productId: '#(product.sku)', quantity: 2 }] }
+    * def orderId = placed.orderId
+
+    # Cancel while nothing has left the building yet: the order service writes order.cancelled to the outbox too.
+    Given path '/api/v1/orders', orderId, 'cancel'
+    And param reason = 'Karate: cancelled while Kafka is down'
     When method post
     Then status 200
-    * def authToken = response.token
-    * configure headers = { Authorization: '#("Bearer " + authToken)' }
+    And match response.status == 'CANCELLED'
 
-  Scenario: Gateway circuit breaker opens when payment-service is unreachable, then recovers
-    * def docker = Java.type('e2e.DockerControl')
-    # Guaranteed to run even if an assertion below fails.
-    * configure afterScenario = function(){ docker.start('payment-service') }
-    * showcase.event('Stopping payment-service to force real connection failures through the gateway - not a mock, a genuinely unreachable backend.')
-    * docker.stop('payment-service')
+    * eval docker.start('kafka')
+    * assert docker.waitUntilHealthy('kafka', 120)
 
-    # A fresh, unique orderId - "one payment per order" is now an atomic DB
-    # constraint (V7__Enforce_One_Payment_Per_Order.sql), and order 1
-    # already has a seeded payment from the start, so a hardcoded orderId
-    # would make the recovery check below get a permanent 400
-    # PAYMENT_ALREADY_EXISTS instead of ever reaching 201.
-    * def orderId = Java.type('java.lang.System').currentTimeMillis()
+    # Order created and cancelled now race through the services. Whatever order they are handled in, the end state is
+    # the same: order CANCELLED, stock back at 6, and nothing left charged.
+    * configure retry = { count: 90, interval: 1000 }
+    Given path '/api/v1/inventory', product.inventoryId
+    And retry until response.quantity == 6
+    When method get
+    Then status 200
 
-    # minimumNumberOfCalls=5 / slidingWindowSize=10 / failureRateThreshold=50%
-    # (see application.yml's resilience4j.circuitbreaker.configs.default) -
-    # a handful of failed calls is enough to open it; each failing call
-    # takes a few seconds on its own (real connection attempt/timeout) until
-    # it does.
-    * configure retry = { count: 10, interval: 1000 }
-    Given path '/api/payments'
-    And request { orderId: '#(orderId)', amount: 10.00 }
-    And retry until responseStatus == 503 && response.circuitBreakerStatus == 'OPEN'
+    Given path '/api/v1/orders', orderId
+    When method get
+    Then status 200
+    And match response.status == 'CANCELLED'
+
+    # payment: either never charged, or charged and then refunded - never left CAPTURED
+    * configure retry = { count: 60, interval: 1000 }
+    Given path '/api/v1/payments/order', orderId
+    And retry until responseStatus == 404 || response.status == 'REFUNDED' || response.status == 'FAILED'
+    When method get
+    * assert responseStatus == 404 || response.status == 'REFUNDED' || response.status == 'FAILED'
+    * showcase.event('Compensated: order CANCELLED, stock restored to 6, payment ' + (responseStatus == 404 ? 'never taken' : response.status) + '.')
+
+  Scenario: A dependency outage is a clean 503 problem and leaves no order behind
+
+    * configure afterScenario = function(){ docker.start('product-service') }
+    * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
+    * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 10.00, stock: 5 }
+    * eval docker.stop('product-service')
+
+    # order-service cannot price the order without the catalogue: 503, with a stable code, and retryable
+    Given path '/api/v1/orders'
+    And request { customerId: '#(customer.customerId)', items: [{ productId: '#(product.sku)', quantity: 1 }] }
     When method post
     Then status 503
-    And match response.circuitBreakerStatus == 'OPEN'
-    And match response.error == 'Service Unavailable'
-    * showcase.event('Circuit breaker OPEN after enough failed calls - the gateway is now fast-failing every request instead of waiting on a dead backend each time.')
-    * showcase.show('Payments for order ' + orderId + ' while breaker is OPEN - expect zero rows (payment-service never reached)', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
+    And match response.errorCode == 'DEPENDENCY_UNAVAILABLE'
+    And match responseHeaders['Content-Type'][0] contains 'application/problem+json'
 
-    # Recovery: restart the container, wait past waitDurationInOpenState
-    # (30s), and confirm the breaker lets traffic through again
-    # (half-open -> closed) once it's actually reachable.
-    * docker.start('payment-service')
-    * assert docker.waitUntilHealthy('payment-service', 60)
-    * showcase.event('payment-service back up and healthy - the breaker will probe it on the next call (half-open) and close again once that succeeds.')
+    * eval docker.start('product-service')
+    * assert docker.waitUntilHealthy('product-service', 120)
+    * def after = call read('classpath:e2e/helpers/count-orders.feature') { token: '#(token)', customerId: '#(customer.customerId)' }
+    * match after.total == 0
 
-    * configure retry = { count: 20, interval: 3000 }
-    Given path '/api/payments'
-    And request { orderId: '#(orderId)', amount: 10.00 }
+    # once the dependency is back the very same request works
+    * configure retry = { count: 30, interval: 1000 }
+    Given path '/api/v1/orders'
+    And request { customerId: '#(customer.customerId)', items: [{ productId: '#(product.sku)', quantity: 1 }] }
     And retry until responseStatus == 201
     When method post
     Then status 201
-    And match response.status == 'PROCESSED'
-    * showcase.event('Breaker transitioned OPEN -> HALF_OPEN -> CLOSED - real traffic flows normally again now that the backend is actually reachable.')
-    * showcase.show('Payment for order ' + orderId + ' after recovery', 'payment_db', 'SELECT id, order_id, amount, status FROM payments WHERE order_id=' + orderId)
 
-  Scenario: Gateway rate limiter returns 429 once a route's per-minute budget is exceeded
-    # payment's route has the lowest budget (50/min - see
-    # infrastructure/api-gateway/src/main/resources/application.yml) and the
-    # counter is a sliding 60s TTL that renews on every hit, so firing enough
-    # requests in a tight loop reliably exceeds it well within 60 seconds.
-    #
-    # This deliberately leaves the shared per-client-IP counter exhausted
-    # for up to 60s afterward (every route shares one counter - see
-    # RateLimitingFilter) - clean it up even if an assertion below fails,
-    # so a different feature run within that window doesn't get a false
-    # 429 that has nothing to do with whatever IT's testing.
-    * def docker = Java.type('e2e.DockerControl')
+  Scenario: The gateway answers 503 (problem+json) when a whole service is down
+
+    * configure afterScenario = function(){ docker.start('customer-service') }
+    * eval docker.stop('customer-service')
+    * configure retry = { count: 20, interval: 1500 }
+    Given path '/api/v1/customers/1'
+    And retry until responseStatus == 503
+    When method get
+    Then status 503
+    * eval docker.start('customer-service')
+    * assert docker.waitUntilHealthy('customer-service', 120)
+
+  # Keep this scenario LAST: the limiter counter is per client IP and shared by every route, so exhausting it early
+  # would make the scenarios above get 429s that have nothing to do with what they test.
+  Scenario: The gateway answers 429 once a route's per-minute budget is exceeded
+
     * configure afterScenario = function(){ docker.clearRateLimitKeys() }
-    * showcase.event('Firing 60 rapid requests at the payment route (50/min budget) - this state lives in Redis, not Postgres, so there is no SQL table to show here.')
-
-    * def probe = function(){ return karate.call('classpath:e2e/rate-limit-probe.feature', { gatewayUrl: gatewayUrl, authToken: authToken }) }
+    * showcase.event('Firing 60 rapid requests at the payment route (50/min budget); the counter lives in Redis.')
+    * def probe = function(){ return karate.call('classpath:e2e/rate-limit-probe.feature', { gatewayUrl: gatewayUrl, authToken: token }) }
     * def statuses = []
     * eval for (var i = 0; i < 60; i++) { statuses.push(probe().responseStatus) }
     * assert statuses.includes(429)
-    * showcase.event('Budget exceeded - at least one request got 429 before the loop finished, confirming the atomic INCR-based limiter actually counts every hit.')

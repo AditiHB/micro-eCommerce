@@ -2,13 +2,17 @@ package com.ecommerce.common.constants;
 
 public class ApiConstants {
 
-    // API Endpoints
-    public static final String API_PREFIX = "/api";
+    // API Endpoints. Every endpoint lives under the versioned prefix; the gateway still accepts the old
+    // unversioned /api/** paths and rewrites them here (with a Deprecation header) until clients have moved.
+    public static final String API_PREFIX = "/api/v1";
+    public static final String LEGACY_API_PREFIX = "/api";
     public static final String CUSTOMERS_ENDPOINT = "/customers";
     public static final String ORDERS_ENDPOINT = "/orders";
     public static final String INVENTORY_ENDPOINT = "/inventory";
     public static final String PAYMENTS_ENDPOINT = "/payments";
     public static final String NOTIFICATIONS_ENDPOINT = "/notifications";
+    public static final String PRODUCTS_ENDPOINT = "/products";
+    public static final String DEAD_LETTERS_ENDPOINT = "/dead-letters";
 
     // Kafka Topics
     public static final String KAFKA_TOPIC_ORDER_CREATED = "order-created";

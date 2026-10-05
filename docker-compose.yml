@@ -5,27 +5,61 @@
 # k8s/ for a cluster-based local run); there is no separate "production"
 # compose file to keep in sync.
 #
-#   1) Entire core stack, H2 in-memory DB (fastest to start, default):
-#        docker compose up -d
+# FIRST RUN: no credential exists anywhere in this repository. Generate your own:
+#        scripts/gen-env.sh            (creates a git-ignored .env of random secrets)
 #
-#   2) Only H2 (no extra flags needed - H2 is already the default above)
+#   1) Entire core stack (PostgreSQL - the only database engine - and a single-node KRaft Kafka):
+#        docker compose up -d --build
 #
-#   3) Real PostgreSQL instead of H2:
-#        docker compose --profile postgres --env-file .env.postgres up -d
+#   2) A replicated Kafka cluster (3 KRaft brokers, replication factor 3, min.insync.replicas 2):
+#        docker compose -f docker-compose.yml -f docker-compose.kafka-ha.yml up -d --build
+#      (see docs/RESILIENCE.md)
 #
-#   4) HTTPS locally via nginx + self-signed cert (see SETUP_AND_DEPLOYMENT.md
-#      for generating the cert first):
-#        docker compose --profile https up -d
+#   3) HTTPS locally via nginx. Certificates are issued by the internal smallstep CA:
+#        docker compose -f docker-compose.yml -f docker-compose.pki.yml --profile https up -d
+#      (see docs/SMALLSTEP_PKI.md)
 #
-#   5) Full stack - Postgres + HTTPS + observability (ELK/Prometheus/Grafana):
-#        docker compose --profile postgres --profile https --profile observability --env-file .env.postgres up -d
+#   4) Secrets served by HashiCorp Vault instead of the environment:
+#        docker compose -f docker-compose.yml -f docker-compose.vault.yml up -d
+#      (see docs/VAULT_SECRETS.md)
 #
-#   6) Compact stack for low-memory machines, no logs/ELK/metrics (same as #1 -
-#      observability is opt-in, never started unless you pass --profile observability):
-#        docker compose up -d
+#   5) Observability (ELK/Prometheus/Grafana), on top of any of the above:
+#        add  --profile observability
 #
+# Identity: Keycloak (http://localhost:8180) issues every token. Services hold no passwords and
+# share no signing secret - they verify RS256 tokens against Keycloak's published keys.
+#
+# Every published port is bound to 127.0.0.1: nothing here is reachable from your LAN.
 # See SETUP_AND_DEPLOYMENT.md for the full matrix of scenarios.
 # ===============================================================================
+
+# --- shared environment blocks ---------------------------------------------------------------
+x-platform-env: &platform-env
+  SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888/"
+  # The registry requires HTTP Basic credentials (see infrastructure/discovery-server).
+  EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?run scripts/gen-env.sh}@discovery-server:8761/eureka/"
+  # How tokens are verified. The issuer is the PUBLIC url Keycloak stamps into tokens; the JWKS is
+  # fetched over the internal network.
+  SECURITY_JWK_SET_URI: "http://keycloak:8080/realms/ecommerce/protocol/openid-connect/certs"
+  SECURITY_ISSUER: "http://localhost:8180/realms/ecommerce"
+  SECURITY_AUDIENCE: "ecommerce-api"
+
+x-business-env: &business-env
+  <<: *platform-env
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}"
+  # Topic durability. 1/1 for the single-node dev broker; docker-compose.kafka-ha.yml sets 3/2.
+  KAFKA_EVENT_REPLICATION_FACTOR: "${KAFKA_REPLICATION_FACTOR:-1}"
+  KAFKA_EVENT_MIN_INSYNC_REPLICAS: "${KAFKA_MIN_INSYNC_REPLICAS:-1}"
+  # PostgreSQL is the only database engine; each service has its own database and owner role below.
+  DB_HOST: "postgres"
+  SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:-}"
+
+# Services that cache reference data (customer, product) also get the shared Redis.
+x-cached-env: &cached-env
+  <<: *business-env
+  REDIS_HOST: "redis"
+  REDIS_PASSWORD: "${REDIS_PASSWORD:?run scripts/gen-env.sh}"
+
 services:
   # ---------------------------------------------------------------------------
   # Core stack (always runs with a plain `docker compose up -d`). Sized for a
@@ -35,36 +69,40 @@ services:
   # only auto-sizes default heap as a fraction of the container limit - still
   # leaving it free to grow metaspace/off-heap into the rest, right up to the
   # point the kernel OOM-kills the container instead of the JVM GC'ing cleanly.
-  # Total core budget: ~3.8GB. Uses in-memory H2 by default; set SPRING_PROFILES_ACTIVE
-  # and DB_HOST (e.g. via .env.postgres and --profile postgres below) to switch to Postgres.
   # ---------------------------------------------------------------------------
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.3.2
-    container_name: zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-      KAFKA_HEAP_OPTS: "-Xms64m -Xmx96m"
-    ports:
-      - "2181:2181"
-    mem_limit: 192m
-    mem_reservation: 96m
-
+  # Single-node KRaft Kafka (no ZooKeeper). Every topic is declared by the services themselves at startup
+  # (KafkaAdmin, generated from the @EventSchema catalog), so broker auto-creation is OFF: a typo in a topic name
+  # fails loudly instead of silently creating a new, un-replicated topic.
   kafka:
-    image: confluentinc/cp-kafka:7.3.2
+    image: apache/kafka:3.9.0
     container_name: kafka
-    depends_on:
-      - zookeeper
     ports:
-      - "9092:9092"
+      - "127.0.0.1:9092:9092"
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      CLUSTER_ID: "ZWNvbW1lcmNlLWRldi1rcmFmdA"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:29092,CONTROLLER://:9093,PLAINTEXT_HOST://:9092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
       KAFKA_HEAP_OPTS: "-Xms192m -Xmx320m"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
     mem_limit: 640m
     mem_reservation: 320m
 
@@ -72,10 +110,79 @@ services:
     image: redis:7-alpine
     container_name: redis
     ports:
-      - "6379:6379"
-    command: redis-server --maxmemory 32mb --maxmemory-policy allkeys-lru
+      - "127.0.0.1:6379:6379"
+    # Authentication is mandatory: the cache holds customer data and the gateway's rate-limit counters.
+    command: >
+      redis-server --maxmemory 32mb --maxmemory-policy allkeys-lru
+      --requirepass "${REDIS_PASSWORD:?run scripts/gen-env.sh}"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?run scripts/gen-env.sh}"
     mem_limit: 64m
     mem_reservation: 32m
+
+  # ---------------------------------------------------------------------------
+  # Identity provider. Issues every access token; services only verify them.
+  # `start-dev` keeps local startup fast and stores its data in a named volume. A real deployment runs
+  # `start --optimized` against Postgres behind TLS (see k8s/overlays/secure).
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4
+    container_name: keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: "${KC_BOOTSTRAP_ADMIN_USERNAME:?run scripts/gen-env.sh}"
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "${KC_BOOTSTRAP_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
+      # Tokens carry the public URL as issuer; the backchannel (JWKS, token endpoint) stays reachable
+      # by its internal name, which is why services configure the two separately.
+      KC_HOSTNAME: "http://localhost:8180"
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      JAVA_OPTS_KC_HEAP: "-Xms128m -Xmx512m"
+      # Substituted into realm-ecommerce.json at import time; the realm file itself holds no secret.
+      NOTIFICATION_CLIENT_SECRET: "${NOTIFICATION_CLIENT_SECRET:?run scripts/gen-env.sh}"
+    volumes:
+      - ./infrastructure/keycloak/realm-ecommerce.json:/opt/keycloak/data/import/realm-ecommerce.json:ro
+      - keycloak-data:/opt/keycloak/data
+    ports:
+      - "127.0.0.1:8180:8080"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    mem_limit: 768m
+    mem_reservation: 512m
+
+  # One-shot: development-only identities (a password-grant client for scripts/Karate, one user per
+  # role). Never part of the realm file, so they cannot leak into a real deployment.
+  keycloak-seed:
+    image: quay.io/keycloak/keycloak:26.4
+    container_name: keycloak-seed
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "/seed-dev.sh"]
+    environment:
+      KEYCLOAK_URL: "http://keycloak:8080"
+      KC_BOOTSTRAP_ADMIN_USERNAME: "${KC_BOOTSTRAP_ADMIN_USERNAME:?run scripts/gen-env.sh}"
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "${KC_BOOTSTRAP_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
+      E2E_CLIENT_SECRET: "${E2E_CLIENT_SECRET:?run scripts/gen-env.sh}"
+      E2E_ADMIN_PASSWORD: "${E2E_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
+      E2E_MANAGER_PASSWORD: "${E2E_MANAGER_PASSWORD:?run scripts/gen-env.sh}"
+      E2E_USER_PASSWORD: "${E2E_USER_PASSWORD:?run scripts/gen-env.sh}"
+    volumes:
+      - ./infrastructure/keycloak/seed-dev.sh:/seed-dev.sh:ro
+    restart: "no"
+    mem_limit: 256m
 
   config-server:
     build:
@@ -83,12 +190,13 @@ services:
       dockerfile: Dockerfile.config-server
     container_name: config-server
     ports:
-      - "8888:8888"
+      - "127.0.0.1:8888:8888"
     volumes:
       - ./config-repo:/config-repo
     environment:
-      - SPRING_CLOUD_CONFIG_SERVER_GIT_URI=file:///config-repo
-      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx160m
+      SPRING_CLOUD_CONFIG_SERVER_GIT_URI: "file:///config-repo"
+      CONFIG_SERVER_PASSWORD: "${CONFIG_SERVER_PASSWORD:?run scripts/gen-env.sh}"
+      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx160m"
     mem_limit: 320m
     mem_reservation: 160m
 
@@ -98,12 +206,14 @@ services:
       dockerfile: Dockerfile.discovery-server
     container_name: discovery-server
     ports:
-      - "8761:8761"
+      - "127.0.0.1:8761:8761"
     depends_on:
       - config-server
     environment:
-      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
-      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx160m
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888/"
+      EUREKA_USERNAME: "${EUREKA_USERNAME:-eureka}"
+      EUREKA_PASSWORD: "${EUREKA_PASSWORD:?run scripts/gen-env.sh}"
+      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx160m"
     mem_limit: 384m
     mem_reservation: 192m
 
@@ -113,20 +223,17 @@ services:
       dockerfile: Dockerfile.api-gateway
     container_name: api-gateway
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       - config-server
       - discovery-server
       - redis
     environment:
-      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
-      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
-      - REDIS_HOST=redis
-      # Local-dev-only default so this compose file boots without extra setup.
-      # Override with a real secret via `JWT_SECRET=... docker compose up`, or
-      # export it in your shell / put it in a `.env` file before running.
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
-      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+      <<: *platform-env
+      REDIS_HOST: "redis"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?run scripts/gen-env.sh}"
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-http://localhost:3000}"
+      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
     mem_limit: 448m
     mem_reservation: 224m
 
@@ -136,23 +243,23 @@ services:
       dockerfile: Dockerfile.customer-service
     container_name: customer-service
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     depends_on:
-      - config-server
-      - discovery-server
-      - kafka
-      - redis
+      config-server:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
-      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
-      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      - REDIS_HOST=redis
-      # See api-gateway's JWT_SECRET comment above - same local-dev-only default.
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
-      # Blank by default (H2). Set via .env.postgres + `--profile postgres` to switch to Postgres.
-      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
-      - DB_HOST=${DB_HOST:-}
-      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+      <<: *cached-env
+      DB_USERNAME: "customer_owner"
+      DB_PASSWORD: "${CUSTOMER_DB_PASSWORD:?run scripts/gen-env.sh}"
+      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
     mem_limit: 512m
     mem_reservation: 256m
 
@@ -166,20 +273,19 @@ services:
     expose:
       - "8082"
     depends_on:
-      - config-server
-      - discovery-server
-      - kafka
-      - redis
+      config-server:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
-      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
-      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
-      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      - REDIS_HOST=redis
-      # See api-gateway's JWT_SECRET comment below - same local-dev-only default.
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
-      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
-      - DB_HOST=${DB_HOST:-}
-      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+      <<: *business-env
+      DB_USERNAME: "inventory_owner"
+      DB_PASSWORD: "${INVENTORY_DB_PASSWORD:?run scripts/gen-env.sh}"
+      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
     mem_limit: 512m
     mem_reservation: 256m
 
@@ -189,21 +295,23 @@ services:
       dockerfile: Dockerfile.order-service
     container_name: order-service
     ports:
-      - "8083:8083"
+      - "127.0.0.1:8083:8083"
     depends_on:
-      - config-server
-      - discovery-server
-      - kafka
-      - redis
+      config-server:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
-      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
-      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
-      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      - REDIS_HOST=redis
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
-      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
-      - DB_HOST=${DB_HOST:-}
-      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+      <<: *business-env
+      PRODUCT_SERVICE_URL: "http://product-service:8085"
+      CUSTOMER_SERVICE_URL: "http://customer-service:8081"
+      DB_USERNAME: "order_owner"
+      DB_PASSWORD: "${ORDER_DB_PASSWORD:?run scripts/gen-env.sh}"
+      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
     mem_limit: 512m
     mem_reservation: 256m
 
@@ -213,21 +321,47 @@ services:
       dockerfile: Dockerfile.payment-service
     container_name: payment-service
     ports:
-      - "8084:8084"
+      - "127.0.0.1:8084:8084"
     depends_on:
-      - config-server
-      - discovery-server
-      - kafka
-      - redis
+      config-server:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
-      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
-      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
-      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      - REDIS_HOST=redis
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
-      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
-      - DB_HOST=${DB_HOST:-}
-      - JAVA_TOOL_OPTIONS=-Xms96m -Xmx192m
+      <<: *business-env
+      DB_USERNAME: "payment_owner"
+      DB_PASSWORD: "${PAYMENT_DB_PASSWORD:?run scripts/gen-env.sh}"
+      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
+    mem_limit: 512m
+    mem_reservation: 256m
+
+  product-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.product-service
+    container_name: product-service
+    ports:
+      - "127.0.0.1:8085:8085"
+    depends_on:
+      config-server:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *cached-env
+      DB_USERNAME: "product_owner"
+      DB_PASSWORD: "${PRODUCT_DB_PASSWORD:?run scripts/gen-env.sh}"
+      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
     mem_limit: 512m
     mem_reservation: 256m
 
@@ -236,53 +370,63 @@ services:
       context: .
       dockerfile: Dockerfile.notification-service
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     depends_on:
-      - config-server
-      - discovery-server
-      - kafka
-      - customer-service
-      - order-service
+      config-server:
+        condition: service_started
+      discovery-server:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      customer-service:
+        condition: service_started
     environment:
-      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
-      - EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
-      - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-      - CUSTOMER_SERVICE_URL=http://customer-service:8081
-      - ORDER_SERVICE_URL=http://order-service:8083
-      - NOTIFICATION_CHANNEL=log
-      - JWT_SECRET=${JWT_SECRET:-local-dev-only-secret-key-for-development-use-only-do-not-use-in-production}
-      - SPRING_PROFILES_ACTIVE=${SPRING_PROFILES_ACTIVE:-}
-      - DB_HOST=${DB_HOST:-}
+      <<: *business-env
+      CUSTOMER_SERVICE_URL: "http://customer-service:8081"
+      NOTIFICATION_CHANNEL: "log"
+      DB_USERNAME: "notification_owner"
+      DB_PASSWORD: "${NOTIFICATION_DB_PASSWORD:?run scripts/gen-env.sh}"
+      # Machine identity (OAuth2 client credentials) for its one outbound call, to customer-service.
+      KEYCLOAK_TOKEN_URI: "http://keycloak:8080/realms/ecommerce/protocol/openid-connect/token"
+      NOTIFICATION_CLIENT_ID: "notification-service"
+      NOTIFICATION_CLIENT_SECRET: "${NOTIFICATION_CLIENT_SECRET:?run scripts/gen-env.sh}"
       # Slightly more heap than its sibling services: it runs 4 Kafka consumer
       # groups (order/payment/inventory DLQ handlers + the main listener)
       # concurrently in one JVM.
-      - JAVA_TOOL_OPTIONS=-Xms112m -Xmx224m
+      JAVA_TOOL_OPTIONS: "-Xms112m -Xmx224m"
     mem_limit: 640m
     mem_reservation: 320m
 
   # ---------------------------------------------------------------------------
-  # Postgres (opt-in). Replaces each service's default in-memory H2 with a real
-  # database - one schema per service (matching each application-postgres.yml),
-  # reachable at localhost:5432 as ecommerce_user/ecommerce_password. Flyway
-  # runs automatically against it on service startup; there is no separate
-  # manual "migrate" command.
-  #   docker compose --profile postgres --env-file .env.postgres up -d
+  # PostgreSQL - the only database engine. One database and one owner role per service (see
+  # infrastructure/postgres/init-multiple-postgres-databases.sh), so a compromised service can only touch its own
+  # data. Flyway runs automatically on service startup; there is no separate manual "migrate" command. Data
+  # survives restarts in the postgres-data volume.
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     container_name: postgres
-    profiles: ["postgres"]
     environment:
-      POSTGRES_USER: ecommerce_user
-      POSTGRES_PASSWORD: ecommerce_password
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "${POSTGRES_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
       POSTGRES_MULTIPLE_DATABASES: customer_db,inventory_db,order_db,payment_db,notification_db,product_db
+      CUSTOMER_DB_PASSWORD: "${CUSTOMER_DB_PASSWORD:?run scripts/gen-env.sh}"
+      INVENTORY_DB_PASSWORD: "${INVENTORY_DB_PASSWORD:?run scripts/gen-env.sh}"
+      ORDER_DB_PASSWORD: "${ORDER_DB_PASSWORD:?run scripts/gen-env.sh}"
+      PAYMENT_DB_PASSWORD: "${PAYMENT_DB_PASSWORD:?run scripts/gen-env.sh}"
+      NOTIFICATION_DB_PASSWORD: "${NOTIFICATION_DB_PASSWORD:?run scripts/gen-env.sh}"
+      PRODUCT_DB_PASSWORD: "${PRODUCT_DB_PASSWORD:?run scripts/gen-env.sh}"
+      # Only used by docker-compose.vault.yml: the login Vault uses to mint short-lived DB roles.
+      VAULT_DB_ADMIN_PASSWORD: "${VAULT_DB_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
-      - ./infrastructure/postgres/init-multiple-postgres-databases.sh:/docker-entrypoint-initdb.d/init-multiple-postgres-databases.sh
+      - ./infrastructure/postgres/init-multiple-postgres-databases.sh:/docker-entrypoint-initdb.d/init-multiple-postgres-databases.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ecommerce_user"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -290,10 +434,10 @@ services:
     mem_reservation: 160m
 
   # ---------------------------------------------------------------------------
-  # Nginx HTTPS termination (opt-in). Terminates TLS with a self-signed local
-  # cert and forwards /api/ to the gateway - see SETUP_AND_DEPLOYMENT.md to
-  # generate the certs first (infrastructure/scripts/setup-certificates.sh).
-  #   docker compose --profile https up -d
+  # Nginx HTTPS termination (opt-in). Forwards /api/ to the gateway. It needs a
+  # certificate and key in infrastructure/nginx/certs/ - none are committed. The
+  # supported way to get them is the smallstep CA overlay:
+  #   docker compose -f docker-compose.yml -f docker-compose.pki.yml --profile https up -d
   # ---------------------------------------------------------------------------
   nginx:
     build:
@@ -302,8 +446,8 @@ services:
     container_name: nginx
     profiles: ["https"]
     ports:
-      - "80:80"
-      - "443:443"
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:443:443"
     volumes:
       - ./infrastructure/nginx/certs:/etc/nginx/certs:ro
     depends_on:
@@ -337,7 +481,7 @@ services:
       - xpack.security.enabled=false
       - "ES_JAVA_OPTS=-Xms384m -Xmx384m"
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
     mem_limit: 1024m
     mem_reservation: 512m
 
@@ -348,7 +492,7 @@ services:
     volumes:
       - ./infrastructure/logstash/pipeline/logstash.conf:/usr/share/logstash/pipeline/logstash.conf
     ports:
-      - "50000:50000"
+      - "127.0.0.1:50000:50000"
     environment:
       - "LS_JAVA_OPTS=-Xms192m -Xmx256m"
     depends_on:
@@ -361,7 +505,7 @@ services:
     container_name: kibana
     profiles: ["observability"]
     ports:
-      - "5601:5601"
+      - "127.0.0.1:5601:5601"
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     depends_on:
@@ -375,11 +519,13 @@ services:
     container_name: prometheus
     profiles: ["observability"]
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./monitoring/alert-rules.yml:/etc/prometheus/alert-rules.yml
       - prometheus-data:/prometheus
+    secrets:
+      - eureka_password
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -399,7 +545,7 @@ services:
     container_name: grafana
     profiles: ["observability"]
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
       - ./monitoring/grafana-dashboards-provisioning.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
@@ -411,7 +557,7 @@ services:
       - grafana-data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?run scripts/gen-env.sh}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_INSTALL_PLUGINS=grafana-piechart-panel
     depends_on:
@@ -426,7 +572,7 @@ services:
     container_name: alertmanager
     profiles: ["observability"]
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
       - ./monitoring/alertmanager-templates.tmpl:/etc/alertmanager/templates/notifications.tmpl
@@ -445,7 +591,7 @@ services:
     container_name: node-exporter
     profiles: ["observability"]
     ports:
-      - "9100:9100"
+      - "127.0.0.1:9100:9100"
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -465,7 +611,7 @@ services:
     container_name: elasticsearch-exporter
     profiles: ["observability"]
     ports:
-      - "9114:9114"
+      - "127.0.0.1:9114:9114"
     environment:
       - ELASTIC_URL=http://elasticsearch:9200
     command:
@@ -483,7 +629,7 @@ services:
     container_name: loki
     profiles: ["observability"]
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml
       - loki-data:/loki
@@ -493,8 +639,16 @@ services:
     mem_limit: 128m
     mem_reservation: 64m
 
+# Prometheus reads the Eureka password from a file, never from its config.
+secrets:
+  eureka_password:
+    environment: EUREKA_PASSWORD
+
 volumes:
+  kafka-data:
   postgres-data:
+    driver: local
+  keycloak-data:
     driver: local
   prometheus-data:
     driver: local

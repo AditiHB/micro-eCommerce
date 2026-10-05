@@ -9,11 +9,13 @@ import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 
 /**
- * A record of a customer notification sent in reaction to a domain event
- * (order created, payment succeeded/failed).
+ * A record of a customer notification sent in reaction to a domain event (order created, payment
+ * succeeded/failed). It is written PENDING in the same transaction as the event that caused it, and delivered
+ * afterwards by the dispatcher with retries - so a mail-server outage neither loses it nor blocks the event stream.
  */
 @Entity
 @Table(name = "notifications")
@@ -61,6 +63,14 @@ public class Notification {
 
     @Column(length = 500)
     private String errorMessage;
+
+    /** Delivery attempts made so far; the dispatcher gives up (FAILED) after the configured maximum. */
+    @Column(nullable = false)
+    @Builder.Default
+    private int attempts = 0;
+
+    /** When the dispatcher should next try to send this (PENDING) notification. */
+    private Instant nextAttemptAt;
 
     /**
      * The event that triggered this notification, used for idempotency

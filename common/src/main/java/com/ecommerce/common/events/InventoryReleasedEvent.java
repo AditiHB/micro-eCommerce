@@ -1,29 +1,24 @@
 package com.ecommerce.common.events;
 
-/**
- * Event published when inventory reservation is released (compensating transaction).
- * Triggered when payment fails or order is cancelled.
- */
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+import java.util.List;
+
+/** A reservation was given back to stock (compensation for a cancelled order). */
+@Getter
+@Setter
+@NoArgsConstructor
+@EventSchema(type = "inventory.released", topic = Topics.INVENTORY_RELEASED)
 public class InventoryReleasedEvent extends DomainEvent {
+
     private Long orderId;
-    private String productId;
-    private Integer quantity;
+    private List<LineItem> lines;
 
-    public InventoryReleasedEvent() {
-        super();
-    }
-
-    public InventoryReleasedEvent(Long orderId, String productId, Integer quantity) {
+    public InventoryReleasedEvent(Long orderId, List<LineItem> lines) {
         super(String.valueOf(orderId), "Inventory");
         this.orderId = orderId;
-        this.productId = productId;
-        this.quantity = quantity;
+        this.lines = lines;
     }
-
-    public Long getOrderId() { return orderId; }
-    public void setOrderId(Long orderId) { this.orderId = orderId; }
-    public String getProductId() { return productId; }
-    public void setProductId(String productId) { this.productId = productId; }
-    public Integer getQuantity() { return quantity; }
-    public void setQuantity(Integer quantity) { this.quantity = quantity; }
 }

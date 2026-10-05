@@ -11,6 +11,13 @@
 8. [Testing](#testing)
 9. [Troubleshooting](#troubleshooting)
 
+> **Before anything else - credentials.** No secret is stored in this repository. Run `scripts/gen-env.sh` once; it writes a git-ignored
+> `.env` of freshly generated secrets that Docker Compose (and `scripts/gen-k8s-secrets.sh` for Kubernetes) read. Identity is handled by
+> Keycloak - see [KEYCLOAK_IDENTITY.md](KEYCLOAK_IDENTITY.md) - and two optional overlays add HashiCorp Vault ([VAULT_SECRETS.md](VAULT_SECRETS.md)) and an
+> internal certificate authority ([SMALLSTEP_PKI.md](SMALLSTEP_PKI.md)). Wherever a command below says
+> `--env-file .env.postgres`, use `--env-file .env --env-file .env.postgres`. What changed and what is still open:
+> [SECURITY_HARDENING.md](SECURITY_HARDENING.md).
+
 This project is **local-only**: everything here runs on your own machine, either with Docker Compose (one `docker-compose.yml` at the repo root, switched between scenarios with `--profile` flags) or inside a local Kubernetes cluster (minikube/kind) using the manifests under `k8s/`. There is no separate "production" compose file or environment to maintain.
 
 ---
@@ -602,7 +609,8 @@ kubectl logs -n ecommerce -f deployment/customer-service
 # Just restart service
 
 # PostgreSQL (container started via --profile postgres)
-docker exec -it postgres psql -U ecommerce_user -d order_db
+set -a; . ./.env; set +a
+docker exec -it -e PGPASSWORD="$ORDER_DB_PASSWORD" postgres psql -U order_owner -d order_db
 DROP SCHEMA public CASCADE;
 CREATE SCHEMA public;
 

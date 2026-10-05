@@ -18,7 +18,9 @@ public class ProductDTO {
     private BigDecimal price;
     private String sku;
     private String category;
-    private Integer quantityAvailable;
+    private String currency;
+    /** Version of the entry; also sent as the ETag. */
+    private Long version;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

@@ -16,7 +16,6 @@ import org.springframework.kafka.annotation.EnableKafka;
         "com.ecommerce.common.eventsourcing", 
         "com.ecommerce.common.metrics", 
         "com.ecommerce.common.logging",
-        "com.ecommerce.common.service",
         "com.ecommerce.common.security",
         "com.ecommerce.common.exception"
     },

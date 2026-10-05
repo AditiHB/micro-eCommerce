@@ -1,29 +1,30 @@
 package com.ecommerce.common.events;
 
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
 import java.math.BigDecimal;
 
+/** The order's total was captured by the payment processor. */
+@Getter
+@Setter
+@NoArgsConstructor
+@EventSchema(type = "payment.processed", topic = Topics.PAYMENT_PROCESSED)
 public class PaymentProcessedEvent extends DomainEvent {
+
     private Long paymentId;
     private Long orderId;
+    private Long customerId;
     private BigDecimal amount;
+    private String currency;
 
-    public PaymentProcessedEvent() {
-        super();
-    }
-
-    public PaymentProcessedEvent(Long paymentId, Long orderId, BigDecimal amount) {
-        super(String.valueOf(paymentId), "Payment");
+    public PaymentProcessedEvent(Long paymentId, Long orderId, Long customerId, BigDecimal amount, String currency) {
+        super(String.valueOf(orderId), "Payment");
         this.paymentId = paymentId;
         this.orderId = orderId;
+        this.customerId = customerId;
         this.amount = amount;
+        this.currency = currency;
     }
-
-    public Long getPaymentId() { return paymentId; }
-    public void setPaymentId(Long paymentId) { this.paymentId = paymentId; }
-
-    public Long getOrderId() { return orderId; }
-    public void setOrderId(Long orderId) { this.orderId = orderId; }
-
-    public BigDecimal getAmount() { return amount; }
-    public void setAmount(BigDecimal amount) { this.amount = amount; }
 }

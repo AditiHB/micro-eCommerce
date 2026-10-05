@@ -1,239 +1,180 @@
 package com.ecommerce.productservice;
 
-import com.ecommerce.productservice.config.TestSecurityConfig;
+import com.ecommerce.common.config.CacheConfig;
+import com.ecommerce.common.eventsourcing.EventStoreRepository;
+import com.ecommerce.common.outbox.OutboxRepository;
+import com.ecommerce.common.testsupport.PostgresIntegrationTest;
+import com.ecommerce.common.testsupport.SharedRedis;
 import com.ecommerce.productservice.dto.CreateProductRequest;
 import com.ecommerce.productservice.dto.ProductDTO;
 import com.ecommerce.productservice.dto.UpdateProductRequest;
-import com.ecommerce.productservice.entity.Product;
+import com.ecommerce.productservice.exception.DuplicateSkuException;
 import com.ecommerce.productservice.repository.ProductRepository;
+import com.ecommerce.productservice.service.ProductEventPublisher;
 import com.ecommerce.productservice.service.ProductService;
-import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.http.MediaType;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.TestPropertySource;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.util.AopTestUtils;
 
 import java.math.BigDecimal;
-import java.util.Optional;
+import java.util.List;
 
-import static org.assertj.core.api.Assertions.*;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
-import static org.hamcrest.Matchers.*;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 
+/**
+ * The catalogue against a real PostgreSQL and Redis: catalogue events go through the outbox atomically with the
+ * change, entries are cached per key and evicted by key, and stock is no longer part of a product.
+ */
 @SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Tag("integration")
-@Import(TestSecurityConfig.class)
-@TestPropertySource(properties = {
-        "spring.jpa.hibernate.ddl-auto=create-drop",
-        "spring.kafka.bootstrap-servers=localhost:9092",
-        "kafka.listener.auto-startup=false"
-})
+@PostgresIntegrationTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
+@DisplayName("Product catalogue (PostgreSQL + Redis)")
 class ProductServiceIntegrationTest {
-    @MockBean
-    private KafkaTemplate<String, Object> kafkaTemplate;
+
+    @DynamicPropertySource
+    static void redis(DynamicPropertyRegistry registry) {
+        registry.add("spring.data.redis.host", SharedRedis::host);
+        registry.add("spring.data.redis.port", SharedRedis::port);
+    }
 
     @Autowired
-    private MockMvc mockMvc;
-
+    private ProductService service;
     @Autowired
-    private ProductService productService;
-
+    private ProductRepository repository;
     @Autowired
-    private ProductRepository productRepository;
+    private OutboxRepository outbox;
+    @Autowired
+    private EventStoreRepository eventStore;
+    @Autowired
+    private CacheManager cacheManager;
 
-    @Test
-    @Transactional
-    void testCreateProduct_EndToEnd() throws Exception {
-        CreateProductRequest request = CreateProductRequest.builder()
-                .name("Integration Test Product")
-                .description("Testing integration flow")
-                .price(new BigDecimal("79.99"))
-                .sku("SKU-INT-001")
-                .category("Electronics")
-                .quantityAvailable(50)
-                .build();
+    @SpyBean
+    private ProductEventPublisher publisher;
 
-        String json = "{\"name\":\"Integration Test Product\",\"description\":\"Testing integration flow\",\"price\":79.99,\"sku\":\"SKU-INT-001\",\"category\":\"Electronics\",\"quantityAvailable\":50}";
-        mockMvc.perform(post("/api/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.name", is("Integration Test Product")))
-                .andExpect(jsonPath("$.sku", is("SKU-INT-001")));
+    private Cache cache() {
+        return cacheManager.getCache(CacheConfig.PRODUCTS_CACHE);
+    }
 
-        Optional<Product> saved = productRepository.findBySku("SKU-INT-001");
-        assertThat(saved).isPresent();
-        assertThat(saved.get().getName()).isEqualTo("Integration Test Product");
+    @BeforeEach
+    void setUp() {
+        outbox.deleteAll();
+        eventStore.deleteAll();
+        repository.deleteAllInBatch();
+        cache().clear();
+        reset(AopTestUtils.<ProductEventPublisher>getUltimateTargetObject(publisher));
+    }
+
+    @AfterEach
+    void tearDown() {
+        SharedRedis.resume();
+    }
+
+    private ProductDTO create(String sku, String price) {
+        return service.createProduct(CreateProductRequest.builder().name("Product " + sku).price(new BigDecimal(price))
+                .sku(sku).category("Electronics").build());
+    }
+
+    private List<String> outboxTypes() {
+        return outbox.findAll().stream().map(o -> o.getEventType()).toList();
     }
 
     @Test
-    @Transactional
-    void testGetProduct_EndToEnd() throws Exception {
-        Product product = Product.builder()
-                .name("Get Test Product")
-                .price(new BigDecimal("49.99"))
-                .sku("SKU-GET-001")
-                .category("Books")
-                .quantityAvailable(30)
-                .build();
-        Product saved = productRepository.save(product);
+    @DisplayName("creating a product announces product.created through the outbox, keyed by the product id")
+    void createAnnounces() {
+        ProductDTO created = create("SKU-001", "79.99");
 
-        mockMvc.perform(get("/api/products/" + saved.getId()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(saved.getId().intValue())))
-                .andExpect(jsonPath("$.name", is("Get Test Product")));
+        assertThat(outbox.findAll()).singleElement().satisfies(row -> {
+            assertThat(row.getEventType()).isEqualTo("product.created");
+            assertThat(row.getTopic()).isEqualTo("product-events");
+            assertThat(row.getMessageKey()).isEqualTo(String.valueOf(created.getId()));
+            assertThat(row.getPayload()).contains("\"sku\":\"SKU-001\"").contains("\"currency\":\"USD\"");
+        });
     }
 
     @Test
-    @Transactional
-    void testUpdateProduct_EndToEnd() throws Exception {
-        Product product = Product.builder()
-                .name("Update Test Product")
-                .price(new BigDecimal("59.99"))
-                .sku("SKU-UPD-001")
-                .category("Clothing")
-                .quantityAvailable(40)
-                .build();
-        Product saved = productRepository.save(product);
+    @DisplayName("the change and its event are one atomic write: if announcing fails the product is not created")
+    void atomic() {
+        doThrow(new IllegalStateException("outbox unavailable")).when(AopTestUtils.<ProductEventPublisher>getUltimateTargetObject(publisher)).created(any());
 
-        String updateJson = "{\"name\":\"Updated Product\",\"price\":69.99}";
-        mockMvc.perform(put("/api/products/" + saved.getId())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(updateJson))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.name", is("Updated Product")))
-                .andExpect(jsonPath("$.price", is(69.99)));
+        assertThatThrownBy(() -> create("SKU-001", "79.99")).isInstanceOf(IllegalStateException.class);
+
+        assertThat(repository.count()).isZero();
+        assertThat(outbox.count()).isZero();
     }
 
     @Test
-    @Transactional
-    void testDeleteProduct_EndToEnd() throws Exception {
-        Product product = Product.builder()
-                .name("Delete Test Product")
-                .price(new BigDecimal("39.99"))
-                .sku("SKU-DEL-001")
-                .category("Home")
-                .quantityAvailable(20)
-                .build();
-        Product saved = productRepository.save(product);
+    @DisplayName("a duplicate SKU is refused and announces nothing")
+    void duplicate() {
+        create("SKU-001", "79.99");
+        outbox.deleteAll();
 
-        mockMvc.perform(delete("/api/products/" + saved.getId()))
-                .andExpect(status().isNoContent());
+        assertThatThrownBy(() -> create("SKU-001", "1.00")).isInstanceOf(DuplicateSkuException.class);
 
-        Optional<Product> deleted = productRepository.findById(saved.getId());
-        assertThat(deleted).isEmpty();
+        assertThat(outbox.count()).isZero();
     }
 
     @Test
-    @Transactional
-    void testGetProductsByCategory_EndToEnd() throws Exception {
-        Product product1 = Product.builder()
-                .name("Category Test 1")
-                .price(new BigDecimal("29.99"))
-                .sku("SKU-CAT-001")
-                .category("Electronics")
-                .quantityAvailable(15)
-                .build();
-        Product product2 = Product.builder()
-                .name("Category Test 2")
-                .price(new BigDecimal("39.99"))
-                .sku("SKU-CAT-002")
-                .category("Electronics")
-                .quantityAvailable(25)
-                .build();
-        productRepository.save(product1);
-        productRepository.save(product2);
+    @DisplayName("a product is cached by id and by SKU; changing it evicts both entries, so the price is never stale")
+    void cacheAndEviction() {
+        ProductDTO created = create("SKU-001", "79.99");
+        service.getProductById(created.getId());
+        service.getProductBySku("SKU-001");
+        assertThat(cache().get("id:" + created.getId())).isNotNull();
+        assertThat(cache().get("sku:SKU-001")).isNotNull();
 
-        mockMvc.perform(get("/api/products/category/Electronics"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(greaterThanOrEqualTo(2))));
+        service.updateProduct(created.getId(), UpdateProductRequest.builder().price(new BigDecimal("89.99")).build(), null);
+
+        assertThat(cache().get("id:" + created.getId())).isNull();
+        assertThat(cache().get("sku:SKU-001")).isNull();
+        assertThat(service.getProductBySku("SKU-001").getPrice()).isEqualByComparingTo("89.99");
+        assertThat(outboxTypes()).containsExactly("product.created", "product.updated");
     }
 
     @Test
-    @Transactional
-    void testReserveInventory_Successful() throws Exception {
-        Product product = Product.builder()
-                .name("Reserve Test")
-                .price(new BigDecimal("89.99"))
-                .sku("SKU-RES-001")
-                .category("Electronics")
-                .quantityAvailable(100)
-                .build();
-        Product saved = productRepository.save(product);
+    @DisplayName("deleting evicts both entries and announces product.deleted")
+    void deleteEvicts() {
+        ProductDTO created = create("SKU-001", "79.99");
+        service.getProductById(created.getId());
 
-        mockMvc.perform(post("/api/products/" + saved.getId() + "/reserve")
-                        .param("quantity", "25"))
-                .andExpect(status().isOk());
+        service.deleteProduct(created.getId());
 
-        Product updated = productRepository.findById(saved.getId()).orElseThrow();
-        assertThat(updated.getQuantityAvailable()).isEqualTo(75);
+        assertThat(cache().get("id:" + created.getId())).isNull();
+        assertThat(outboxTypes()).containsExactly("product.created", "product.deleted");
     }
 
     @Test
-    @Transactional
-    void testReleaseInventory_Successful() throws Exception {
-        Product product = Product.builder()
-                .name("Release Test")
-                .price(new BigDecimal("99.99"))
-                .sku("SKU-REL-001")
-                .category("Electronics")
-                .quantityAvailable(75)
-                .build();
-        Product saved = productRepository.save(product);
+    @DisplayName("the batch lookup prices several SKUs in one query; unknown ones are absent")
+    void lookup() {
+        create("SKU-001", "79.99");
+        create("SKU-002", "12.99");
 
-        mockMvc.perform(post("/api/products/" + saved.getId() + "/release")
-                        .param("quantity", "25"))
-                .andExpect(status().isOk());
-
-        Product updated = productRepository.findById(saved.getId()).orElseThrow();
-        assertThat(updated.getQuantityAvailable()).isEqualTo(100);
+        assertThat(service.lookupBySkus(List.of("SKU-001", "SKU-002", "NOPE"))).extracting(ProductDTO::getSku)
+                .containsExactlyInAnyOrder("SKU-001", "SKU-002");
     }
 
     @Test
-    @Transactional
-    void testSearchProducts_EndToEnd() throws Exception {
-        Product product = Product.builder()
-                .name("Search Test Product")
-                .price(new BigDecimal("44.99"))
-                .sku("SKU-SEARCH-001")
-                .category("Books")
-                .quantityAvailable(20)
-                .build();
-        productRepository.save(product);
+    @DisplayName("a Redis outage never breaks the catalogue: reads and writes fall through to the database")
+    void redisOutage() {
+        ProductDTO created = create("SKU-001", "79.99");
+        SharedRedis.pause();
 
-        mockMvc.perform(get("/api/products/search")
-                        .param("term", "Search"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(greaterThanOrEqualTo(1))));
-    }
+        assertThat(service.getProductById(created.getId()).getSku()).isEqualTo("SKU-001");
+        ProductDTO updated = service.updateProduct(created.getId(), UpdateProductRequest.builder().price(new BigDecimal("5.00")).build(), null);
 
-    @Test
-    @Transactional
-    void testGetAvailableProducts_EndToEnd() throws Exception {
-        Product availableProduct = Product.builder()
-                .name("Available Product")
-                .price(new BigDecimal("34.99"))
-                .sku("SKU-AVAIL-001")
-                .category("Home")
-                .quantityAvailable(10)
-                .build();
-        productRepository.save(availableProduct);
-
-        mockMvc.perform(get("/api/products/available"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(greaterThanOrEqualTo(1))));
+        assertThat(updated.getPrice()).isEqualByComparingTo("5.00");
     }
 }

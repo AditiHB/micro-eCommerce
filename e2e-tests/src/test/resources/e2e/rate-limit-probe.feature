@@ -2,7 +2,7 @@ Feature: single probe request (no assertions - called in a loop to deliberately 
 
 Scenario:
   Given url gatewayUrl
-  And path '/api/payments'
+  And path '/api/v1/payments'
   And param page = 0
   And param size = 1
   And header Authorization = 'Bearer ' + authToken

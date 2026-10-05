@@ -1,83 +1,92 @@
 package com.ecommerce.orderservice.dto;
 
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 
-@DisplayName("CreateOrderRequest DTO Tests")
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DisplayName("CreateOrderRequest")
 class CreateOrderRequestTest {
 
-    @Test
-    @DisplayName("Should create request with valid data")
-    void testValidRequest() {
-        CreateOrderRequest request = CreateOrderRequest.builder()
-            .customerId(123L)
-            .productId("PROD-001")
-            .quantity(5)
-            .build();
+    private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
 
-        assertThat(request.getCustomerId()).isEqualTo(123L);
-        assertThat(request.getProductId()).isEqualTo("PROD-001");
-        assertThat(request.getQuantity()).isEqualTo(5);
+    private static CreateOrderRequest.Item item(String sku, Integer quantity) {
+        return new CreateOrderRequest.Item(sku, quantity);
+    }
+
+    private Set<ConstraintViolation<CreateOrderRequest>> validate(CreateOrderRequest request) {
+        return validator.validate(request);
     }
 
     @Test
-    @DisplayName("Should update customer ID via setter")
-    void testSetCustomerId() {
-        CreateOrderRequest request = new CreateOrderRequest();
-        request.setCustomerId(456L);
+    @DisplayName("a multi-line request is valid")
+    void multiLine() {
+        CreateOrderRequest request = CreateOrderRequest.builder().customerId(1L)
+                .items(List.of(item("SKU-001", 2), item("SKU-002", 1))).build();
 
-        assertThat(request.getCustomerId()).isEqualTo(456L);
+        assertThat(validate(request)).isEmpty();
+        assertThat(request.normalizedItems()).hasSize(2);
     }
 
     @Test
-    @DisplayName("Should update product ID via setter")
-    void testSetProductId() {
-        CreateOrderRequest request = new CreateOrderRequest();
-        request.setProductId("PROD-002");
+    @DisplayName("the original single productId + quantity shape still works, as one line")
+    void legacyShorthand() {
+        CreateOrderRequest request = CreateOrderRequest.builder().customerId(1L).productId("SKU-001").quantity(3).build();
 
-        assertThat(request.getProductId()).isEqualTo("PROD-002");
+        assertThat(validate(request)).isEmpty();
+        assertThat(request.normalizedItems()).singleElement().satisfies(i -> {
+            assertThat(i.getProductId()).isEqualTo("SKU-001");
+            assertThat(i.getQuantity()).isEqualTo(3);
+        });
     }
 
     @Test
-    @DisplayName("Should update quantity via setter")
-    void testSetQuantity() {
-        CreateOrderRequest request = new CreateOrderRequest();
-        request.setQuantity(10);
-
-        assertThat(request.getQuantity()).isEqualTo(10);
+    @DisplayName("a request must use one shape: items, or the shorthand - not both, not neither")
+    void exactlyOneShape() {
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).build())).isNotEmpty();
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).items(List.of(item("SKU-001", 1)))
+                .productId("SKU-002").quantity(1).build())).isNotEmpty();
     }
 
     @Test
-    @DisplayName("Should support all-args constructor")
-    void testAllArgsConstructor() {
-        CreateOrderRequest request = new CreateOrderRequest(789L, "PROD-003", 15);
-
-        assertThat(request.getCustomerId()).isEqualTo(789L);
-        assertThat(request.getProductId()).isEqualTo("PROD-003");
-        assertThat(request.getQuantity()).isEqualTo(15);
+    @DisplayName("the shorthand needs both halves")
+    void shorthandNeedsBoth() {
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).productId("SKU-001").build())).isNotEmpty();
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).quantity(2).build())).isNotEmpty();
     }
 
     @Test
-    @DisplayName("Should support no-args constructor")
-    void testNoArgsConstructor() {
-        CreateOrderRequest request = new CreateOrderRequest();
-
-        assertThat(request.getCustomerId()).isNull();
-        assertThat(request.getProductId()).isNull();
-        assertThat(request.getQuantity()).isNull();
+    @DisplayName("the customer is required")
+    void customerRequired() {
+        assertThat(validate(CreateOrderRequest.builder().items(List.of(item("SKU-001", 1))).build()))
+                .extracting(v -> v.getPropertyPath().toString()).contains("customerId");
     }
 
     @Test
-    @DisplayName("Should handle single quantity")
-    void testSingleQuantity() {
-        CreateOrderRequest request = CreateOrderRequest.builder()
-            .customerId(999L)
-            .productId("PROD-999")
-            .quantity(1)
-            .build();
+    @DisplayName("quantities must be positive and bounded; product ids must not be blank")
+    void lineConstraints() {
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).items(List.of(item("SKU-001", 0))).build())).isNotEmpty();
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).items(List.of(item("SKU-001", -5))).build())).isNotEmpty();
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).items(List.of(item("SKU-001", 1001))).build())).isNotEmpty();
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).items(List.of(item(" ", 1))).build())).isNotEmpty();
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).productId("SKU-001").quantity(-1).build())).isNotEmpty();
+    }
 
-        assertThat(request.getQuantity()).isEqualTo(1);
+    @Test
+    @DisplayName("an order has a bounded number of lines")
+    void maxLines() {
+        List<CreateOrderRequest.Item> tooMany = new ArrayList<>();
+        for (int i = 0; i <= CreateOrderRequest.MAX_LINES; i++) {
+            tooMany.add(item("SKU-" + i, 1));
+        }
+
+        assertThat(validate(CreateOrderRequest.builder().customerId(1L).items(tooMany).build())).isNotEmpty();
     }
 }

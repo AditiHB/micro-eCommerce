@@ -1,0 +1,27 @@
+# Used by the common module's own integration tests (the real datasource comes from SharedPostgres).
+spring:
+  cloud:
+    vault:
+      enabled: false
+  flyway:
+    locations: classpath:db/test
+  kafka:
+    admin:
+      auto-create: false
+    listener:
+      auto-startup: false
+  jpa:
+    open-in-view: false
+
+ecommerce:
+  outbox:
+    # Tests drive the relay by hand so they control exactly when events leave.
+    relay-enabled: false
+  security:
+    jwk-set-uri: http://localhost:0/jwks
+    issuer: http://issuer.test/realms/ecommerce
+    audience: ecommerce-api
+
+eureka:
+  client:
+    enabled: false
