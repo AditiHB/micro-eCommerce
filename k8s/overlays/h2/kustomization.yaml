@@ -1,0 +1,19 @@
+# The default profile: no patches at all. k8s/base's Deployments set no
+# datasource env vars, so each service falls back to its own classpath
+# application.yml default - an in-process H2 database - exactly matching
+# docker-compose.yml's own default (no-profile) behavior.
+#
+# Deploy with:
+#   kubectl apply -k k8s/overlays/h2
+#
+# Good for a first run and for exercising any single replica, but remember
+# each pod's H2 database is private to that pod - two replicas of the same
+# service do NOT share data. Fine for kicking the tires; use
+# k8s/overlays/postgres instead for anything involving more than 1 replica
+# per service, including the HPA scaling demo in
+# docs/KUBERNETES_DEPLOYMENT.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base

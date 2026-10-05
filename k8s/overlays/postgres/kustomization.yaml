@@ -1,0 +1,108 @@
+# Real, shared Postgres instead of each pod's own private in-process H2 -
+# see postgres.yaml's header for why this is the fix for multi-replica
+# correctness, not just an extra option. Deploy with:
+#
+#   kubectl apply -k k8s/overlays/postgres
+#
+# ddl-auto is "validate" under the postgres Spring profile (see each
+# service's application-postgres.yml) - Flyway owns schema creation here,
+# matching db/README.md's documented vendor-folder convention
+# (db/migration/postgresql/*.sql per service).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - postgres.yaml
+
+patches:
+  - target:
+      kind: Deployment
+      name: customer-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: customer-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: customer-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres
+              - name: DB_HOST
+                value: postgres
+  - target:
+      kind: Deployment
+      name: order-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: order-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: order-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres
+              - name: DB_HOST
+                value: postgres
+  - target:
+      kind: Deployment
+      name: inventory-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: inventory-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: inventory-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres
+              - name: DB_HOST
+                value: postgres
+  - target:
+      kind: Deployment
+      name: payment-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payment-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: payment-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres
+              - name: DB_HOST
+                value: postgres
+  - target:
+      kind: Deployment
+      name: notification-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: notification-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: notification-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres
+              - name: DB_HOST
+                value: postgres

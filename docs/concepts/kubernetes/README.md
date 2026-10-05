@@ -199,8 +199,10 @@ After mastering Kubernetes:
 
 1. **Learn Architecture** - How Kafka and Kubernetes work together
 2. **Explore the code** - See how services run in Kubernetes
-3. **Try locally** - Set up Kubernetes and experiment
-4. **Deploy something** - Create your own Kubernetes manifests
+3. **Try locally** - Follow [docs/KUBERNETES_DEPLOYMENT.md](../../KUBERNETES_DEPLOYMENT.md)
+   to actually deploy this project to Minikube or Kind, switch between its H2
+   and Postgres profiles, and trigger a real HPA scale-up/scale-down
+4. **Deploy something** - Edit a manifest under `k8s/base` and re-apply it
 
 ---
 

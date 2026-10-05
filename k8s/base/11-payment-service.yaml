@@ -12,7 +12,10 @@ spec:
     metadata:
       labels:
         app: payment-service
+        tier: service
     spec:
+      enableServiceLinks: false
+      serviceAccountName: payment-service-sa
       containers:
       - name: payment-service
         image: micro-ecommerce:payment-service
@@ -20,38 +23,26 @@ spec:
         ports:
         - containerPort: 8084
         env:
-        - name: SERVER_PORT
-          value: "8084"
-        - name: SPRING_DATASOURCE_URL
-          value: "jdbc:h2:mem:payment_db"
-        - name: SPRING_DATASOURCE_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: db-username
-        - name: SPRING_DATASOURCE_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: db-password
-        - name: SPRING_REDIS_HOST
+        - name: SPRING_CONFIG_IMPORT
+          value: "optional:configserver:http://config-server:8888/"
+        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
+          value: "http://discovery-server:8761/eureka/"
+        - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+          value: "true"
+        - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        # Needed for RedisConfig's distributed CacheManager bean (see its
+        # own javadoc) - this service's application.yml never configures
+        # Redis connectivity at all otherwise.
+        - name: SPRING_DATA_REDIS_HOST
           value: "redis"
-        - name: SPRING_REDIS_PORT
+        - name: SPRING_DATA_REDIS_PORT
           value: "6379"
-        - name: SPRING_REDIS_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: redis-password
-        - name: SPRING_REDIS_DATABASE
-          value: "3"
         - name: JWT_SECRET
           valueFrom:
             secretKeyRef:
               name: ecommerce-secrets
               key: jwt-secret
-        - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
-          value: "http://discovery-server:8761/eureka/"
         resources:
           requests:
             cpu: 250m
@@ -75,13 +66,6 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        volumeMounts:
-        - name: config
-          mountPath: /app/config
-      volumes:
-      - name: config
-        configMap:
-          name: payment-service-config
 ---
 apiVersion: v1
 kind: Service

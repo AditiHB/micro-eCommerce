@@ -7,13 +7,23 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * TODO (known gap): this CacheManager is a local, per-instance, in-memory
- * cache ({@link ConcurrentMapCacheManager}) - NOT shared across service
- * replicas, even though every service's application.yml configures
- * {@code spring.cache.type: redis} and a real Redis connection. {@link
- * RedisConfig} already defines a proper distributed RedisCacheManager for
- * this, but nothing imports it - every service imports this class instead.
- * See RedisConfig's javadoc for the fix.
+ * Local, per-instance, in-memory cache ({@link ConcurrentMapCacheManager}) -
+ * NOT shared across replicas. Fine for a single-instance service; confirmed
+ * live to silently serve stale reads the moment a service runs more than one
+ * replica (see {@link RedisConfig}'s javadoc for how that was found and
+ * fixed). customer/order/inventory/payment-service import {@link
+ * RedisConfig} instead for exactly that reason - this class is still used by
+ * notification-service and product-service.
+ *
+ * <p>Note: notification-service's {@code CommonIntegrationConfig} doesn't
+ * import this class (or RedisConfig) at all, and its {@code @SpringBootApplication}
+ * doesn't component-scan {@code com.ecommerce.common.config} either - so no
+ * {@code CacheManager} bean exists in its context and {@code @EnableCaching}
+ * never activates there. Its own {@code @Cacheable}/{@code @CacheEvict}
+ * annotations (referencing this class's cache-name constants) are therefore
+ * currently inert, not merely local - a separate, narrower gap than the one
+ * above, left as-is here since notification-service was never part of this
+ * investigation's replica-consistency testing.
  */
 @Configuration
 @EnableCaching

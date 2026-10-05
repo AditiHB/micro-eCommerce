@@ -1,0 +1,185 @@
+# One ServiceAccount + least-privilege Role per service. None of these
+# services actually call the Kubernetes API themselves (no client library in
+# use anywhere in this codebase) - secretKeyRef/env injection is resolved by
+# the kubelet, not the pod's own RBAC permissions - so this doesn't change
+# what the app can do. It's here as a genuine, working least-privilege RBAC
+# example for learning purposes, and as the hook point if any service ever
+# does need API access later (fixed from a bundled k8s/22-rbac-policies.yaml
+# that was broken on arrival: it shipped a PodSecurityPolicy, an API kind
+# removed in Kubernetes 1.25 - this project's own stated minimum version -
+# and an audit.k8s.io/v1 Policy object, which isn't a kubectl-apply-able
+# resource at all, it's consumed via the API server's --audit-policy-file
+# flag. Both are dropped rather than carried forward broken.)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: discovery-server-sa
+  namespace: ecommerce
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: config-server-sa
+  namespace: ecommerce
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-gateway-sa
+  namespace: ecommerce
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: customer-service-sa
+  namespace: ecommerce
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: order-service-sa
+  namespace: ecommerce
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: inventory-service-sa
+  namespace: ecommerce
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payment-service-sa
+  namespace: ecommerce
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: notification-service-sa
+  namespace: ecommerce
+---
+# One Role per service, each scoped to read-only on the single shared
+# Secret - nothing broader. Bound 1:1 to that service's own ServiceAccount
+# below.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: read-ecommerce-secrets
+  namespace: ecommerce
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["ecommerce-secrets"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: discovery-server-read-secrets
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ecommerce-secrets
+subjects:
+- kind: ServiceAccount
+  name: discovery-server-sa
+  namespace: ecommerce
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: config-server-read-secrets
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ecommerce-secrets
+subjects:
+- kind: ServiceAccount
+  name: config-server-sa
+  namespace: ecommerce
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: api-gateway-read-secrets
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ecommerce-secrets
+subjects:
+- kind: ServiceAccount
+  name: api-gateway-sa
+  namespace: ecommerce
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: customer-service-read-secrets
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ecommerce-secrets
+subjects:
+- kind: ServiceAccount
+  name: customer-service-sa
+  namespace: ecommerce
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: order-service-read-secrets
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ecommerce-secrets
+subjects:
+- kind: ServiceAccount
+  name: order-service-sa
+  namespace: ecommerce
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: inventory-service-read-secrets
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ecommerce-secrets
+subjects:
+- kind: ServiceAccount
+  name: inventory-service-sa
+  namespace: ecommerce
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: payment-service-read-secrets
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ecommerce-secrets
+subjects:
+- kind: ServiceAccount
+  name: payment-service-sa
+  namespace: ecommerce
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: notification-service-read-secrets
+  namespace: ecommerce
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: read-ecommerce-secrets
+subjects:
+- kind: ServiceAccount
+  name: notification-service-sa
+  namespace: ecommerce

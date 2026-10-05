@@ -1,0 +1,79 @@
+# No password configured - same as docker-compose.yml's own redis service,
+# which also runs open with no --requirepass. The original k8s manifests had
+# the two sides disagreeing instead: a redis-password Secret key existed and
+# 4 of 5 services sent it as SPRING_REDIS_PASSWORD, but the actual Redis
+# container never enforced one, so every client sending that password would
+# get a NOAUTH-class error the moment it tried to authenticate against a
+# server with none set. This matches the real stack instead of inventing a
+# password nothing here currently enforces.
+#
+# The h2-database StatefulSet that used to live in this file is gone: no
+# service's JDBC URL ever pointed at it (every service uses an in-process
+# jdbc:h2:mem:* database), so it was a dead PersistentVolumeClaim that looked
+# like persistence but did nothing. See overlays/postgres for real,
+# shared, multi-replica-safe persistence.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: ecommerce
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        tier: database
+    spec:
+      enableServiceLinks: false
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+          name: redis
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+        livenessProbe:
+          exec:
+            command: ["redis-cli", "ping"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command: ["redis-cli", "ping"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: ecommerce
+spec:
+  clusterIP: None
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379

@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 00-namespace.yaml
+  - 01-secrets.yaml
+  - 02-rbac.yaml
+  - 03-messaging.yaml
+  - 04-redis.yaml
+  - 05-discovery-server.yaml
+  - 06-config-server.yaml
+  - 07-api-gateway.yaml
+  - 08-customer-service.yaml
+  - 09-order-service.yaml
+  - 10-inventory-service.yaml
+  - 11-payment-service.yaml
+  - 12-notification-service.yaml
+  - 13-hpa.yaml

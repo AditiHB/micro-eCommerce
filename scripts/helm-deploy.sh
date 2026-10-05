@@ -5,6 +5,12 @@ set -e
 echo "==================================="
 echo "Helm Deployment Script"
 echo "==================================="
+echo ""
+echo "NOTE: this chart is not the maintained local-deployment path - it has"
+echo "known gaps (no Kafka/Zookeeper, no notification-service, no Redis"
+echo "wiring for the API Gateway's rate limiter among them). See"
+echo "helm/ecommerce/NOTE.md. Prefer ./scripts/deploy-minikube.sh or"
+echo "./scripts/deploy-kind.sh (Kustomize) for a working deployment."
 
 # Check if Helm is installed
 if ! command -v helm &> /dev/null; then

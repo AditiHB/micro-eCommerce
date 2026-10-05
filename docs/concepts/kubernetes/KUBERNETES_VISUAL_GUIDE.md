@@ -127,15 +127,15 @@ Developer writes deployment.yaml:
   metadata:
     name: order-service
   spec:
-    replicas: 3
-    image: order-service:v1.0
+    replicas: 2
+    image: micro-ecommerce:order-service
         ↓
-kubectl apply -f deployment.yaml
+kubectl apply -k k8s/overlays/h2
         ↓
 Kubernetes reads and creates:
   └─ Deployment ✅
   └─ ReplicaSet ✅
-  └─ 3 Pods ✅
+  └─ 2 Pods ✅
 
 
 STEP 2: MONITORING

@@ -219,8 +219,13 @@ grep -r "api_key\|password\|secret" src/ --include="*.java" --include="*.py" --i
 ```bash
 # Deploy missing controls
 kubectl apply -f infrastructure/monitoring/certificate-alerts.yaml
-kubectl apply -f k8s/21-network-policies.yaml
-kubectl apply -f k8s/22-rbac-policies.yaml
+# NetworkPolicy + RBAC moved and were rewritten during the Kubernetes rework
+# (the originals here used a PodSecurityPolicy - an API kind removed in
+# Kubernetes 1.25 - and a NetworkPolicy that would have cut the app off from
+# itself; see docs/KUBERNETES_DEPLOYMENT.md's "What was fixed"). RBAC is now
+# part of the base deploy (k8s/base/02-rbac.yaml); NetworkPolicy stays
+# opt-in:
+kubectl apply -k k8s/hardening
 ```
 
 ### Step 3: Verification
