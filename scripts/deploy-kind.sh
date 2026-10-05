@@ -25,6 +25,14 @@ if kind get clusters | grep -q "^$CLUSTER_NAME$"; then
 else
     echo "Creating Kind cluster: $CLUSTER_NAME"
 
+    # Both api-gateway (k8s/base/07-api-gateway.yaml) and nginx-https
+    # (k8s/nginx-https/service.yaml) are type: LoadBalancer, which just sits
+    # Pending on Kind (no cloud-provider/MetalLB) - this project always
+    # reaches services via `kubectl port-forward` instead (see this script's
+    # own closing instructions), so these mappings are never actually used.
+    # Kept on unusual high ports rather than 80/8080 so creating this cluster
+    # never fights the Docker Compose stack's api-gateway, which legitimately
+    # owns host port 8080 whenever that stack is also running locally.
     cat > kind-config.yaml << 'EOF'
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -33,10 +41,10 @@ nodes:
 - role: control-plane
   extraPortMappings:
   - containerPort: 80
-    hostPort: 80
+    hostPort: 18880
     listenAddress: "127.0.0.1"
   - containerPort: 8080
-    hostPort: 8080
+    hostPort: 18888
     listenAddress: "127.0.0.1"
 EOF
 

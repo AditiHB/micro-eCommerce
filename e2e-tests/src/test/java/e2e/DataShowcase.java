@@ -17,11 +17,17 @@ import java.util.List;
  * afterward.
  *
  * Connects directly over JDBC to the postgres profile's host-exposed port
- * (5432 - see docker-compose.yml's postgres service), rather than shelling
- * out to `docker exec psql`: no process per query, and a ResultSet is far
- * easier to format into a compact table than psql's own CLI output. Only
- * works against the postgres profile - the default H2 profile has no
- * postgres container/port to connect to at all.
+ * (5432 by default - see docker-compose.yml's postgres service), rather
+ * than shelling out to `docker exec psql`: no process per query, and a
+ * ResultSet is far easier to format into a compact table than psql's own
+ * CLI output. Only works against the postgres profile - the default H2
+ * profile has no postgres container/port to connect to at all.
+ *
+ * Override with {@code -Dpostgres.port=...} when the real postgres isn't on
+ * localhost:5432 - e.g. a `kubectl port-forward` to the Kubernetes postgres
+ * StatefulSet on a different local port, so this never collides with (or
+ * silently connects to the wrong database as) a Docker Compose postgres
+ * container already bound to 5432 on the same host.
  *
  * Best-effort and non-fatal by design: a query failure (wrong profile,
  * postgres not reachable, etc.) prints a note and moves on rather than
@@ -32,7 +38,8 @@ import java.util.List;
  */
 public class DataShowcase {
 
-    private static final String JDBC_URL_TEMPLATE = "jdbc:postgresql://localhost:5432/%s";
+    private static final String JDBC_URL_TEMPLATE =
+            "jdbc:postgresql://localhost:" + System.getProperty("postgres.port", "5432") + "/%s";
     private static final String USER = "ecommerce_user";
     private static final String PASSWORD = "ecommerce_password";
 
