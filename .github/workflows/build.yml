@@ -63,7 +63,12 @@ jobs:
         uses: dorny/test-reporter@v1
         with:
           name: Test Results
-          path: '**/target/*-reports/*.xml'
+          # TEST-*.xml only - *-reports/*.xml also matches Failsafe's own
+          # non-JUnit-schema failsafe-summary.xml, which crashes this action
+          # ("TypeError: Cannot read properties of undefined (reading '$')").
+          # Both Surefire and Failsafe always prefix real per-test JUnit
+          # reports with TEST-, so this excludes only the summary file.
+          path: '**/target/*-reports/TEST-*.xml'
           reporter: 'java-junit'
           fail-on-error: true
 
