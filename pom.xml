@@ -46,6 +46,7 @@
         <maven-compiler-plugin.version>3.12.1</maven-compiler-plugin.version>
         <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
         <maven-failsafe-plugin.version>3.2.5</maven-failsafe-plugin.version>
+        <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
         <skipTests>false</skipTests>
         <skipUnitTests>${skipTests}</skipUnitTests>
         <skipITs>${skipTests}</skipITs>
@@ -294,6 +295,38 @@
                         </execution>
                     </executions>
                 </plugin>
+                <plugin>
+                    <!-- Registers the "jacoco" plugin prefix so standalone invocations
+                         like `mvn jacoco:report` (as CI's "Generate code coverage report"
+                         step runs it) resolve at all - this plugin was never declared
+                         anywhere in the reactor, so that step has always failed with
+                         "No plugin found for prefix 'jacoco'" (confirmed failing on every
+                         main build for weeks, unrelated to any single PR). prepare-agent
+                         attaches the coverage javaagent during `mvn test`/`mvn verify` in
+                         the build job; the report goal run on its own here in the
+                         code-quality job has no exec data to read (that job never runs
+                         tests) and jacoco just skips with a warning rather than failing -
+                         real coverage numbers need a test run wired into this job too,
+                         which is a separate, bigger change than fixing this crash. -->
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco-maven-plugin.version}</version>
+                    <executions>
+                        <execution>
+                            <id>prepare-agent</id>
+                            <goals>
+                                <goal>prepare-agent</goal>
+                            </goals>
+                        </execution>
+                        <execution>
+                            <id>report</id>
+                            <phase>verify</phase>
+                            <goals>
+                                <goal>report</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
             </plugins>
         </pluginManagement>
         <plugins>
@@ -304,6 +337,10 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
             </plugin>
         </plugins>
     </build>
