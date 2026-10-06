@@ -10,12 +10,25 @@ spring:
       enabled: false
     vault:
       enabled: false
-    bus:
-      # Otherwise Spring Cloud Bus eagerly registers its own Kafka binding at context startup,
-      # which forces the binder's AdminClient to repeatedly try reaching localhost:9092 (its own
-      # built-in default - config-server is disabled here too, so it never even sees the real
-      # broker address) for the life of the test, purely as log noise.
-      enabled: false
+  # Spring Cloud Stream/Bus's own autoconfiguration (not just spring.cloud.bus.enabled, which only gates
+  # the refresh-listener wiring - the binding/binder machinery activates regardless of it) is excluded
+  # entirely: left active, it eagerly resolves the Kafka binder at context startup and its AdminClient
+  # retries reaching localhost:9092 (its own built-in default - config-server is disabled here too, so it
+  # never even sees the real broker address) for the life of the test, as pure log noise and ~5x slower
+  # context startup. Confirmed empirically: a test that took ~75s and logged ~500 of these warnings with
+  # only "bus.enabled: false" set drops to ~13s and zero warnings with this full exclude list.
+  autoconfigure:
+    exclude:
+      - org.springframework.cloud.bus.BusAutoConfiguration
+      - org.springframework.cloud.bus.BusRefreshAutoConfiguration
+      - org.springframework.cloud.bus.BusStreamAutoConfiguration
+      - org.springframework.cloud.bus.PathServiceMatcherAutoConfiguration
+      - org.springframework.cloud.bus.jackson.BusJacksonAutoConfiguration
+      - org.springframework.cloud.stream.config.BindersHealthIndicatorAutoConfiguration
+      - org.springframework.cloud.stream.config.ChannelsEndpointAutoConfiguration
+      - org.springframework.cloud.stream.config.BindingsEndpointAutoConfiguration
+      - org.springframework.cloud.stream.config.BindingServiceConfiguration
+      - org.springframework.cloud.stream.function.FunctionConfiguration
   data:
     redis:
       # Nothing listens here by default: tests that do not need the catalogue cache run through the
