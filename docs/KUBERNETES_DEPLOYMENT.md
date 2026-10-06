@@ -439,17 +439,17 @@ stopped - the exact scale-up/scale-down cycle this guide's own
 Documented rather than silently dropped, matching this project's existing
 "known gaps" convention (see `e2e-tests/README.md`):
 
-- **mTLS + cert-manager + the split `ecommerce-secrets` namespace.** The
-  original attempt here had several independent, fatal problems: Certificates
-  issued for the wrong namespace (`default` instead of `ecommerce`), a
-  keystore path pointing at a PEM `.crt` file where Spring Boot needs an
-  actual PKCS12 keystore (nothing converted one to the other), a second
-  Secret namespace that Kubernetes architecturally cannot use for
-  `secretKeyRef` env injection across namespaces regardless of RBAC, and a
-  file using `kind: Patch` - not a real Kubernetes API kind. A correct
-  version of this is a substantial project on its own (real keystore
-  generation via an init container, at minimum) and was cut rather than
-  rebuilt under this pass's local-learning scope.
+- **mTLS between backend services** was cut here (the original attempt had
+  several independent, fatal problems: Certificates issued for the wrong
+  namespace, a keystore path pointing at a PEM `.crt` file where Spring Boot
+  needs an actual PKCS12 keystore, a second Secret namespace that Kubernetes
+  architecturally cannot use for `secretKeyRef` env injection across
+  namespaces regardless of RBAC, and a file using `kind: Patch` - not a real
+  Kubernetes API kind) - but has since been rebuilt correctly as its own
+  opt-in overlay: see `k8s/overlays/mtls/README.md` and
+  `docs/SMALLSTEP_PKI.md` section 11. Uses cert-manager (its own built-in CA
+  issuer, not a `secretKeyRef` namespace split) and Kustomize strategic-merge
+  patches instead of a stray `kind: Patch` file.
 - **`k8s/nginx-https`** - kept, not verified working end-to-end in this
   pass. See its own README.
 - **Helm chart parity** - `helm/ecommerce` was not brought to the same fix

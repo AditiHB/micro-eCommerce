@@ -16,12 +16,25 @@
 #     Spring Boot SSL bundle (ecommerce.security.jwks-ssl-bundle / ecommerce.service-auth.ssl-bundle).
 #   Vault over TLS as well: add  -f docker-compose.vault.yml -f docker-compose.vault-tls.yml
 #
+#   Mutual TLS between the backend services as well: each of api-gateway, customer/order/
+#   inventory/payment/notification-service also gets its own leaf certificate and activates the
+#   "mtls" Spring profile (SPRING_PROFILES_ACTIVE gains ",mtls" on top of whatever's already
+#   active) - see each service's own application-mtls.yml and docs/SMALLSTEP_PKI.md section 11.
+#
+#   Caveat if you also add -f docker-compose.vault.yml: both files append their own single token
+#   to SPRING_PROFILES_ACTIVE the same way (vault.yml adds ",vault"), but Compose merges a
+#   service's `environment:` map key-by-key across -f files with full-value replacement, last file
+#   wins - not a union. Combining both files only keeps whichever file is LAST on the command line's
+#   appended profile, silently dropping the other. Not new here (vault.yml already had this
+#   fragility on its own); if you need both active together, set SPRING_PROFILES_ACTIVE to the full
+#   literal list yourself (e.g. "postgres,vault,mtls") rather than relying on either file's trick.
+#
 # Trust the CA on your machine (browser / curl) with the root certificate from the volume:
 #   docker compose -f docker-compose.yml -f docker-compose.pki.yml cp pki-renewer:/certs/ca/root_ca.crt ./root_ca.crt
 #   curl --cacert root_ca.crt https://localhost/health
 #
-# Not done here, deliberately: mutual TLS between services and TLS for Kafka/Redis/Postgres. See
-# docs/SMALLSTEP_PKI.md ("What this does not cover") for what each would take.
+# Not done here, deliberately: TLS for Kafka/Redis/Postgres, and the nginx -> api-gateway hop (see
+# upstream.conf). See docs/SMALLSTEP_PKI.md ("What this does not cover") for what each would take.
 # ===============================================================================
 
 x-pki-trust: &pki-trust
@@ -165,43 +178,86 @@ services:
     volumes:
       - *pki-ca-volume
 
-  # --- services verify Keycloak's certificate against the platform CA -------------------------------
+  # --- services verify Keycloak's certificate against the platform CA, and (except api-gateway's
+  # inbound side) serve/require mutual TLS towards each other - see each service's own
+  # application-mtls.yml for what SPRING_PROFILES_ACTIVE's extra "mtls" actually configures. -----
   api-gateway:
-    environment: *pki-trust
+    environment:
+      <<: *pki-trust
+      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:+${SPRING_PROFILES_ACTIVE},}mtls"
     volumes:
       - *pki-ca-volume
+      - type: volume
+        source: pki-certs
+        target: /certs/api-gateway
+        read_only: true
+        volume:
+          subpath: api-gateway
     depends_on:
       pki-truststore:
         condition: service_completed_successfully
 
   customer-service:
-    environment: *pki-trust
+    environment:
+      <<: *pki-trust
+      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:+${SPRING_PROFILES_ACTIVE},}mtls"
     volumes:
       - *pki-ca-volume
+      - type: volume
+        source: pki-certs
+        target: /certs/customer-service
+        read_only: true
+        volume:
+          subpath: customer-service
     depends_on:
       pki-truststore:
         condition: service_completed_successfully
 
   inventory-service:
-    environment: *pki-trust
+    environment:
+      <<: *pki-trust
+      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:+${SPRING_PROFILES_ACTIVE},}mtls"
     volumes:
       - *pki-ca-volume
+      - type: volume
+        source: pki-certs
+        target: /certs/inventory-service
+        read_only: true
+        volume:
+          subpath: inventory-service
     depends_on:
       pki-truststore:
         condition: service_completed_successfully
 
   order-service:
-    environment: *pki-trust
+    environment:
+      <<: *pki-trust
+      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:+${SPRING_PROFILES_ACTIVE},}mtls"
+      CUSTOMER_SERVICE_URL: "https://customer-service:8081"
     volumes:
       - *pki-ca-volume
+      - type: volume
+        source: pki-certs
+        target: /certs/order-service
+        read_only: true
+        volume:
+          subpath: order-service
     depends_on:
       pki-truststore:
         condition: service_completed_successfully
 
   payment-service:
-    environment: *pki-trust
+    environment:
+      <<: *pki-trust
+      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:+${SPRING_PROFILES_ACTIVE},}mtls"
     volumes:
       - *pki-ca-volume
+      - type: volume
+        source: pki-certs
+        target: /certs/payment-service
+        read_only: true
+        volume:
+          subpath: payment-service
     depends_on:
       pki-truststore:
         condition: service_completed_successfully
@@ -211,6 +267,27 @@ services:
       <<: *pki-trust
       KEYCLOAK_TOKEN_URI: "https://keycloak:8443/realms/ecommerce/protocol/openid-connect/token"
       ECOMMERCE_SERVICEAUTH_SSLBUNDLE: "pki"
+      SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:+${SPRING_PROFILES_ACTIVE},}mtls"
+      CUSTOMER_SERVICE_URL: "https://customer-service:8081"
+    volumes:
+      - *pki-ca-volume
+      - type: volume
+        source: pki-certs
+        target: /certs/notification-service
+        read_only: true
+        volume:
+          subpath: notification-service
+    depends_on:
+      pki-truststore:
+        condition: service_completed_successfully
+
+  # product-service only trusts Keycloak over HTTPS here - it's not part of the mTLS mesh (no leaf
+  # certificate, no "mtls" profile): it predates that work and was never added to the PKI overlay at
+  # all before now, which meant any token obtained from this overlay's HTTPS Keycloak failed here
+  # with an issuer mismatch (confirmed live: SECURITY_ISSUER was still the plain-HTTP default) even
+  # though every other PKI-patched service already trusted it correctly.
+  product-service:
+    environment: *pki-trust
     volumes:
       - *pki-ca-volume
     depends_on:
