@@ -1,12 +1,14 @@
+# Global, oracle profile: identical across customer/order/inventory/payment/notification-service, including
+# the datasource URL - unlike postgres, every service shares the same Oracle SID (ORDB) and is differentiated
+# only by its own DB_USERNAME/schema, which was already a placeholder, so there is no per-service override file
+# for this profile at all.
 spring:
   flyway:
-    # Schema changes run as a separate owner role when one is provided (Vault mode); otherwise
-    # they fall back to the application role.
     user: ${db.migration.username:${vault.db.username:${DB_USERNAME:}}}
     password: ${db.migration.password:${vault.db.password:${DB_PASSWORD:}}}
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/payment_db
-    driverClassName: org.postgresql.Driver
+    url: jdbc:oracle:thin:@localhost:1521/ORDB
+    driverClassName: oracle.jdbc.driver.OracleDriver
     username: ${vault.db.username:${DB_USERNAME:}}
     password: ${vault.db.password:${DB_PASSWORD:}}
     hikari:
@@ -16,7 +18,7 @@ spring:
       idle-timeout: 600000
       max-lifetime: 1800000
   jpa:
-    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    database-platform: org.hibernate.dialect.Oracle12cDialect
     hibernate:
       ddl-auto: validate
     properties:
@@ -27,7 +29,6 @@ spring:
         order_inserts: true
         order_updates: true
     show-sql: false
-    contexts: prod
 
 logging:
   level:

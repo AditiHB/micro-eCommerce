@@ -18,6 +18,17 @@ spring:
           # uri: https://github.com/your-username/ecommerce-config-repo.git
           default-label: main
           clone-on-start: true
+    # Config Monitor's /monitor webhook publishes a RefreshRemoteApplicationEvent onto this bus when
+    # config-repo changes; every client (spring-cloud-starter-bus-kafka on its own classpath too) picks it
+    # up and refreshes. The same broadcast also happens if /actuator/busrefresh is POSTed directly to any
+    # one bus member, including this server - the monitor webhook is a convenience, not the only trigger.
+    bus:
+      enabled: true
+    stream:
+      kafka:
+        binder:
+          brokers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+          auto-create-topics: true
 
 management:
   server:
@@ -25,7 +36,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,prometheus
+        include: health,prometheus,busrefresh
   endpoint:
     health:
       probes:

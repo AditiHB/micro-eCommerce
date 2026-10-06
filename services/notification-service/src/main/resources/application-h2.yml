@@ -1,4 +1,15 @@
+# The zero-infrastructure profile: everything below runs against nothing but the JVM. Config Server,
+# Discovery and Vault are all explicitly switched off here (the same pattern application-test.yml already
+# uses) - the config-server import stays tolerant of a missing server on its own (see application.yml),
+# but disabling it here too avoids a guaranteed-to-fail connection attempt on every startup.
 spring:
+  cloud:
+    config:
+      enabled: false
+    discovery:
+      enabled: false
+    vault:
+      enabled: false
   datasource:
     url: jdbc:h2:mem:notification_db
     driverClassName: org.h2.Driver
@@ -12,3 +23,7 @@ spring:
   h2:
     console:
       enabled: true
+
+eureka:
+  client:
+    enabled: false

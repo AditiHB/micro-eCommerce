@@ -1,0 +1,19 @@
+# Per-app, all profiles. The registry itself - register-with-eureka/fetch-registry are false since this IS
+# the registry, not a client of it. spring.security.user.name/password (its own dashboard's Basic Auth,
+# EUREKA_USERNAME/EUREKA_PASSWORD) stay local, never centralized: this service is what every other client
+# authenticates against to even reach Eureka, so its own credentials can't depend on Config Server being up.
+server:
+  port: 8761
+
+eureka:
+  instance:
+    hostname: localhost
+  client:
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9761}

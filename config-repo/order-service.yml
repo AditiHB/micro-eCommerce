@@ -1,0 +1,75 @@
+# Per-app, all profiles. Resilience is applied only to READS of other services (the catalogue and the
+# customer directory) - creating an order is a local database write and is deliberately not retried; safety
+# there comes from the Idempotency-Key. Timeouts nest from the edge inward (gateway 10s > this service 8s >
+# one remote call ~3.2s worst case) - see docs/RESILIENCE.md. These values differ from api-gateway's own
+# circuit-breaker defaults by design, so they stay here rather than in the global file.
+server:
+  port: 8083
+
+spring:
+  autoconfigure:
+    # Only customer-service and inventory-service cache (reference data); the others do not use Redis at all.
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+      - org.springframework.boot.actuate.autoconfigure.data.redis.RedisHealthContributorAutoConfiguration
+  kafka:
+    consumer:
+      group-id: order-group
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/order_db}
+    driverClassName: org.postgresql.Driver
+    username: ${vault.db.username:${DB_USERNAME:}}
+    password: ${vault.db.password:${DB_PASSWORD:}}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  jpa:
+    open-in-view: false
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+resilience4j:
+  retry:
+    instances:
+      catalog: &remote-read-retry
+        maxAttempts: 2
+        waitDuration: 200ms
+        retryExceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+      customerDirectory: *remote-read-retry
+  circuitbreaker:
+    instances:
+      catalog: &remote-read-breaker
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        recordExceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+      customerDirectory: *remote-read-breaker
+
+services:
+  catalog:
+    url: ${CATALOG_SERVICE_URL:http://localhost:8082}
+  customer:
+    url: ${CUSTOMER_SERVICE_URL:http://localhost:8081}
+
+ecommerce:
+  clients:
+    connect-timeout: 500ms
+    read-timeout: 1500ms
+  orders:
+    saga-timeout: ${ORDER_SAGA_TIMEOUT:5m}
+    idempotency-key-required: ${ORDER_IDEMPOTENCY_KEY_REQUIRED:false}
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9083}

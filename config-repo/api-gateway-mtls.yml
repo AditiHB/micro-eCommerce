@@ -1,0 +1,21 @@
+# api-gateway's own inbound side (nginx -> gateway, port 8080) is untouched - that hop stays plain HTTP,
+# deliberately out of scope (see upstream.conf's own comment on why TLS stops at the nginx edge).
+#
+# What changes is the gateway's OUTBOUND client, used by every lb://<service> route to reach a backend that
+# now requires a client certificate. Spring Cloud Gateway's reactive Netty HttpClient (unlike RestClient
+# elsewhere in this codebase) cannot take a Spring SSL bundle for its outbound side as of Spring Cloud
+# Gateway 4.1 - it only accepts a keystore file, so this is PKCS12, not the PEM pair every backend service
+# uses to serve TLS. That keystore does not hot-reload on renewal: after api-gateway's certificate renews,
+# this pod needs a restart to pick up the new one (see infrastructure/pki/renew.sh and
+# k8s/overlays/mtls/README.md). This is the one service that does NOT use the global application-mtls.yml's
+# PEM bundle wiring at all.
+spring:
+  cloud:
+    gateway:
+      httpclient:
+        ssl:
+          key-store: file:/certs/api-gateway/keystore.p12
+          key-store-password: changeit
+          key-store-type: PKCS12
+          trusted-x509-certificates:
+            - ${ECOMMERCE_SECURITY_MTLS_TRUSTSTORE:file:/certs/ca/ca-bundle.crt}

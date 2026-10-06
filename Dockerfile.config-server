@@ -21,12 +21,17 @@ RUN mvn clean package -DskipTests -pl infrastructure/config-server -am
 # Stage 2: Runtime
 FROM eclipse-temurin:17-jre-jammy
 
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# git: config-repo must be a real working copy for Config Server's git backend to read (see
+# docker-entrypoint.sh) - initialised at container start, not baked in here, so the same mechanism also
+# covers Docker Compose's bind-mounted ./config-repo (not available until the container actually runs).
+RUN apt-get update && apt-get install -y curl git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY --from=builder /build/infrastructure/config-server/target/config-server-*.jar app.jar
 COPY config-repo /app/config-repo
+COPY infrastructure/config-server/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 8888
 
@@ -45,4 +50,4 @@ RUN groupadd --system --gid 10001 app \
  && chown -R app:app /app
 USER 10001:10001
 
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh", "java", "-jar", "app.jar"]
