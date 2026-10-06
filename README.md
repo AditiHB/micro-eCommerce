@@ -412,28 +412,22 @@ See **[docs/PHASES_GUIDE.md](docs/PHASES_GUIDE.md)** for the phase-by-phase brea
 
 ## 🔧 Configuration Management
 
-### Config Server Structure
-
-Configuration files are stored in `./config-repo` and organized by service:
+Externalized configuration is genuinely centralized via Spring Cloud Config Server, backed by a real git
+history inside `./config-repo` - see **[docs/CONFIG_SERVER.md](docs/CONFIG_SERVER.md)** for the full design
+(what's centralized vs. kept local, the mandatory-in-real-environments / optional-for-local-dev split, and
+live refresh via Spring Cloud Bus). In short:
 
 ```
 config-repo/
-├── application.yml                    # Global configuration
-├── customer-service.yml              # Customer service config
-├── inventory-service.yml             # Inventory service config
-├── order-service.yml                 # Order service config
-└── payment-service.yml               # Payment service config
+├── application.yml                     # Global: every client, every profile
+├── application-{h2,postgres,oracle,mtls}.yml   # Global, per-profile
+├── <service-name>.yml                  # Per-app: that service's own config, every profile
+└── <service-name>-mtls.yml             # Per-app, per-profile exceptions (e.g. notification-service)
 ```
 
-### Environment Variables
-
-Services can be configured via environment variables:
-
-```bash
-SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888/
-EUREKA_CLIENT_SERVICEURL_DEFAULTZONE=http://discovery-server:8761/eureka/
-SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:29092
-```
+Each service's own local `application.yml` stays a complete fallback (so a bare `mvn spring-boot:run` or a
+test slice still has everything it needs), but once config-server is reachable its values win. The `h2`
+profile is the zero-infrastructure escape hatch and disables Config Server/Discovery/Vault entirely.
 
 ---
 
@@ -517,7 +511,7 @@ All project documentation lives under [`docs/`](docs/). Start with **[DOCUMENTAT
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - system design overview
 - **[docs/PHASES_GUIDE.md](docs/PHASES_GUIDE.md)** - phase-by-phase implementation walkthrough
 - **[docs/CONCEPTS_EXPLAINED.md](docs/CONCEPTS_EXPLAINED.md)** - distributed systems concepts used in this project
-- **[docs/SAGA_PATTERN_GUIDE.md](docs/SAGA_PATTERN_GUIDE.md)**, **[docs/DATABASE_MIGRATIONS.md](docs/DATABASE_MIGRATIONS.md)**, **[docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md)**, **[docs/KUBERNETES_DEPLOYMENT.md](docs/KUBERNETES_DEPLOYMENT.md)**
+- **[docs/SAGA_PATTERN_GUIDE.md](docs/SAGA_PATTERN_GUIDE.md)**, **[docs/DATABASE_MIGRATIONS.md](docs/DATABASE_MIGRATIONS.md)**, **[docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md)**, **[docs/KUBERNETES_DEPLOYMENT.md](docs/KUBERNETES_DEPLOYMENT.md)**, **[docs/CONFIG_SERVER.md](docs/CONFIG_SERVER.md)**
 - **[docs/SSL_TLS_SETUP.md](docs/SSL_TLS_SETUP.md)**, **[docs/SECRETS_MANAGEMENT.md](docs/SECRETS_MANAGEMENT.md)**, **[docs/MTLS_CONFIGURATION.md](docs/MTLS_CONFIGURATION.md)**, **[docs/COMPLIANCE_MONITORING.md](docs/COMPLIANCE_MONITORING.md)** - security deep dives
 - **[docs/concepts/](docs/concepts/)** - beginner-friendly explainers for Docker, Kafka, Kubernetes, microservices, and transactions
 

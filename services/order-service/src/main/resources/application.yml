@@ -1,3 +1,9 @@
+# This file stays a COMPLETE, self-sufficient set of defaults, not trimmed down to "bootstrap-only":
+# the config-server import below is optional (tolerant of an unreachable server) everywhere except where
+# SPRING_CLOUD_CONFIG_FAILFAST=true makes it mandatory (Compose/Kubernetes - see docs/CONFIG_SERVER.md).
+# Whenever config-server IS reachable, its values from config-repo/order-service.yml + the global
+# config-repo/application*.yml override everything here; this file is what a bare `mvn spring-boot:run`
+# or a test slice with no profile active still runs on.
 server:
   port: 8083
   shutdown: graceful
@@ -14,6 +20,19 @@ spring:
       - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
       - org.springframework.boot.actuate.autoconfigure.data.redis.RedisHealthContributorAutoConfiguration
   cloud:
+    config:
+      username: ${CONFIG_SERVER_USERNAME:config}
+      password: ${CONFIG_SERVER_PASSWORD:}
+      # false by default (bare local runs, test slices with no profile active) - Compose/k8s set
+      # SPRING_CLOUD_CONFIG_FAILFAST=true so a real environment's unreachable config-server is a hard
+      # failure instead of a silent fallback to these local defaults; optional: above only governs
+      # Boot's own "resource not found" tolerance, which fail-fast deliberately overrides.
+      fail-fast: ${SPRING_CLOUD_CONFIG_FAILFAST:false}
+      retry:
+        max-attempts: 6
+        initial-interval: 1000
+        max-interval: 5000
+        multiplier: 1.5
     vault:
       # Switched on by the `vault` profile (see application-vault.yml); off for plain local runs.
       enabled: false

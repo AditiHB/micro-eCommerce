@@ -1,3 +1,9 @@
+# This file stays a COMPLETE, self-sufficient set of defaults, not trimmed down to "bootstrap-only":
+# the config-server import below is optional (tolerant of an unreachable server) everywhere except where
+# SPRING_CLOUD_CONFIG_FAILFAST=true makes it mandatory (Compose/Kubernetes - see docs/CONFIG_SERVER.md).
+# config-repo/discovery-server.yml + the global config-repo/application*.yml override what's safe to
+# centralize (management port/exposure). spring.security.user.* stays local always, never centralized: this
+# IS what every other service authenticates against, so its own credentials can't depend on Config Server.
 server:
   port: 8761
   shutdown: graceful
@@ -5,6 +11,22 @@ server:
 spring:
   application:
     name: discovery-server
+  config:
+    import: "optional:configserver:http://localhost:8888/"
+  cloud:
+    config:
+      username: ${CONFIG_SERVER_USERNAME:config}
+      password: ${CONFIG_SERVER_PASSWORD:}
+      # false by default (bare local runs, test slices with no profile active) - Compose/k8s set
+      # SPRING_CLOUD_CONFIG_FAILFAST=true so a real environment's unreachable config-server is a hard
+      # failure instead of a silent fallback to these local defaults; optional: above only governs
+      # Boot's own "resource not found" tolerance, which fail-fast deliberately overrides.
+      fail-fast: ${SPRING_CLOUD_CONFIG_FAILFAST:false}
+      retry:
+        max-attempts: 6
+        initial-interval: 1000
+        max-interval: 5000
+        multiplier: 1.5
   security:
     user:
       name: ${EUREKA_USERNAME:eureka}

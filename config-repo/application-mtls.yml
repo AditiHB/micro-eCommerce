@@ -1,0 +1,24 @@
+# Global, mtls profile: safe to apply to every mtls-profile client uniformly, including notification-service
+# (its one-way exception - see notification-service-mtls.yml - never sets server.ssl.bundle, so this block
+# stays harmless for it: nothing is listening on SSL to disable, and it still needs this exact SSL bundle as
+# a CLIENT identity for its own outbound call). The keystore/truststore paths are templated with
+# ${spring.application.name}, which each client resolves against its own already-known name.
+#
+# server.ssl.bundle/client-auth/the Eureka hostname block deliberately do NOT live here - see
+# docs/SMALLSTEP_PKI.md section 11 and the per-service <app-name>-mtls.yml files for why.
+management:
+  server:
+    ssl:
+      enabled: false
+
+spring:
+  ssl:
+    bundle:
+      pem:
+        mtls:
+          reload-on-update: true
+          keystore:
+            certificate: file:/certs/${spring.application.name}/tls.crt
+            private-key: file:/certs/${spring.application.name}/tls.key
+          truststore:
+            certificate: ${ECOMMERCE_SECURITY_MTLS_TRUSTSTORE:file:/certs/ca/ca-bundle.crt}

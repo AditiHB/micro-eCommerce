@@ -1,0 +1,87 @@
+# Global configuration: served to EVERY client, regardless of which profile it activates. Spring Cloud
+# Config resolves this file first, then layers application-<profile>.yml (also global), then <app-name>.yml,
+# then <app-name>-<profile>.yml on top - each later source overrides a key the earlier ones set, so put here
+# only what every service should share by default, and let a service's own file override anything it must
+# answer differently (api-gateway's actuator exposure list is one example - see api-gateway.yml).
+#
+# Resilience4j is deliberately NOT here: order-service/notification-service's in-process retry/circuit-breaker
+# windows (10s wait) and api-gateway's edge-level ones (30s wait, slow-call tracking) are different by design
+# (see docs/RESILIENCE.md's timeout-nesting model), not accidental duplication - unifying them would silently
+# change behavior. Each service's own <app-name>.yml keeps its resilience4j config.
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info,busrefresh
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+      environment: local
+  tracing:
+    sampling:
+      probability: 1.0
+
+logging:
+  level:
+    com.ecommerce: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+eureka:
+  client:
+    service-url:
+      # Overridden by EUREKA_CLIENT_SERVICEURL_DEFAULTZONE (Compose/k8s inject the real, Basic-auth-bearing
+      # URL); this is only the local, no-stack-running fallback.
+      defaultZone: http://localhost:8761/eureka/
+
+ecommerce:
+  security:
+    # Identity provider (Keycloak). Public configuration, not secrets: tokens are RS256 and verified
+    # against the provider's JWKS; there is deliberately no signing secret anywhere any more.
+    jwk-set-uri: ${SECURITY_JWK_SET_URI:http://localhost:8180/realms/ecommerce/protocol/openid-connect/certs}
+    issuer: ${SECURITY_ISSUER:http://localhost:8180/realms/ecommerce}
+    audience: ${SECURITY_AUDIENCE:ecommerce-api}
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  # Unused by services with no datasource (api-gateway, discovery-server) - harmless, since nothing reads
+  # these properties without spring-boot-starter-data-jpa/flyway-core on the classpath.
+  flyway:
+    user: ${db.migration.username:${vault.db.username:${DB_USERNAME:}}}
+    password: ${db.migration.password:${vault.db.password:${DB_PASSWORD:}}}
+    enabled: true
+    baselineOnMigrate: true
+    validateOnMigrate: true
+    locations: classpath:db/migration/postgresql
+    outOfOrder: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+  cloud:
+    vault:
+      # Switched on by the `vault` profile (see common/application-vault.yml); off for plain local runs.
+      enabled: false
+    bus:
+      enabled: true
+    stream:
+      kafka:
+        binder:
+          # Same broker every service already talks to for domain events; Spring Cloud Stream's own
+          # admin client provisions the bus's topic explicitly (not the broker's disabled implicit
+          # auto-creation - see docker-compose.yml's note on KAFKA_EVENT_REPLICATION_FACTOR).
+          brokers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+          auto-create-topics: true

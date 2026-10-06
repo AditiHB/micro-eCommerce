@@ -1,0 +1,23 @@
+# Identical to customer-service-mtls.yml/order-service-mtls.yml/payment-service-mtls.yml. Kept as separate,
+# duplicated per-service files rather than folded into the global application-mtls.yml because that global
+# file must stay safe for notification-service too, which must NOT get server.ssl.bundle/client-auth (see
+# notification-service-mtls.yml and docs/SMALLSTEP_PKI.md section 11).
+#
+# Serves TLS on the main server port and requires a client certificate from every caller. Eureka must
+# advertise this stable hostname (never a pod IP - can't be in a static cert) so the gateway's lb:// route
+# resolves to https://<service>:<port>, matching the certificate's SANs. instance-id includes POD_NAME
+# (Kubernetes Downward API; falls back to a random value under Compose) so replicas sharing one
+# hostname+port don't collapse into a single Eureka registration.
+server:
+  ssl:
+    bundle: mtls
+    client-auth: need
+
+eureka:
+  instance:
+    prefer-ip-address: false
+    hostname: ${spring.application.name}
+    secure-port-enabled: true
+    non-secure-port-enabled: false
+    secure-port: ${server.port}
+    instance-id: ${spring.application.name}:${POD_NAME:${random.value}}

@@ -44,6 +44,15 @@ spec:
               key: eureka-password
         - name: SPRING_CONFIG_IMPORT
           value: "optional:configserver:http://config-server:8888/"
+        - name: SPRING_CLOUD_CONFIG_FAILFAST
+          value: "true"
+        - name: CONFIG_SERVER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ecommerce-secrets
+              key: config-server-password
+        - name: SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS
+          value: "kafka:9092"
         - name: EUREKA_CLIENT_SERVICEURL_DEFAULTZONE
           value: "http://eureka:$(EUREKA_PASSWORD)@discovery-server:8761/eureka/"
         - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS

@@ -1,0 +1,43 @@
+# Per-app, all profiles.
+server:
+  port: 8084
+
+spring:
+  autoconfigure:
+    # Only customer-service and inventory-service cache (reference data); the others do not use Redis at all.
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
+      - org.springframework.boot.actuate.autoconfigure.data.redis.RedisHealthContributorAutoConfiguration
+  kafka:
+    consumer:
+      group-id: payment-group
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/payment_db}
+    driverClassName: org.postgresql.Driver
+    username: ${vault.db.username:${DB_USERNAME:}}
+    password: ${vault.db.password:${DB_PASSWORD:}}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  jpa:
+    open-in-view: false
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+payments:
+  gateway:
+    # "simulated" is a development stand-in; a real processor implements PaymentGateway and is selected here.
+    type: ${PAYMENT_GATEWAY_TYPE:simulated}
+  simulator:
+    # The stand-in declines any charge above this amount, so declines can be exercised end to end.
+    decline-above: ${PAYMENT_SIMULATOR_DECLINE_ABOVE:10000.00}
+
+management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9084}

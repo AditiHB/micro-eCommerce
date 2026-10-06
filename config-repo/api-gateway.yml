@@ -1,20 +1,12 @@
-# This file stays a COMPLETE, self-sufficient set of defaults, not trimmed down to "bootstrap-only":
-# the config-server import below is optional (tolerant of an unreachable server) everywhere except where
-# SPRING_CLOUD_CONFIG_FAILFAST=true makes it mandatory (Compose/Kubernetes - see docs/CONFIG_SERVER.md).
-# Whenever config-server IS reachable, its values from config-repo/api-gateway.yml + the global
-# config-repo/application*.yml override everything here.
+# Per-app, all profiles. api-gateway doesn't share most of the business services' shape (no datasource, its
+# own Redis pool flavor, a much larger actuator exposure list for the circuit-breaker dashboard) - almost
+# everything it needs is genuinely its own rather than centralizable.
 server:
   port: 8080
-  shutdown: graceful
   http2:
     enabled: true
 
 spring:
-  application:
-    name: api-gateway
-  config:
-    import: "optional:configserver:http://localhost:8888/"
-
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -27,24 +19,7 @@ spring:
           max-idle: 10
           min-idle: 5
           max-wait: -1ms
-
   cloud:
-    config:
-      username: ${CONFIG_SERVER_USERNAME:config}
-      password: ${CONFIG_SERVER_PASSWORD:}
-      # false by default (bare local runs, test slices with no profile active) - Compose/k8s set
-      # SPRING_CLOUD_CONFIG_FAILFAST=true so a real environment's unreachable config-server is a hard
-      # failure instead of a silent fallback to these local defaults; optional: above only governs
-      # Boot's own "resource not found" tolerance, which fail-fast deliberately overrides.
-      fail-fast: ${SPRING_CLOUD_CONFIG_FAILFAST:false}
-      retry:
-        max-attempts: 6
-        initial-interval: 1000
-        max-interval: 5000
-        multiplier: 1.5
-    vault:
-      # Switched on by the `vault` profile (see application-vault.yml); off for plain local runs.
-      enabled: false
     gateway:
       # Only the explicit routes below exist. The discovery locator used to publish every registered
       # service at /<service-id>/** - unfiltered, bypassing the rate limiter and circuit breaker.
@@ -69,13 +44,13 @@ spring:
             allow-credentials: false
       # Timeouts nest from the edge inward (see docs/RESILIENCE.md): the caller's time limiter (10s) is the
       # outermost bound, the gateway's own response timeout (9s) fires just before it, and the services finish
-      # inside 8s. There is deliberately NO Retry filter on any route - a gateway that retried POST /orders would
-      # create duplicate orders; retries belong to the client (with an Idempotency-Key) and to idempotent reads.
+      # inside 8s. There is deliberately NO Retry filter on any route - a gateway that retried POST /orders
+      # would create duplicate orders; retries belong to the client (with an Idempotency-Key) and to
+      # idempotent reads.
       httpclient:
         connect-timeout: 1000
         response-timeout: 9s
       routes:
-        # --- order-service: canonical, versioned
         - id: order-service
           uri: lb://order-service
           predicates:
@@ -89,7 +64,6 @@ spring:
               args:
                 requestsPerMinute: 100
 
-        # --- customer-service: canonical, versioned
         - id: customer-service
           uri: lb://customer-service
           predicates:
@@ -103,7 +77,6 @@ spring:
               args:
                 requestsPerMinute: 150
 
-        # --- inventory-service: canonical, versioned
         - id: inventory-service
           uri: lb://inventory-service
           predicates:
@@ -117,7 +90,6 @@ spring:
               args:
                 requestsPerMinute: 200
 
-        # --- payment-service: canonical, versioned
         - id: payment-service
           uri: lb://payment-service
           predicates:
@@ -131,7 +103,7 @@ spring:
               args:
                 requestsPerMinute: 50
 
-        # --- the catalogue (served by inventory-service - product-service was merged into it): canonical, versioned
+        # The catalogue (served by inventory-service - product-service was merged into it)
         - id: product-service
           uri: lb://inventory-service
           predicates:
@@ -145,7 +117,6 @@ spring:
               args:
                 requestsPerMinute: 200
 
-        # --- notification-service: canonical, versioned
         - id: notification-service
           uri: lb://notification-service
           predicates:
@@ -159,7 +130,6 @@ spring:
               args:
                 requestsPerMinute: 100
 
-        # --- order-service: the original unversioned path, rewritten to v1 and marked deprecated
         - id: order-service-legacy
           uri: lb://order-service
           predicates:
@@ -176,7 +146,6 @@ spring:
               args:
                 requestsPerMinute: 100
 
-        # --- customer-service: the original unversioned path, rewritten to v1 and marked deprecated
         - id: customer-service-legacy
           uri: lb://customer-service
           predicates:
@@ -193,7 +162,6 @@ spring:
               args:
                 requestsPerMinute: 150
 
-        # --- inventory-service: the original unversioned path, rewritten to v1 and marked deprecated
         - id: inventory-service-legacy
           uri: lb://inventory-service
           predicates:
@@ -210,7 +178,6 @@ spring:
               args:
                 requestsPerMinute: 200
 
-        # --- payment-service: the original unversioned path, rewritten to v1 and marked deprecated
         - id: payment-service-legacy
           uri: lb://payment-service
           predicates:
@@ -227,7 +194,6 @@ spring:
               args:
                 requestsPerMinute: 50
 
-        # --- the catalogue (served by inventory-service): the original unversioned path, rewritten to v1 and marked deprecated
         - id: product-service-legacy
           uri: lb://inventory-service
           predicates:
@@ -244,7 +210,6 @@ spring:
               args:
                 requestsPerMinute: 200
 
-        # --- notification-service: the original unversioned path, rewritten to v1 and marked deprecated
         - id: notification-service-legacy
           uri: lb://notification-service
           predicates:
@@ -261,7 +226,6 @@ spring:
               args:
                 requestsPerMinute: 100
 
-        # --- operator tooling: the dead letters of order-service's own consumers (ADMIN only, enforced by the service)
         - id: order-service-dead-letters
           uri: lb://order-service
           predicates:
@@ -273,7 +237,6 @@ spring:
                 name: orderCircuitBreaker
                 fallbackUri: forward:/fallback/service
 
-        # --- operator tooling: the dead letters of inventory-service's own consumers (ADMIN only, enforced by the service)
         - id: inventory-service-dead-letters
           uri: lb://inventory-service
           predicates:
@@ -285,7 +248,6 @@ spring:
                 name: inventoryCircuitBreaker
                 fallbackUri: forward:/fallback/service
 
-        # --- operator tooling: the dead letters of payment-service's own consumers (ADMIN only, enforced by the service)
         - id: payment-service-dead-letters
           uri: lb://payment-service
           predicates:
@@ -297,7 +259,6 @@ spring:
                 name: paymentCircuitBreaker
                 fallbackUri: forward:/fallback/service
 
-        # --- operator tooling: the dead letters of notification-service's own consumers (ADMIN only, enforced by the service)
         - id: notification-service-dead-letters
           uri: lb://notification-service
           predicates:
@@ -333,7 +294,6 @@ resilience4j:
         baseConfig: default
       notificationCircuitBreaker:
         baseConfig: default
-
   timelimiter:
     configs:
       default:
@@ -353,18 +313,8 @@ resilience4j:
       notificationCircuitBreaker:
         baseConfig: default
 
-ecommerce:
-  security:
-    # Identity provider (Keycloak). Public configuration, not secrets: tokens are RS256 and verified
-    # against the provider's JWKS; there is no shared signing secret to leak or default.
-    jwk-set-uri: ${SECURITY_JWK_SET_URI:http://localhost:8180/realms/ecommerce/protocol/openid-connect/certs}
-    issuer: ${SECURITY_ISSUER:http://localhost:8180/realms/ecommerce}
-    audience: ${SECURITY_AUDIENCE:ecommerce-api}
-
 eureka:
   client:
-    service-url:
-      defaultZone: http://localhost:8761/eureka/
     healthcheck:
       enabled: true
   instance:
@@ -377,15 +327,9 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus,circuitbreakers,circuitbreaker-events
-  endpoint:
-    health:
-      show-details: never
-      probes:
-        enabled: true
+        # Replaces (not extends) the global list: the gateway's own circuit-breaker dashboard endpoints.
+        include: health,info,prometheus,circuitbreakers,circuitbreaker-events,busrefresh
   metrics:
-    tags:
-      application: ${spring.application.name}
     export:
       simple:
         enabled: true

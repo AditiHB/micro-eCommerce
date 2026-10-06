@@ -1,0 +1,22 @@
+# Global, postgres profile: the JPA/Hibernate production tuning identical across customer/order/inventory/
+# payment/notification-service. The datasource URL/driver/credentials/Hikari pool are already unconditional
+# in each service's own <app-name>.yml (same values regardless of profile), so there is nothing per-service
+# to add here - this file is purely the production-tuning overlay on top of that.
+spring:
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+        jdbc:
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
+    show-sql: false
+    contexts: prod
+
+logging:
+  level:
+    org.hibernate.SQL: INFO

@@ -35,7 +35,14 @@
 
 # --- shared environment blocks ---------------------------------------------------------------
 x-platform-env: &platform-env
+  # config-repo is the real source of truth here (see docs/CONFIG_SERVER.md): SPRING_CLOUD_CONFIG_FAILFAST
+  # makes an unreachable config-server a hard startup failure instead of a silent fallback to each
+  # service's own local defaults (the "optional:" prefix only governs Boot's own resource-not-found
+  # tolerance - fail-fast overrides it once a connection attempt actually fails).
   SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888/"
+  SPRING_CLOUD_CONFIG_FAILFAST: "true"
+  CONFIG_SERVER_USERNAME: "${CONFIG_SERVER_USERNAME:-config}"
+  CONFIG_SERVER_PASSWORD: "${CONFIG_SERVER_PASSWORD:?run scripts/gen-env.sh}"
   # The registry requires HTTP Basic credentials (see infrastructure/discovery-server).
   EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?run scripts/gen-env.sh}@discovery-server:8761/eureka/"
   # How tokens are verified. The issuer is the PUBLIC url Keycloak stamps into tokens; the JWKS is
@@ -47,6 +54,9 @@ x-platform-env: &platform-env
 x-business-env: &business-env
   <<: *platform-env
   SPRING_KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}"
+  # Spring Cloud Bus's own Kafka binder (separate from the domain-event broker property above, same
+  # broker) - broadcasts a config-repo refresh to every instance; see docs/CONFIG_SERVER.md.
+  SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: "${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}"
   # Topic durability. 1/1 for the single-node dev broker; docker-compose.kafka-ha.yml sets 3/2.
   KAFKA_EVENT_REPLICATION_FACTOR: "${KAFKA_REPLICATION_FACTOR:-1}"
   KAFKA_EVENT_MIN_INSYNC_REPLICAS: "${KAFKA_MIN_INSYNC_REPLICAS:-1}"
@@ -211,6 +221,10 @@ services:
       - config-server
     environment:
       SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888/"
+      SPRING_CLOUD_CONFIG_FAILFAST: "true"
+      CONFIG_SERVER_USERNAME: "${CONFIG_SERVER_USERNAME:-config}"
+      CONFIG_SERVER_PASSWORD: "${CONFIG_SERVER_PASSWORD:?run scripts/gen-env.sh}"
+      SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: "${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}"
       EUREKA_USERNAME: "${EUREKA_USERNAME:-eureka}"
       EUREKA_PASSWORD: "${EUREKA_PASSWORD:?run scripts/gen-env.sh}"
       JAVA_TOOL_OPTIONS: "-Xms96m -Xmx160m"
@@ -230,6 +244,7 @@ services:
       - redis
     environment:
       <<: *platform-env
+      SPRING_CLOUD_STREAM_KAFKA_BINDER_BROKERS: "${KAFKA_BOOTSTRAP_SERVERS:-kafka:29092}"
       REDIS_HOST: "redis"
       REDIS_PASSWORD: "${REDIS_PASSWORD:?run scripts/gen-env.sh}"
       CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-http://localhost:3000}"
