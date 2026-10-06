@@ -10,6 +10,12 @@ spring:
       enabled: false
     vault:
       enabled: false
+    bus:
+      # Otherwise Spring Cloud Bus eagerly registers its own Kafka binding at context startup,
+      # which forces the binder's AdminClient to repeatedly try reaching localhost:9092 (its own
+      # built-in default - config-server is disabled here too, so it never even sees the real
+      # broker address) for the life of the test, purely as log noise.
+      enabled: false
   kafka:
     admin:
       auto-create: false
