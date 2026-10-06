@@ -1,0 +1,213 @@
+# Mutual TLS between backend services, on top of the postgres overlay - see
+# k8s/overlays/mtls/README.md for prerequisites (cert-manager must already be installed and
+# Ready) and docs/SMALLSTEP_PKI.md section 11 for the design. Deploy with:
+#
+#   kubectl apply -k k8s/overlays/mtls
+#
+# SPRING_PROFILES_ACTIVE is set to the full literal list ("postgres,mtls") in every patch below,
+# not composed with a shell expression the way Docker Compose's overlays do - Kubernetes env vars
+# don't get shell expansion, so there's nothing to expand against.
+#
+# EUREKA_INSTANCE_PREFER_IP_ADDRESS is overridden back to "false" for the 5 services the gateway
+# reaches via lb://<service> (not api-gateway itself, which nothing calls through Eureka): the
+# base profile sets it "true" so pods are individually reachable without mTLS, but a certificate's
+# SANs can only name the stable Service DNS name, never a pod's dynamic IP - env vars outrank
+# profile YAML in Spring's property precedence, so this can't be fixed from application-mtls.yml
+# alone and must be overridden here too. POD_NAME (Kubernetes Downward API) feeds each
+# application-mtls.yml's eureka.instance.instance-id, so replicas that now share one
+# hostname+port (the Service name) don't collapse into a single Eureka registration.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../postgres
+  - cluster-issuer.yaml
+  - certificates.yaml
+
+patches:
+  - target:
+      kind: Deployment
+      name: api-gateway
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: api-gateway
+      spec:
+        template:
+          spec:
+            containers:
+            - name: api-gateway
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: mtls
+              # cert-manager bundles ca.crt into the same Secret as tls.crt/tls.key (CA-issuer
+              # certificates always include it) - no separate shared ca-bundle volume needed, unlike
+              # Docker Compose's layout, which application-mtls.yml's default path assumes instead.
+              - name: ECOMMERCE_SECURITY_MTLS_TRUSTSTORE
+                value: file:/certs/api-gateway/ca.crt
+              volumeMounts:
+              - name: mtls-cert
+                mountPath: /certs/api-gateway
+                readOnly: true
+            volumes:
+            - name: mtls-cert
+              secret:
+                secretName: api-gateway-tls
+  - target:
+      kind: Deployment
+      name: customer-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: customer-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: customer-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres,mtls
+              - name: ECOMMERCE_SECURITY_MTLS_TRUSTSTORE
+                value: file:/certs/customer-service/ca.crt
+              - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+                value: "false"
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              volumeMounts:
+              - name: mtls-cert
+                mountPath: /certs/customer-service
+                readOnly: true
+            volumes:
+            - name: mtls-cert
+              secret:
+                secretName: customer-service-tls
+  - target:
+      kind: Deployment
+      name: order-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: order-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: order-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres,mtls
+              - name: ECOMMERCE_SECURITY_MTLS_TRUSTSTORE
+                value: file:/certs/order-service/ca.crt
+              - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+                value: "false"
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              volumeMounts:
+              - name: mtls-cert
+                mountPath: /certs/order-service
+                readOnly: true
+            volumes:
+            - name: mtls-cert
+              secret:
+                secretName: order-service-tls
+  - target:
+      kind: Deployment
+      name: inventory-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: inventory-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: inventory-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres,mtls
+              - name: ECOMMERCE_SECURITY_MTLS_TRUSTSTORE
+                value: file:/certs/inventory-service/ca.crt
+              - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+                value: "false"
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              volumeMounts:
+              - name: mtls-cert
+                mountPath: /certs/inventory-service
+                readOnly: true
+            volumes:
+            - name: mtls-cert
+              secret:
+                secretName: inventory-service-tls
+  - target:
+      kind: Deployment
+      name: payment-service
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payment-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: payment-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres,mtls
+              - name: ECOMMERCE_SECURITY_MTLS_TRUSTSTORE
+                value: file:/certs/payment-service/ca.crt
+              - name: EUREKA_INSTANCE_PREFER_IP_ADDRESS
+                value: "false"
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              volumeMounts:
+              - name: mtls-cert
+                mountPath: /certs/payment-service
+                readOnly: true
+            volumes:
+            - name: mtls-cert
+              secret:
+                secretName: payment-service-tls
+  - target:
+      kind: Deployment
+      name: notification-service
+    # notification-service is the one exception: nothing in the mesh calls it (see its own
+    # application-mtls.yml), so its Eureka registration is untouched - only the cert volume is
+    # added, for its outbound client identity when it calls customer-service.
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: notification-service
+      spec:
+        template:
+          spec:
+            containers:
+            - name: notification-service
+              env:
+              - name: SPRING_PROFILES_ACTIVE
+                value: postgres,mtls
+              - name: ECOMMERCE_SECURITY_MTLS_TRUSTSTORE
+                value: file:/certs/notification-service/ca.crt
+              volumeMounts:
+              - name: mtls-cert
+                mountPath: /certs/notification-service
+                readOnly: true
+            volumes:
+            - name: mtls-cert
+              secret:
+                secretName: notification-service-tls

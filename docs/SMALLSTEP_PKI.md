@@ -214,21 +214,26 @@ ecommerce:
 (`docker-compose.pki.yml` sets exactly this through `SPRING_SSL_BUNDLE_PEM_PKI_TRUSTSTORE_CERTIFICATE`,
 `ECOMMERCE_SECURITY_JWKSSSLBUNDLE` and `ECOMMERCE_SERVICEAUTH_SSLBUNDLE`.)
 
-**Serve TLS** from a service, picking up renewed certificates without a restart:
+**Serve TLS** from a service, picking up renewed certificates without a restart - and, for mutual
+TLS, require and verify the caller's own certificate too (the real `mtls` bundle every backend
+service's `application-mtls.yml` defines - see [section 11](#11-mutual-tls-between-services)):
 
 ```yaml
 server:
   ssl:
-    bundle: tls
+    bundle: mtls
+    client-auth: need
 spring:
   ssl:
     bundle:
       pem:
-        tls:
+        mtls:
           reload-on-update: true
           keystore:
             certificate: file:/certs/order-service/tls.crt
             private-key: file:/certs/order-service/tls.key
+          truststore:
+            certificate: file:/certs/ca/ca-bundle.crt
 ```
 
 Spring Cloud Vault can only read a Java keystore, which is why `pki-truststore` also builds
@@ -248,64 +253,88 @@ platform CA (`VAULT_CACERT`, and `spring.cloud.vault.ssl.trust-store` = the PKCS
 
 ## 10. Kubernetes
 
-Use the same CA concepts with **cert-manager** requesting certificates through smallstep's **step-issuer**; pods get
-ordinary `Secret`s (`tls.crt`, `tls.key`) that renew automatically.
+Kubernetes does **not** run smallstep/step-ca at all - it uses **cert-manager** with its own
+built-in self-signed→CA issuer chain instead (a separate, Kubernetes-native CA from Compose's
+step-ca, not the same trust root; the two environments never need to share one, the same way
+Keycloak-in-Compose and Keycloak-in-Kubernetes are already independent deployments). This is a
+deliberate simplification over also running smallstep's `step-certificates`/`step-issuer` Helm
+charts inside the cluster: cert-manager's native CA issuer does the identical job (short-lived
+leaf certs, automatic renewal by rewriting the `Secret` in place, no daemon needed since the
+kubelet syncs a mounted Secret volume within ~60-90s) with one fewer moving part, and it's the de
+facto standard tool for this regardless.
 
-```bash
-# 1. The CA (Helm chart from smallstep) - production: use a real storage class, an offline root, and an HA database
-helm repo add smallstep https://smallstep.github.io/helm-charts && helm repo update
-helm install step-certificates smallstep/step-certificates -n step --create-namespace \
-    --set inject.enabled=true
-# → prints the CA URL, root fingerprint, provisioner name and where the provisioner password lives
+See `k8s/overlays/mtls/cluster-issuer.yaml` for the bootstrap chain (a self-signed `Issuer`, a root
+CA `Certificate`, then a `ClusterIssuer` of kind `CA` referencing that root) and
+`k8s/overlays/mtls/certificates.yaml` for the per-service leaf `Certificate`s - this is the actual,
+tested implementation referenced from [section 11](#11-mutual-tls-between-services), not a sketch.
+`k8s/overlays/mtls/README.md` has the install steps (cert-manager is a prerequisite, installed from
+its own release manifest, not via Helm - nothing else in this project's Kubernetes path uses Helm).
 
-# 2. cert-manager and the step issuer
-helm install cert-manager jetstack/cert-manager -n cert-manager --create-namespace --set crds.enabled=true
-helm install step-issuer smallstep/step-issuer -n step-issuer-system --create-namespace
-```
-
-```yaml
-# 3. Tell cert-manager how to reach the CA (caBundle = base64 of root_ca.crt, kid from the chart's output)
-apiVersion: certmanager.step.sm/v1beta1
-kind: StepClusterIssuer
-metadata: { name: step-issuer }
-spec:
-  url: https://step-certificates.step.svc.cluster.local
-  caBundle: <base64 root_ca.crt>
-  provisioner: { name: admin, kid: <kid>, passwordRef: { name: step-certificates-provisioner-password, namespace: step, key: password } }
----
-# 4. A certificate for a workload, renewed automatically
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata: { name: order-service-tls, namespace: ecommerce }
-spec:
-  secretName: order-service-tls
-  duration: 24h
-  renewBefore: 8h
-  dnsNames: [order-service, order-service.ecommerce.svc.cluster.local]
-  issuerRef: { group: certmanager.step.sm, kind: StepClusterIssuer, name: step-issuer }
-```
-
-Mount `order-service-tls` into the pod and point an SSL bundle at it ([section 8](#8-using-the-certificates-from-spring-boot)).
-**Not tested here:** this repository has no cluster running smallstep; the manifests above follow the upstream
-charts' documented interface - validate versions and field names against your installed chart.
+One path difference `application-mtls.yml` has to account for: cert-manager bundles `ca.crt` into
+the *same* per-service Secret as `tls.crt`/`tls.key` (every CA-issuer certificate gets one), so
+there's no separate shared `ca/` volume the way Compose's `pki-certs` volume has one. The
+truststore path is an overridable property (`ECOMMERCE_SECURITY_MTLS_TRUSTSTORE`, default
+`file:/certs/ca/ca-bundle.crt` matching Compose) - `k8s/overlays/mtls/kustomization.yaml` overrides
+it per service to `file:/certs/<service>/ca.crt`, its own mounted Secret.
 
 ## 11. Mutual TLS between services
 
-Not enabled by default, deliberately. What it would take, so the cost is clear:
+Enabled via the `mtls` Spring profile. Each of `api-gateway`, `customer-service`, `order-service`,
+`inventory-service`, `payment-service` and `notification-service` gets its own certificate.
+`customer-service`, `order-service`, `inventory-service` and `payment-service` serve TLS with
+`server.ssl.client-auth=need` and a PEM SSL bundle trusting `ca-bundle.crt` (see each service's
+`application-mtls.yml`) - they're all reached through the gateway's `lb://` routes or a direct
+service-to-service call. `notification-service` is a one-way exception: nothing in the mesh calls
+it (it's reached directly and externally, like Postman - see its own `application-mtls.yml`), so
+its inbound side stays plain HTTP; it only uses its certificate as a *client* identity for its one
+outbound call to customer-service. `api-gateway`'s inbound side is untouched too (see below).
+`product-service` is not part of any of this - it has no Kubernetes Deployment at all, and isn't in
+Compose's PKI-patched service list either.
 
-1. Each service gets its own certificate (step 4 above) and serves TLS with `server.ssl.client-auth=need` and a
-   PEM SSL bundle trusting `ca-bundle.crt`.
-2. **Probes and metrics must move off the TLS port** - already done: every service exposes health and Prometheus on a
-   separate, internal-only *management port* (9080-9086) that is plain HTTP.
-3. Eureka registration must advertise the secure port (`eureka.instance.secure-port-enabled=true`,
-   `non-secure-port-enabled=false`).
-4. Spring Cloud Gateway (4.1) cannot take a Spring SSL bundle for its outbound HTTP client: it needs a PKCS12
-   keystore (`spring.cloud.gateway.httpclient.ssl.key-store*`) or a custom `HttpClientCustomizer`, and a keystore
-   does not hot-reload on renewal.
-5. `RestTemplate` clients (notification-service) use `RestTemplateBuilder.setSslBundle(...)`.
+Activate it on top of whatever profile is already active:
 
-On Kubernetes, a service mesh (Linkerd, Istio) gives mTLS with automatic rotation without touching application
-code and is usually the better answer than doing it per service.
+```bash
+# Docker Compose - docker-compose.pki.yml already appends ",mtls" to SPRING_PROFILES_ACTIVE
+# for the 6 patched services; just bring the pki overlay up.
+docker compose -f docker-compose.yml -f docker-compose.pki.yml --profile https up -d --build
+
+# Kubernetes - see k8s/overlays/mtls/README.md (cert-manager is a prerequisite there)
+kubectl apply -k k8s/overlays/mtls
+```
+
+What this took, for reference (all now wired up, not just planned):
+
+1. Each service's own certificate (Docker Compose: `infrastructure/pki/issue-certs.sh`/`renew.sh`,
+   extended from the nginx/keycloak/vault pattern. Kubernetes: `cert-manager` `Certificate` resources
+   in `k8s/overlays/mtls/certificates.yaml`, issued by a self-signed `ClusterIssuer` bootstrapped in
+   `cluster-issuer.yaml` - a separate, Kubernetes-native CA from Compose's step-ca, not the same
+   trust root). Each service serves TLS with `server.ssl.bundle: mtls` + `client-auth: need` and a PEM
+   SSL bundle trusting `ca-bundle.crt`.
+2. **Probes and metrics stay off the TLS port** - every service exposes health and Prometheus on a
+   separate, internal-only *management port* (9080-9086), kept plain HTTP by explicitly setting
+   `management.server.ssl.enabled: false` in each service's `application-mtls.yml`. Confirmed live
+   that this explicit override is required, not optional: Spring Boot's separate management server
+   *inherits* `server.ssl` by default when `management.server.ssl` is left unset entirely - it does
+   not default to plain HTTP the way a first read of the reference docs suggests. Without the
+   override, the management port's actuator health endpoint (what every k8s liveness/readiness
+   probe hits) would also demand a client certificate and every probe would fail.
+3. Eureka registration advertises the secure port and a stable hostname instead of a pod IP
+   (`eureka.instance.secure-port-enabled=true`, `non-secure-port-enabled=false`,
+   `prefer-ip-address=false`, `hostname=<bare service name>`) - the hostname part matters more in
+   Kubernetes than Compose: a certificate's SANs can only name a stable DNS name, never a pod's
+   dynamic IP, and `EUREKA_INSTANCE_PREFER_IP_ADDRESS=true` (the base k8s profile's default) wins
+   over this profile's YAML in Spring's property precedence unless the `mtls` overlay's patches
+   explicitly override it back to `false` as an env var too - see `k8s/overlays/mtls/kustomization.yaml`.
+4. Spring Cloud Gateway (4.1) cannot take a Spring SSL bundle for its outbound HTTP client: it needs a
+   PKCS12 keystore (`spring.cloud.gateway.httpclient.ssl.key-store*`), and that keystore does not
+   hot-reload on renewal - `api-gateway` needs a restart after each renewal (both overlays document
+   this; Compose rebuilds the keystore hourly via `step certificate p12`, Kubernetes via
+   `keystores.pkcs12.create: true` natively on the `Certificate`, but neither makes the running
+   process pick it up without a restart).
+5. `RestClient`-based clients that call another mTLS-protected service (`order-service`'s
+   `CustomerDirectoryClient`, `notification-service`'s `CustomerClient`) use the new SSL-aware
+   overload of `common`'s `RestClients.builder(...)`, looking up a bundle named `mtls` from Spring's
+   `SslBundles` registry when present.
 
 ## 12. Backup, rotation and production hardening
 
@@ -326,7 +355,9 @@ code and is usually the better answer than doing it per service.
 
 ## 13. What this does not cover
 
-* mTLS between services ([section 11](#11-mutual-tls-between-services)), and TLS for Kafka, Redis and Postgres.
+* TLS for Kafka, Redis and Postgres, and the nginx -> api-gateway hop (see `upstream.conf`).
+* `product-service` in the mTLS rollout ([section 11](#11-mutual-tls-between-services)) - it has no
+  Kubernetes Deployment at all, and was never part of Compose's PKI-patched service list.
 * Client-certificate authentication of people/devices (the X5C and SSH provisioners can do it).
 * SSH certificates (`step ssh`), a feature of smallstep not used here.
 * Public trust: this CA is private. Browsers outside your machines will not trust it; for a public site use

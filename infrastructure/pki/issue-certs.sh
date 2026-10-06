@@ -56,4 +56,23 @@ issue nginx    localhost 127.0.0.1 nginx
 issue keycloak keycloak localhost 127.0.0.1
 issue vault    vault localhost 127.0.0.1
 
+# Backend services - mutual TLS between them, see docs/SMALLSTEP_PKI.md section 11.
+# api-gateway's cert is also the source for its PKCS12 keystore (pki-keystore, below).
+issue customer-service     customer-service     localhost 127.0.0.1
+issue order-service        order-service        localhost 127.0.0.1
+issue inventory-service    inventory-service    localhost 127.0.0.1
+issue payment-service      payment-service      localhost 127.0.0.1
+issue notification-service notification-service localhost 127.0.0.1
+issue api-gateway          api-gateway          localhost 127.0.0.1
+
+# Spring Cloud Gateway's outbound HTTP client needs a PKCS12 keystore, not the PEM pair
+# every other consumer reads directly (see infrastructure/api-gateway's application-mtls.yml).
+# Built here so it exists before api-gateway's first start; kept fresh afterwards by
+# pki-renewer's own hourly rebuild loop (see renew.sh - that keystore doesn't hot-reload,
+# so api-gateway needs a restart after each renewal regardless of how fresh this file is).
+step certificate p12 "$OUT/api-gateway/keystore.p12" \
+  "$OUT/api-gateway/tls.crt" "$OUT/api-gateway/tls.key" \
+  --password-file /pki/pkcs12-password --force
+chmod 644 "$OUT/api-gateway/keystore.p12"
+
 log "done"

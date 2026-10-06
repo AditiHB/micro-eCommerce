@@ -1,125 +1,51 @@
+# Mutual TLS between backend services - see docs/SMALLSTEP_PKI.md section 11.
+# Layers onto whatever profile is already active (e.g. "postgres,mtls"); it does not
+# repeat datasource/Kafka/Redis/logging config that belongs to that profile already.
+#
+# Serves TLS on the main server port and requires a client certificate from every
+# caller. The management port (actuator/probes) is untouched and stays plain HTTP -
+# Spring Boot only applies TLS to the separate management server if management.server.ssl
+# is set, which it isn't here, so k8s liveness/readiness probes are unaffected.
 server:
-  port: 8084
   ssl:
-    enabled: true
-    key-store-type: PKCS12
-    key-store: file:/etc/certs/payment-service/tls.crt
-    key-store-password: changeit
-    key-alias: payment-service
+    bundle: mtls
     client-auth: need
 
-spring:
-  application:
-    name: payment-service
-  config:
-    import: "optional:configserver:https://config-server.ecommerce.svc.cluster.local:8888/"
-  flyway:
-    enabled: true
-    baselineOnMigrate: true
-    validateOnMigrate: true
-    locations: classpath:db/migration/{vendor}
-    outOfOrder: false
-  kafka:
-    bootstrap-servers: kafka:9092
-    producer:
-      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
-    consumer:
-      group-id: payment-group
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      properties:
-        spring.json.trusted.packages: "*"
-  datasource:
-    url: jdbc:h2:mem:payment_db
-    driverClassName: org.h2.Driver
-    username: sa
-    password: password
-  jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
-    hibernate:
-      ddl-auto: validate
-    show-sql: true
-  h2:
-    console:
-      enabled: true
-  redis:
-    host: redis
-    port: 6379
-    database: 4
-    timeout: 2000ms
-    lettuce:
-      pool:
-        max-active: 8
-        max-idle: 8
-        min-idle: 0
-  cache:
-    type: redis
-    redis:
-      time-to-live: 600000
-      key-prefix: "payment-service:"
-
-services:
-  order:
-    url: https://order-service.ecommerce.svc.cluster.local:8083
-
-rest-client:
-  connect-timeout: 10000
-  read-timeout: 30000
-  socket-timeout: 30000
-
-resilience4j:
-  circuitbreaker:
-    instances:
-      paymentService:
-        slidingWindowSize: 5
-        failureRateThreshold: 50
-        waitDurationInOpenState: 10s
-  retry:
-    instances:
-      paymentService:
-        maxAttempts: 3
-        waitDuration: 2s
-
-eureka:
-  client:
-    service-url:
-      defaultZone: https://discovery-server.ecommerce.svc.cluster.local:8761/eureka/
-    secure-port-enabled: true
-    instance:
-      prefer-ip-address: false
-      hostname: payment-service.ecommerce.svc.cluster.local
-
+# Confirmed live: Spring Boot's separate management server inherits server.ssl by default when
+# management.server.ssl isn't set at all, even on its own port - it does NOT default to plain HTTP
+# the way a first read of the docs suggests. Without this, the management port's actuator health
+# endpoint (what every k8s liveness/readiness probe hits) would also demand a client certificate.
 management:
-  endpoints:
-    web:
-      exposure:
-        include: health,metrics,prometheus,info
-  endpoint:
-    health:
-      show-details: always
-      show-components: always
-      probes:
-        enabled: true
-  metrics:
-    export:
-      prometheus:
-        enabled: true
-    tags:
-      application: ${spring.application.name}
-      environment: kubernetes
-  health:
-    livenessState:
-      enabled: true
-    readinessState:
-      enabled: true
-  tracing:
-    sampling:
-      probability: 1.0
+  server:
+    ssl:
+      enabled: false
 
-logging:
-  level:
-    com.ecommerce: DEBUG
-    org.springframework.web: DEBUG
-    org.springframework.security: DEBUG
-    org.springframework.data: DEBUG
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+spring:
+  ssl:
+    bundle:
+      pem:
+        mtls:
+          reload-on-update: true
+          keystore:
+            certificate: file:/certs/payment-service/tls.crt
+            private-key: file:/certs/payment-service/tls.key
+          truststore:
+            certificate: ${ECOMMERCE_SECURITY_MTLS_TRUSTSTORE:file:/certs/ca/ca-bundle.crt}
+
+# Eureka must advertise a stable hostname that appears in the certificate's SANs,
+# never a pod IP (dynamic, can't be in a static cert) - and must say this instance
+# only speaks TLS, so the gateway's lb://payment-service route resolves to
+# https://payment-service:8084 instead of http://<pod-ip>:8084. The bare service
+# name resolves the same way under Docker Compose (container name) and Kubernetes
+# (same-namespace Service name), so this file needs no per-environment branching.
+# instance-id includes POD_NAME (Kubernetes Downward API; falls back to a random
+# value under Compose) so replicas sharing one hostname+port don't collapse into a
+# single Eureka registration.
+eureka:
+  instance:
+    prefer-ip-address: false
+    hostname: payment-service
+    secure-port-enabled: true
+    non-secure-port-enabled: false
+    secure-port: ${server.port}
+    instance-id: ${spring.application.name}:${POD_NAME:${random.value}}

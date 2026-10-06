@@ -1,0 +1,151 @@
+# One short-lived leaf certificate per backend service, issued by the platform CA bootstrapped in
+# cluster-issuer.yaml. SANs are the bare k8s Service name and its FQDN - every service's own
+# application-mtls.yml (common to Compose and k8s) advertises the bare name to Eureka, so the
+# gateway's lb://<service> route resolves to https://<service>:<port>, which must match a SAN here.
+# duration/renewBefore mirror Docker Compose's step-ca certs (24h, renewed with 8h left) for parity,
+# though cert-manager renews by rewriting the Secret in place - no renewer sidecar needed here,
+# unlike Compose's pki-renewer (the kubelet syncs a mounted Secret volume within ~60-90s).
+#
+# product-service has no certificate here and isn't part of this rollout - it has no Deployment in
+# k8s/base at all (see docs/SMALLSTEP_PKI.md section 11's scope note).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: customer-service-tls
+  namespace: ecommerce
+spec:
+  secretName: customer-service-tls
+  duration: 24h
+  renewBefore: 8h
+  dnsNames:
+    - customer-service
+    - customer-service.ecommerce.svc.cluster.local
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: ecommerce-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: order-service-tls
+  namespace: ecommerce
+spec:
+  secretName: order-service-tls
+  duration: 24h
+  renewBefore: 8h
+  dnsNames:
+    - order-service
+    - order-service.ecommerce.svc.cluster.local
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: ecommerce-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: inventory-service-tls
+  namespace: ecommerce
+spec:
+  secretName: inventory-service-tls
+  duration: 24h
+  renewBefore: 8h
+  dnsNames:
+    - inventory-service
+    - inventory-service.ecommerce.svc.cluster.local
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: ecommerce-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: payment-service-tls
+  namespace: ecommerce
+spec:
+  secretName: payment-service-tls
+  duration: 24h
+  renewBefore: 8h
+  dnsNames:
+    - payment-service
+    - payment-service.ecommerce.svc.cluster.local
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: ecommerce-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: notification-service-tls
+  namespace: ecommerce
+spec:
+  secretName: notification-service-tls
+  duration: 24h
+  renewBefore: 8h
+  dnsNames:
+    - notification-service
+    - notification-service.ecommerce.svc.cluster.local
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: ecommerce-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# api-gateway: no server.ssl - its inbound side (nginx -> gateway) is untouched, see its own
+# application-mtls.yml. It needs a PKCS12 keystore instead of the PEM pair every other service
+# gets, because Spring Cloud Gateway 4.1's outbound client can't take a Spring SSL bundle - cert-
+# manager emits one natively as an extra key in the same Secret (keystore.p12), so there's no
+# manual openssl/keytool conversion step in k8s, unlike Compose's pki-keystore equivalent.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-gateway-keystore-password
+  namespace: ecommerce
+type: Opaque
+stringData:
+  # Protects the keystore's integrity only, not a secret - same "changeit" convention already
+  # used by docker-compose.pki.yml's pki-truststore and infrastructure/pki/pkcs12-password.
+  password: changeit
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: api-gateway-tls
+  namespace: ecommerce
+spec:
+  secretName: api-gateway-tls
+  duration: 24h
+  renewBefore: 8h
+  dnsNames:
+    - api-gateway
+    - api-gateway.ecommerce.svc.cluster.local
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  keystores:
+    pkcs12:
+      create: true
+      passwordSecretRef:
+        name: api-gateway-keystore-password
+        key: password
+  issuerRef:
+    name: ecommerce-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io

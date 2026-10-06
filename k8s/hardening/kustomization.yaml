@@ -4,9 +4,11 @@
 #   kubectl apply -k k8s/hardening
 #
 # See network-policies.yaml's own header for what this adds, its CNI
-# prerequisite, and why this project's original NetworkPolicy/RBAC/
-# mTLS/cert-manager manifests were cut rather than carried forward -
-# docs/KUBERNETES_DEPLOYMENT.md has the full writeup.
+# prerequisite, and why this project's original NetworkPolicy/RBAC manifests
+# were cut rather than carried forward - docs/KUBERNETES_DEPLOYMENT.md has
+# the full writeup. mTLS/cert-manager was also cut for the same reasons, but
+# has since been rebuilt correctly as its own overlay: see
+# k8s/overlays/mtls/README.md.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

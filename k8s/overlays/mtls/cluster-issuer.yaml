@@ -1,0 +1,45 @@
+# Bootstraps the platform's own CA entirely inside cert-manager - no external CA service (unlike
+# Docker Compose's smallstep step-ca) is needed in Kubernetes. See docs/SMALLSTEP_PKI.md section 11
+# for why the two environments use different CA mechanics while every backend service consumes the
+# result identically either way (a PEM cert+key+CA bundle under /certs/<service>).
+#
+# 1. A self-signed bootstrap Issuer - exists only to sign the root CA certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-bootstrap
+  namespace: cert-manager
+spec:
+  selfSigned: {}
+---
+# 2. The platform's root CA certificate, signed by the bootstrap issuer. Lives in the
+#    "cert-manager" namespace because that's cert-manager's default cluster-resource-namespace -
+#    where a ClusterIssuer of kind CA looks up its secretName.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ecommerce-root-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: micro-ecommerce-root-ca
+  secretName: ecommerce-root-ca-secret
+  duration: 8760h # 1 year - this is the root, not a leaf; leaves renew far more often (certificates.yaml)
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: Issuer
+    group: cert-manager.io
+---
+# 3. The issuer every service's Certificate (certificates.yaml) actually uses - a CA issuer backed
+#    by the root minted above. Cluster-scoped: shared by every namespace, not locked to "ecommerce".
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: ecommerce-ca-issuer
+spec:
+  ca:
+    secretName: ecommerce-root-ca-secret
