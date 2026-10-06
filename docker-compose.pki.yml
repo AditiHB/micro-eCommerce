@@ -234,6 +234,7 @@ services:
       <<: *pki-trust
       SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:+${SPRING_PROFILES_ACTIVE},}mtls"
       CUSTOMER_SERVICE_URL: "https://customer-service:8081"
+      CATALOG_SERVICE_URL: "https://inventory-service:8082"
     volumes:
       - *pki-ca-volume
       - type: volume
@@ -277,19 +278,6 @@ services:
         read_only: true
         volume:
           subpath: notification-service
-    depends_on:
-      pki-truststore:
-        condition: service_completed_successfully
-
-  # product-service only trusts Keycloak over HTTPS here - it's not part of the mTLS mesh (no leaf
-  # certificate, no "mtls" profile): it predates that work and was never added to the PKI overlay at
-  # all before now, which meant any token obtained from this overlay's HTTPS Keycloak failed here
-  # with an issuer mismatch (confirmed live: SECURITY_ISSUER was still the plain-HTTP default) even
-  # though every other PKI-patched service already trusted it correctly.
-  product-service:
-    environment: *pki-trust
-    volumes:
-      - *pki-ca-volume
     depends_on:
       pki-truststore:
         condition: service_completed_successfully

@@ -9,11 +9,10 @@ Every microservice owns its **own database** and its own migration files - there
 | Service | Database | Migration files |
 |---|---|---|
 | customer-service | `customer_db` | [services/customer-service/src/main/resources/db/migration](../services/customer-service/src/main/resources/db/migration) |
-| inventory-service | `inventory_db` | [services/inventory-service/src/main/resources/db/migration](../services/inventory-service/src/main/resources/db/migration) |
+| inventory-service | `inventory_db` | [services/inventory-service/src/main/resources/db/migration](../services/inventory-service/src/main/resources/db/migration) - also owns the product catalogue (`products` table; the former product-service's `product_db` was merged in) |
 | order-service | `order_db` | [services/order-service/src/main/resources/db/migration](../services/order-service/src/main/resources/db/migration) |
 | payment-service | `payment_db` | [services/payment-service/src/main/resources/db/migration](../services/payment-service/src/main/resources/db/migration) |
 | notification-service | `notification_db` | [services/notification-service/src/main/resources/db/migration](../services/notification-service/src/main/resources/db/migration) |
-| product-service | `product_db` | [services/product-service/src/main/resources/db/migration](../services/product-service/src/main/resources/db/migration) |
 
 Each service's migration directory has a subfolder per database vendor - `h2/`, `oracle/`, `postgresql/` - and Spring Boot picks the right one at runtime via the `{vendor}` placeholder in `spring.flyway.locations` (`classpath:db/migration/{vendor}`). Filenames follow Flyway's standard versioned convention: `V1__Create_X_Table.sql`, `V2__...sql`, etc.
 

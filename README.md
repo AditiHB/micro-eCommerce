@@ -83,12 +83,14 @@ This project implements a cloud-native microservices architecture for an e-comme
   - Account verification and authentication
 
 ### 2. **Inventory Service** (Port 8082)
-- **Responsibility:** Product stock management and reservation
+- **Responsibility:** The product catalogue and stock management (the former Product Service was merged into this service - one owner for everything about a product)
 - **Key Features:**
+  - Product catalogue CRUD, search, category browsing, and batch SKU lookup (used by Order Service to price an order)
   - Stock level tracking
   - Inventory reservation during order placement
   - Stock replenishment management
-  - Event-driven stock updates
+  - Event-driven stock and catalogue updates
+  - Redis-backed caching of catalogue reads
 
 ### 3. **Order Service** (Port 8083)
 - **Responsibility:** Order lifecycle management
@@ -105,17 +107,6 @@ This project implements a cloud-native microservices architecture for an e-comme
   - Multiple payment gateway support
   - Refund management
   - Transaction logging and reconciliation
-
-### 5. **Product Service** (Port 8085)
-- **Responsibility:** Product catalog management and inventory coordination
-- **Key Features:**
-  - Product CRUD operations (Create, Read, Update, Delete)
-  - Product catalog browsing with pagination and filtering
-  - Product categorization
-  - Inventory tracking and availability monitoring
-  - Event-driven updates with Kafka
-  - Multi-database support (H2, PostgreSQL, Oracle)
-  - Product search and low-stock alerts
 
 ---
 
@@ -176,7 +167,7 @@ micro-eCommerce/
 │   ├── customer-service/                       # Customer management
 │   │   ├── pom.xml
 │   │   └── src/
-│   ├── inventory-service/                      # Inventory management
+│   ├── inventory-service/                      # Product catalogue + inventory management
 │   │   ├── pom.xml
 │   │   └── src/
 │   ├── order-service/                          # Order management
@@ -185,10 +176,7 @@ micro-eCommerce/
 │   ├── payment-service/                        # Payment processing
 │   │   ├── pom.xml
 │   │   └── src/
-│   ├── notification-service/                   # Customer/order notifications
-│   │   ├── pom.xml
-│   │   └── src/
-│   └── product-service/                        # Product catalog management
+│   └── notification-service/                   # Customer/order notifications
 │       ├── pom.xml
 │       └── src/
 │
@@ -265,12 +253,6 @@ cd services/payment-service
 mvn spring-boot:run
 ```
 
-**Terminal 8: Product Service**
-```bash
-cd services/product-service
-mvn spring-boot:run
-```
-
 ---
 
 ## 🐳 Docker Deployment
@@ -327,7 +309,6 @@ See **[docs/SETUP_AND_DEPLOYMENT.md](docs/SETUP_AND_DEPLOYMENT.md)** for the ful
 - **Inventory Service:** http://localhost:8082
 - **Order Service:** http://localhost:8083
 - **Payment Service:** http://localhost:8084
-- **Product Service:** http://localhost:8085
 - **Kafka Broker:** localhost:9092
 - **Zookeeper:** localhost:2181
 

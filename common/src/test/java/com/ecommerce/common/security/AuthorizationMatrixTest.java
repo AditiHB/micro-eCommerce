@@ -104,7 +104,7 @@ class AuthorizationMatrixTest {
                 new Rule(HttpMethod.POST, "/api/v1/inventory/1/reserve", ADMIN_ONLY),
                 new Rule(HttpMethod.POST, "/api/v1/inventory/1/release", ADMIN_ONLY),
                 new Rule(HttpMethod.PUT, "/api/v1/inventory/1", BACK_OFFICE),
-                // product-service
+                // the product catalogue (served by inventory-service)
                 new Rule(HttpMethod.GET, "/api/v1/products", ANYONE_AUTHENTICATED),
                 new Rule(HttpMethod.GET, "/api/v1/products/sku/ABC", ANYONE_AUTHENTICATED),
                 new Rule(HttpMethod.POST, "/api/v1/products", BACK_OFFICE),

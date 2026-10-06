@@ -22,8 +22,8 @@ BOOT=/bootstrap
 POLICIES=/policies
 mkdir -p "$BOOT"
 
-SERVICES="customer-service order-service inventory-service payment-service notification-service product-service"
-DB_SERVICES="customer order inventory payment notification product"
+SERVICES="customer-service order-service inventory-service payment-service notification-service"
+DB_SERVICES="customer order inventory payment notification"
 
 log() { echo "[vault-init] $*"; }
 

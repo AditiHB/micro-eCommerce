@@ -7,12 +7,6 @@ spring:
     timeout-per-shutdown-phase: 30s
   application:
     name: inventory-service
-  autoconfigure:
-    # Only customer-service and product-service cache (reference data); the others do not use Redis at all.
-    exclude:
-      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
-      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
-      - org.springframework.boot.actuate.autoconfigure.data.redis.RedisHealthContributorAutoConfiguration
   cloud:
     vault:
       # Switched on by the `vault` profile (see application-vault.yml); off for plain local runs.
@@ -54,6 +48,22 @@ spring:
     hibernate:
       ddl-auto: validate
     show-sql: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: 0
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+      password: ${REDIS_PASSWORD:}
+  cache:
+    type: redis
+    redis:
+      time-to-live: 600000
 
 eureka:
   client:

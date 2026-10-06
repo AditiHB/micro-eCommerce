@@ -32,12 +32,14 @@ spring:
           truststore:
             certificate: ${ECOMMERCE_SECURITY_MTLS_TRUSTSTORE:file:/certs/ca/ca-bundle.crt}
 
-# CustomerDirectoryClient's outbound call to customer-service (CatalogClient's call
-# to product-service is untouched - product-service is not part of this rollout,
-# see docs/SMALLSTEP_PKI.md section 11's scope note).
+# CustomerDirectoryClient's outbound call to customer-service, and CatalogClient's outbound call to
+# inventory-service (the catalogue, merged in from product-service - inventory-service is already part
+# of the mTLS mesh, see docs/SMALLSTEP_PKI.md section 11).
 services:
   customer:
     url: https://customer-service:8081
+  catalog:
+    url: https://inventory-service:8082
 
 # Eureka must advertise a stable hostname that appears in the certificate's SANs,
 # never a pod IP (dynamic, can't be in a static cert) - and must say this instance

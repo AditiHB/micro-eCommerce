@@ -46,7 +46,7 @@ spec:
               name: ecommerce-secrets
               key: postgres-admin-password
         - name: POSTGRES_MULTIPLE_DATABASES
-          value: "customer_db,inventory_db,order_db,payment_db,notification_db,product_db"
+          value: "customer_db,inventory_db,order_db,payment_db,notification_db"
         - name: CUSTOMER_DB_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -72,11 +72,6 @@ spec:
             secretKeyRef:
               name: ecommerce-secrets
               key: notification-db-password
-        - name: PRODUCT_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: ecommerce-secrets
-              key: product-db-password
         - name: VAULT_DB_ADMIN_PASSWORD
           valueFrom:
             secretKeyRef:

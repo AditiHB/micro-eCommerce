@@ -8,7 +8,7 @@ spring:
   application:
     name: notification-service
   autoconfigure:
-    # Only customer-service and product-service cache (reference data); the others do not use Redis at all.
+    # Only customer-service and inventory-service cache (reference data); the others do not use Redis at all.
     exclude:
       - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
       - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration

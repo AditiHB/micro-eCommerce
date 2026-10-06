@@ -54,7 +54,7 @@ x-business-env: &business-env
   DB_HOST: "postgres"
   SPRING_PROFILES_ACTIVE: "${SPRING_PROFILES_ACTIVE:-}"
 
-# Services that cache reference data (customer, product) also get the shared Redis.
+# Services that cache reference data (customer, inventory - for its catalogue) also get the shared Redis.
 x-cached-env: &cached-env
   <<: *business-env
   REDIS_HOST: "redis"
@@ -281,8 +281,10 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
-      <<: *business-env
+      <<: *cached-env
       DB_USERNAME: "inventory_owner"
       DB_PASSWORD: "${INVENTORY_DB_PASSWORD:?run scripts/gen-env.sh}"
       JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
@@ -307,7 +309,7 @@ services:
         condition: service_healthy
     environment:
       <<: *business-env
-      PRODUCT_SERVICE_URL: "http://product-service:8085"
+      CATALOG_SERVICE_URL: "http://inventory-service:8082"
       CUSTOMER_SERVICE_URL: "http://customer-service:8081"
       DB_USERNAME: "order_owner"
       DB_PASSWORD: "${ORDER_DB_PASSWORD:?run scripts/gen-env.sh}"
@@ -339,31 +341,8 @@ services:
     mem_limit: 512m
     mem_reservation: 256m
 
-  product-service:
-    build:
-      context: .
-      dockerfile: Dockerfile.product-service
-    container_name: product-service
-    ports:
-      - "127.0.0.1:8085:8085"
-    depends_on:
-      config-server:
-        condition: service_started
-      discovery-server:
-        condition: service_started
-      kafka:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    environment:
-      <<: *cached-env
-      DB_USERNAME: "product_owner"
-      DB_PASSWORD: "${PRODUCT_DB_PASSWORD:?run scripts/gen-env.sh}"
-      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
-    mem_limit: 512m
-    mem_reservation: 256m
+  # product-service was merged into inventory-service: the catalogue is now served from inventory_db above,
+  # at the same /api/v1/products routes, so there is no separate product-service container here any more.
 
   notification-service:
     build:
@@ -411,13 +390,12 @@ services:
     environment:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "${POSTGRES_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
-      POSTGRES_MULTIPLE_DATABASES: customer_db,inventory_db,order_db,payment_db,notification_db,product_db
+      POSTGRES_MULTIPLE_DATABASES: customer_db,inventory_db,order_db,payment_db,notification_db
       CUSTOMER_DB_PASSWORD: "${CUSTOMER_DB_PASSWORD:?run scripts/gen-env.sh}"
       INVENTORY_DB_PASSWORD: "${INVENTORY_DB_PASSWORD:?run scripts/gen-env.sh}"
       ORDER_DB_PASSWORD: "${ORDER_DB_PASSWORD:?run scripts/gen-env.sh}"
       PAYMENT_DB_PASSWORD: "${PAYMENT_DB_PASSWORD:?run scripts/gen-env.sh}"
       NOTIFICATION_DB_PASSWORD: "${NOTIFICATION_DB_PASSWORD:?run scripts/gen-env.sh}"
-      PRODUCT_DB_PASSWORD: "${PRODUCT_DB_PASSWORD:?run scripts/gen-env.sh}"
       # Only used by docker-compose.vault.yml: the login Vault uses to mint short-lived DB roles.
       VAULT_DB_ADMIN_PASSWORD: "${VAULT_DB_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
     ports:

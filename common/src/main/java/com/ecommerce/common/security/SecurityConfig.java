@@ -103,7 +103,7 @@ public class SecurityConfig {
                     authorize.requestMatchers(HttpMethod.PUT, INVENTORY).hasAnyRole(Roles.ADMIN, Roles.MANAGER);
                     authorize.requestMatchers(HttpMethod.POST, INVENTORY).hasRole(Roles.ADMIN);
 
-                    // --- product-service ---
+                    // --- the product catalogue (served by inventory-service) ---
                     authorize.requestMatchers(HttpMethod.GET, PRODUCTS)
                             .hasAnyRole(Roles.USER, Roles.ADMIN, Roles.MANAGER, Roles.SERVICE);
                     authorize.requestMatchers(HttpMethod.POST, PRODUCTS).hasAnyRole(Roles.ADMIN, Roles.MANAGER);

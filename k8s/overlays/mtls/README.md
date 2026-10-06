@@ -11,8 +11,6 @@ both untouched - nothing in the mesh calls either of them the way it calls the o
 `docs/SMALLSTEP_PKI.md` section 11 for the full design and why Docker Compose and Kubernetes issue
 certificates differently while every service consumes them the same way.
 
-`product-service` is not part of this: it has no Deployment in `k8s/base` at all.
-
 ## Prerequisite: cert-manager
 
 This overlay's `cluster-issuer.yaml`/`certificates.yaml` need cert-manager's CRDs already
@@ -36,7 +34,7 @@ kubectl get certificate -n cert-manager
 
 Same scope as `docs/SMALLSTEP_PKI.md` section 11: the nginx -> api-gateway hop, Eureka/
 config-server control-plane traffic, and Kafka/Redis/Postgres are all still plain (TLS or auth
-only, no mutual TLS). `product-service` is untouched (no k8s Deployment exists for it).
+only, no mutual TLS).
 
 ## Known trade-offs
 

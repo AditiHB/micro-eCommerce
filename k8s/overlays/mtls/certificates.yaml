@@ -5,9 +5,6 @@
 # duration/renewBefore mirror Docker Compose's step-ca certs (24h, renewed with 8h left) for parity,
 # though cert-manager renews by rewriting the Secret in place - no renewer sidecar needed here,
 # unlike Compose's pki-renewer (the kubelet syncs a mounted Secret volume within ~60-90s).
-#
-# product-service has no certificate here and isn't part of this rollout - it has no Deployment in
-# k8s/base at all (see docs/SMALLSTEP_PKI.md section 11's scope note).
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

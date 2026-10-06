@@ -98,10 +98,14 @@ Feature: Resilience - what happens when Kafka or a service is down
 
   Scenario: A dependency outage is a clean 503 problem and leaves no order behind
 
-    * configure afterScenario = function(){ docker.start('product-service') }
+    # The catalogue (price/currency lookup) is served by inventory-service - stopping it here only
+    # exercises the synchronous pricing call order creation makes before anything is persisted or any
+    # saga step runs, so stock reservation is never reached and this scenario's assertions are
+    # unaffected by inventory-service also owning stock.
+    * configure afterScenario = function(){ docker.start('inventory-service') }
     * def customer = call read('classpath:e2e/helpers/create-customer.feature') { token: '#(token)' }
     * def product = call read('classpath:e2e/helpers/create-product.feature') { token: '#(token)', price: 10.00, stock: 5 }
-    * eval docker.stop('product-service')
+    * eval docker.stop('inventory-service')
 
     # order-service cannot price the order without the catalogue: 503, with a stable code, and retryable
     Given path '/api/v1/orders'
@@ -111,8 +115,8 @@ Feature: Resilience - what happens when Kafka or a service is down
     And match response.errorCode == 'DEPENDENCY_UNAVAILABLE'
     And match responseHeaders['Content-Type'][0] contains 'application/problem+json'
 
-    * eval docker.start('product-service')
-    * assert docker.waitUntilHealthy('product-service', 120)
+    * eval docker.start('inventory-service')
+    * assert docker.waitUntilHealthy('inventory-service', 120)
     * def after = call read('classpath:e2e/helpers/count-orders.feature') { token: '#(token)', customerId: '#(customer.customerId)' }
     * match after.total == 0
 
