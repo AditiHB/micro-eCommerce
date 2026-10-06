@@ -169,9 +169,8 @@ micro-eCommerce/
 │   │       └── application.yml         # Service config
 │   ├── order-service/                  # Order management
 │   ├── payment-service/                # Payment processing
-│   ├── inventory-service/              # Inventory management
-│   ├── notification-service/           # Customer/order notifications
-│   └── product-service/                # Product catalog
+│   ├── inventory-service/              # Product catalogue + inventory management
+│   └── notification-service/           # Customer/order notifications
 │
 ├── infrastructure/                     # Infra services + ops config
 │   ├── api-gateway/                    # Spring Cloud Gateway

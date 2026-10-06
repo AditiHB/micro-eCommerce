@@ -40,7 +40,6 @@ order-db-password=${ORDER_DB_PASSWORD:?}
 inventory-db-password=${INVENTORY_DB_PASSWORD:?}
 payment-db-password=${PAYMENT_DB_PASSWORD:?}
 notification-db-password=${NOTIFICATION_DB_PASSWORD:?}
-product-db-password=${PRODUCT_DB_PASSWORD:?}
 EOF
 
 cp infrastructure/keycloak/realm-ecommerce.json "$OUT/realm-ecommerce.json"

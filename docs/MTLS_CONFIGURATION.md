@@ -11,11 +11,8 @@ pointer plus the history of why an earlier attempt was removed, not a second cop
 - **Kubernetes**: `k8s/overlays/mtls/` (`kustomization.yaml`, `cluster-issuer.yaml`,
   `certificates.yaml`, `README.md` - prerequisites, trade-offs, and how to verify enforcement).
 - **Application config**: each service's `application-mtls.yml`; the shared SSL-aware overload of
-  `common`'s `RestClients.builder(...)` used by the two real cross-service callers
-  (`order-service`'s `CustomerDirectoryClient`, `notification-service`'s `CustomerClient`).
-
-`product-service` is not covered - it has no Kubernetes Deployment at all, and was never part of
-Docker Compose's PKI-patched service list either.
+  `common`'s `RestClients.builder(...)` used by the real cross-service callers (`order-service`'s
+  `CustomerDirectoryClient` and `CatalogClient`, `notification-service`'s `CustomerClient`).
 
 ## History: why the first attempt was removed
 

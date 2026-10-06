@@ -10,6 +10,14 @@ spring:
       enabled: false
     vault:
       enabled: false
+  data:
+    redis:
+      # Nothing listens here by default: tests that do not need the catalogue cache run through the
+      # cache-outage path (every cache call fails fast and is treated as a miss). The cache tests point
+      # this at a real Redis (see SharedRedis).
+      host: localhost
+      port: 6399
+      timeout: 500ms
   kafka:
     admin:
       auto-create: false

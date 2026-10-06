@@ -42,7 +42,7 @@ fi
 
 # --- datastores ---------------------------------------------------------------------------------
 ensure POSTGRES_ADMIN_PASSWORD   "$(secret)"
-for svc in CUSTOMER ORDER INVENTORY PAYMENT NOTIFICATION PRODUCT; do
+for svc in CUSTOMER ORDER INVENTORY PAYMENT NOTIFICATION; do
   ensure "${svc}_DB_PASSWORD"    "$(secret)"
 done
 ensure REDIS_PASSWORD            "$(secret)"

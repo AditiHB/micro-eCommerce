@@ -77,7 +77,6 @@ services:
       INVENTORY_DB_PASSWORD: "${INVENTORY_DB_PASSWORD:?run scripts/gen-env.sh}"
       PAYMENT_DB_PASSWORD: "${PAYMENT_DB_PASSWORD:?run scripts/gen-env.sh}"
       NOTIFICATION_DB_PASSWORD: "${NOTIFICATION_DB_PASSWORD:?run scripts/gen-env.sh}"
-      PRODUCT_DB_PASSWORD: "${PRODUCT_DB_PASSWORD:?run scripts/gen-env.sh}"
       VAULT_DB_ADMIN_PASSWORD: "${VAULT_DB_ADMIN_PASSWORD:?run scripts/gen-env.sh}"
     volumes:
       - ./infrastructure/vault/bootstrap.sh:/init/bootstrap.sh:ro
@@ -132,15 +131,6 @@ services:
     volumes:
       # This service's AppRole credentials (files named after the Spring properties), read via configtree.
       - ./.vault/approle/payment-service:/run/secrets:ro
-    depends_on:
-      vault-init:
-        condition: service_completed_successfully
-
-  product-service:
-    environment: *vault-env
-    volumes:
-      # This service's AppRole credentials (files named after the Spring properties), read via configtree.
-      - ./.vault/approle/product-service:/run/secrets:ro
     depends_on:
       vault-init:
         condition: service_completed_successfully

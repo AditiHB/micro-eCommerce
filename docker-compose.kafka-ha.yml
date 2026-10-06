@@ -95,8 +95,6 @@ services:
     <<: *uses-kafka-ha
   payment-service:
     <<: *uses-kafka-ha
-  product-service:
-    <<: *uses-kafka-ha
   notification-service:
     <<: *uses-kafka-ha
 

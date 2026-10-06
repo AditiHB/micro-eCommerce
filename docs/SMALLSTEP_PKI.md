@@ -288,8 +288,9 @@ service-to-service call. `notification-service` is a one-way exception: nothing 
 it (it's reached directly and externally, like Postman - see its own `application-mtls.yml`), so
 its inbound side stays plain HTTP; it only uses its certificate as a *client* identity for its one
 outbound call to customer-service. `api-gateway`'s inbound side is untouched too (see below).
-`product-service` is not part of any of this - it has no Kubernetes Deployment at all, and isn't in
-Compose's PKI-patched service list either.
+`order-service`'s `CatalogClient` also uses the SSL-aware `RestClients` overload for its outbound
+call to `inventory-service` (the catalogue, merged in from the former product-service) once
+`inventory-service` requires a client certificate.
 
 Activate it on top of whatever profile is already active:
 
@@ -356,8 +357,6 @@ What this took, for reference (all now wired up, not just planned):
 ## 13. What this does not cover
 
 * TLS for Kafka, Redis and Postgres, and the nginx -> api-gateway hop (see `upstream.conf`).
-* `product-service` in the mTLS rollout ([section 11](#11-mutual-tls-between-services)) - it has no
-  Kubernetes Deployment at all, and was never part of Compose's PKI-patched service list.
 * Client-certificate authentication of people/devices (the X5C and SSH provisioners can do it).
 * SSH certificates (`step ssh`), a feature of smallstep not used here.
 * Public trust: this CA is private. Browsers outside your machines will not trust it; for a public site use

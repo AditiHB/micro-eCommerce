@@ -784,7 +784,7 @@
     },
     {
       "name": "Products",
-      "description": "product-service is not wired into docker-compose.yml or the API Gateway's routes in this repo - run it separately (e.g. `mvn -pl services/product-service spring-boot:run`) and hit it directly.",
+      "description": "The catalogue is served by inventory-service (the former product-service was merged into it) and routed through the API Gateway like every other business service.",
       "item": [
         {
           "name": "Create Product",
@@ -802,15 +802,16 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Wireless Mouse\",\n  \"description\": \"Ergonomic wireless mouse\",\n  \"price\": 29.99,\n  \"sku\": \"WM-001\",\n  \"category\": \"Electronics\",\n  \"quantityAvailable\": 100\n}"
+              "raw": "{\n  \"name\": \"Wireless Mouse\",\n  \"description\": \"Ergonomic wireless mouse\",\n  \"price\": 29.99,\n  \"sku\": \"WM-001\",\n  \"category\": \"Electronics\"\n}"
             },
             "url": {
-              "raw": "{{product_base_url}}/api/products",
+              "raw": "{{base_url}}/api/v1/products",
               "host": [
-                "{{product_base_url}}"
+                "{{base_url}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "products"
               ]
             }
@@ -828,12 +829,13 @@
               }
             ],
             "url": {
-              "raw": "{{product_base_url}}/api/products?page=0&size=20",
+              "raw": "{{base_url}}/api/v1/products?page=0&size=20",
               "host": [
-                "{{product_base_url}}"
+                "{{base_url}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "products"
               ],
               "query": [
@@ -861,12 +863,13 @@
               }
             ],
             "url": {
-              "raw": "{{product_base_url}}/api/products/1",
+              "raw": "{{base_url}}/api/v1/products/1",
               "host": [
-                "{{product_base_url}}"
+                "{{base_url}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "products",
                 "1"
               ]
@@ -885,15 +888,47 @@
               }
             ],
             "url": {
-              "raw": "{{product_base_url}}/api/products/sku/WM-001",
+              "raw": "{{base_url}}/api/v1/products/sku/WM-001",
               "host": [
-                "{{product_base_url}}"
+                "{{base_url}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "products",
                 "sku",
                 "WM-001"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Lookup Products by SKU (batch pricing)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/products/lookup?skus=WM-001,SKU-002",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "products",
+                "lookup"
+              ],
+              "query": [
+                {
+                  "key": "skus",
+                  "value": "WM-001,SKU-002"
+                }
               ]
             }
           },
@@ -910,12 +945,13 @@
               }
             ],
             "url": {
-              "raw": "{{product_base_url}}/api/products/category/Electronics?page=0&size=20",
+              "raw": "{{base_url}}/api/v1/products/category/Electronics?page=0&size=20",
               "host": [
-                "{{product_base_url}}"
+                "{{base_url}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "products",
                 "category",
                 "Electronics"
@@ -945,12 +981,13 @@
               }
             ],
             "url": {
-              "raw": "{{product_base_url}}/api/products/search?term=mouse&page=0&size=20",
+              "raw": "{{base_url}}/api/v1/products/search?term=mouse&page=0&size=20",
               "host": [
-                "{{product_base_url}}"
+                "{{base_url}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "products",
                 "search"
               ],
@@ -973,64 +1010,6 @@
           "response": []
         },
         {
-          "name": "Get Available Products",
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              }
-            ],
-            "url": {
-              "raw": "{{product_base_url}}/api/products/available?page=0&size=20",
-              "host": [
-                "{{product_base_url}}"
-              ],
-              "path": [
-                "api",
-                "products",
-                "available"
-              ],
-              "query": [
-                {
-                  "key": "page",
-                  "value": "0"
-                },
-                {
-                  "key": "size",
-                  "value": "20"
-                }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Get Low Stock Products",
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              }
-            ],
-            "url": {
-              "raw": "{{product_base_url}}/api/products/low-stock",
-              "host": [
-                "{{product_base_url}}"
-              ],
-              "path": [
-                "api",
-                "products",
-                "low-stock"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
           "name": "Update Product",
           "request": {
             "method": "PUT",
@@ -1046,15 +1025,16 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Wireless Mouse v2\",\n  \"description\": \"Ergonomic wireless mouse, updated\",\n  \"price\": 34.99,\n  \"category\": \"Electronics\",\n  \"quantityAvailable\": 150\n}"
+              "raw": "{\n  \"name\": \"Wireless Mouse v2\",\n  \"description\": \"Ergonomic wireless mouse, updated\",\n  \"price\": 34.99,\n  \"category\": \"Electronics\"\n}"
             },
             "url": {
-              "raw": "{{product_base_url}}/api/products/1",
+              "raw": "{{base_url}}/api/v1/products/1",
               "host": [
-                "{{product_base_url}}"
+                "{{base_url}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "products",
                 "1"
               ]
@@ -1073,76 +1053,15 @@
               }
             ],
             "url": {
-              "raw": "{{product_base_url}}/api/products/1",
+              "raw": "{{base_url}}/api/v1/products/1",
               "host": [
-                "{{product_base_url}}"
+                "{{base_url}}"
               ],
               "path": [
                 "api",
+                "v1",
                 "products",
                 "1"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Reserve Product Inventory",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              }
-            ],
-            "url": {
-              "raw": "{{product_base_url}}/api/products/1/reserve?quantity=5",
-              "host": [
-                "{{product_base_url}}"
-              ],
-              "path": [
-                "api",
-                "products",
-                "1",
-                "reserve"
-              ],
-              "query": [
-                {
-                  "key": "quantity",
-                  "value": "5"
-                }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "Release Product Inventory",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{token}}"
-              }
-            ],
-            "url": {
-              "raw": "{{product_base_url}}/api/products/1/release?quantity=5",
-              "host": [
-                "{{product_base_url}}"
-              ],
-              "path": [
-                "api",
-                "products",
-                "1",
-                "release"
-              ],
-              "query": [
-                {
-                  "key": "quantity",
-                  "value": "5"
-                }
               ]
             }
           },
@@ -1162,12 +1081,6 @@
       "value": "http://localhost:8086",
       "type": "string",
       "description": "notification-service's own port - not routed through the API Gateway"
-    },
-    {
-      "key": "product_base_url",
-      "value": "http://localhost:8085",
-      "type": "string",
-      "description": "product-service's own port - not wired into docker-compose.yml or the gateway"
     },
     {
       "key": "token",

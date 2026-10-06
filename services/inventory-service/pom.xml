@@ -48,6 +48,11 @@
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
+        <!-- Catalog cache (merged in from product-service): one Redis-backed cache for reference data. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.ecommerce</groupId>
             <artifactId>common</artifactId>

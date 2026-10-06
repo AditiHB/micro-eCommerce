@@ -111,15 +111,15 @@ spring:
               args:
                 requestsPerMinute: 50
 
-        # --- product-service: canonical, versioned
+        # --- the catalogue (served by inventory-service - product-service was merged into it): canonical, versioned
         - id: product-service
-          uri: lb://product-service
+          uri: lb://inventory-service
           predicates:
             - Path=/api/v1/products/**
           filters:
             - name: CircuitBreaker
               args:
-                name: productCircuitBreaker
+                name: catalogCircuitBreaker
                 fallbackUri: forward:/fallback/service
             - name: RateLimitingFilter
               args:
@@ -207,9 +207,9 @@ spring:
               args:
                 requestsPerMinute: 50
 
-        # --- product-service: the original unversioned path, rewritten to v1 and marked deprecated
+        # --- the catalogue (served by inventory-service): the original unversioned path, rewritten to v1 and marked deprecated
         - id: product-service-legacy
-          uri: lb://product-service
+          uri: lb://inventory-service
           predicates:
             - Path=/api/products/**
           filters:
@@ -218,7 +218,7 @@ spring:
             - AddResponseHeader=Link, </api/v1/products>; rel="successor-version"
             - name: CircuitBreaker
               args:
-                name: productCircuitBreaker
+                name: catalogCircuitBreaker
                 fallbackUri: forward:/fallback/service
             - name: RateLimitingFilter
               args:
@@ -309,7 +309,7 @@ resilience4j:
         baseConfig: default
       paymentCircuitBreaker:
         baseConfig: default
-      productCircuitBreaker:
+      catalogCircuitBreaker:
         baseConfig: default
       notificationCircuitBreaker:
         baseConfig: default
@@ -328,7 +328,7 @@ resilience4j:
         baseConfig: default
       paymentCircuitBreaker:
         baseConfig: default
-      productCircuitBreaker:
+      catalogCircuitBreaker:
         baseConfig: default
       notificationCircuitBreaker:
         baseConfig: default

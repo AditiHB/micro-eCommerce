@@ -89,17 +89,6 @@ scrape_configs:
       - source_labels: [job]
         target_label: service
 
-  # Product Service
-  - job_name: 'product-service'
-    metrics_path: '/actuator/prometheus'
-    static_configs:
-      - targets: ['product-service:9085']
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: instance
-      - source_labels: [job]
-        target_label: service
-
   # Notification Service
   - job_name: 'notification-service'
     metrics_path: '/actuator/prometheus'
