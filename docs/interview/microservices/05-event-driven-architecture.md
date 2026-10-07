@@ -12,18 +12,21 @@ pattern exists to manage that explicitly (see [06](06-saga-and-distributed-trans
 ### Q: How are Kafka topics, partitions, and consumer groups configured here, and why does partition count
 matter?
 
-**A:** Every business topic (`order-events`, `payment-events`, `inventory-events`, `product-events`) gets **3
-partitions** by default (`kafka.event.partitions:3` in `KafkaEventConfig.java`), with matching consumer
-concurrency of 3 listener threads per consumer-group member. Dead-letter topics get 1 partition each. Topic
-auto-creation is explicitly disabled on the broker (`KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"`) — topics only
-come into existence via explicit `NewTopic` beans, so partition count is a deliberate decision, not whatever
-the first producer happened to trigger.
+**A:** Topics are per-event-type, not one generic topic per domain — `Topics.java` declares `order-created`,
+`order-cancelled`, `inventory-reserved`, `inventory-failed`, `inventory-released`, `payment-processed`,
+`payment-failed`, `refund-completed`, and `product-events`. Every one of them gets **3 partitions** by default
+(`kafka.event.partitions:3` in `KafkaEventConfig.java`, generated from `EventCatalog.topics()` so a new event
+type can never reach a topic nobody declared), with matching consumer concurrency of 3 listener threads per
+consumer-group member. Dead-letter topics (`<topic>-dlq`) get 1 partition each. Topic auto-creation is
+explicitly disabled on the broker (`KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"`) — topics only come into existence
+via explicit `NewTopic` beans, so partition count is a deliberate decision, not whatever the first producer
+happened to trigger.
 
 Why it matters: **a topic's partition count is the hard ceiling on how many consumer instances can process it
 in parallel**, full stop — it doesn't matter how many replicas of a service you run, only 3 of them (combined,
 across all replicas) can ever be actively consuming a 3-partition topic at once, because Kafka assigns each
 partition to exactly one consumer within a group. Scaling `inventory-service` from 2 to 10 pods buys you
-nothing for processing `order-events` faster if that topic only has 3 partitions.
+nothing for processing `order-created` faster if that topic only has 3 partitions.
 
 ### Q: What's the outbox pattern, and what problem does it solve that a Kafka send alone doesn't?
 
