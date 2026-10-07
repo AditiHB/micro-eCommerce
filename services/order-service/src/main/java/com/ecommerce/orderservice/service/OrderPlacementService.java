@@ -8,10 +8,11 @@ import com.ecommerce.orderservice.client.CustomerDirectoryClient;
 import com.ecommerce.orderservice.config.OrderProperties;
 import com.ecommerce.orderservice.dto.CreateOrderRequest;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpServerErrorException;
@@ -29,6 +30,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Supplier;
 
 /**
@@ -41,7 +46,6 @@ import java.util.function.Supplier;
  * the protection against a response lost to a timeout.
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class OrderPlacementService {
 
@@ -49,6 +53,16 @@ public class OrderPlacementService {
     private final CatalogClient catalog;
     private final CustomerDirectoryClient customers;
     private final OrderProperties properties;
+    private final Executor remoteCallExecutor;
+
+    public OrderPlacementService(OrderService orderService, CatalogClient catalog, CustomerDirectoryClient customers,
+                                 OrderProperties properties, @Qualifier("remoteCallExecutor") Executor remoteCallExecutor) {
+        this.orderService = orderService;
+        this.catalog = catalog;
+        this.customers = customers;
+        this.properties = properties;
+        this.remoteCallExecutor = remoteCallExecutor;
+    }
 
     public OrderService.Placement placeOrder(CreateOrderRequest request, String idempotencyKey) {
         if (idempotencyKey == null && properties.isIdempotencyKeyRequired()) {
@@ -68,12 +82,22 @@ public class OrderPlacementService {
             return replay.get();
         }
 
-        if (!remote("customer service", () -> customers.exists(request.getCustomerId()))) {
+        // The customer check and the catalogue lookup are independent reads, so they go out concurrently on the
+        // dedicated remoteCallExecutor instead of one after another. SecurityContextHolder is thread-local, so the
+        // caller's token (which both clients relay downstream) is captured here and set explicitly on each
+        // executor thread - without that, the relayed Authorization header would silently disappear.
+        SecurityContext callerContext = SecurityContextHolder.getContext();
+        CompletableFuture<Boolean> customerExists = submitRemote(
+                () -> onContext(callerContext, () -> remote("customer service", () -> customers.exists(request.getCustomerId()))));
+        CompletableFuture<Map<String, CatalogClient.ProductPrice>> priceLookup = submitRemote(
+                () -> onContext(callerContext, () -> remote("product catalogue",
+                        () -> catalog.lookup(items.stream().map(CreateOrderRequest.Item::getProductId).toList()))));
+
+        if (!join(customerExists)) {
             throw new UnprocessableEntityException("Customer " + request.getCustomerId() + " does not exist", "CUSTOMER_NOT_FOUND");
         }
 
-        Map<String, CatalogClient.ProductPrice> prices = remote("product catalogue",
-                () -> catalog.lookup(items.stream().map(CreateOrderRequest.Item::getProductId).toList()));
+        Map<String, CatalogClient.ProductPrice> prices = join(priceLookup);
         Set<String> unknown = new TreeSet<>();
         items.forEach(i -> {
             if (!prices.containsKey(i.getProductId())) {
@@ -111,6 +135,46 @@ public class OrderPlacementService {
         } catch (ResourceAccessException | HttpServerErrorException | CallNotPermittedException e) {
             log.warn("Cannot reach the {}: {}", what, e.getMessage());
             throw new DependencyUnavailableException("The " + what + " is unavailable right now. Please retry shortly.");
+        }
+    }
+
+    /**
+     * Dispatches to {@link #remoteCallExecutor}, turning pool/queue saturation into the same
+     * {@link DependencyUnavailableException} every other failure of a remote call produces. Without this,
+     * {@code ThreadPoolTaskExecutor}'s default rejection policy throws {@link RejectedExecutionException}
+     * synchronously out of {@code supplyAsync} itself - bypassing {@link #remote} entirely and surfacing as an
+     * unhandled 500 instead of a clean 503.
+     */
+    private <T> CompletableFuture<T> submitRemote(Supplier<T> call) {
+        try {
+            return CompletableFuture.supplyAsync(call, remoteCallExecutor);
+        } catch (RejectedExecutionException e) {
+            log.warn("remoteCallExecutor is saturated; rejecting this order's remote-call fan-out");
+            return CompletableFuture.failedFuture(
+                    new DependencyUnavailableException("The system is busy right now. Please retry shortly."));
+        }
+    }
+
+    /** Runs {@code call} on the executor thread with the calling thread's security context installed. */
+    private static <T> T onContext(SecurityContext context, Supplier<T> call) {
+        SecurityContext previous = SecurityContextHolder.getContext();
+        SecurityContextHolder.setContext(context);
+        try {
+            return call.get();
+        } finally {
+            SecurityContextHolder.setContext(previous);
+        }
+    }
+
+    /** Unwraps the future back to the original exception {@link #remote} threw, instead of a {@link CompletionException}. */
+    private static <T> T join(CompletableFuture<T> future) {
+        try {
+            return future.join();
+        } catch (CompletionException e) {
+            if (e.getCause() instanceof RuntimeException re) {
+                throw re;
+            }
+            throw e;
         }
     }
 
