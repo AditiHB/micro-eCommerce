@@ -8,8 +8,11 @@ the answer's word for it.
 
 See also [`../spring-boot/`](../spring-boot/README.md) for the Spring Boot/Spring Framework mechanics
 underneath these architectural patterns (dependency injection, auto-configuration, transactions, AOP proxies,
-and more), and [`../kafka/`](../kafka/README.md) for a deeper dive into the messaging layer than chapter 05
-below goes into (producer/consumer config, dead-letter recovery mechanics, KRaft cluster topology).
+and more); [`../kafka/`](../kafka/README.md) for a deeper dive into the messaging layer than chapter 05 below
+goes into (producer/consumer config, dead-letter recovery mechanics, KRaft cluster topology); and
+[`../docker/`](../docker/README.md)/[`../kubernetes/`](../kubernetes/README.md) for a deeper dive into the
+deployment layer than chapter 12 below goes into (Dockerfile mechanics, Compose orchestration, HPA internals,
+Kustomize overlays).
 
 Each file covers one topic area. Read them in order if you're studying end-to-end, or jump straight to the
 topic you need.
