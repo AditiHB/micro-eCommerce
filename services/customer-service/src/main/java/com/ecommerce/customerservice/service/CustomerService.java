@@ -44,6 +44,7 @@ public class CustomerService {
 
     private final CustomerRepository customerRepository;
     private final ApplicationMetrics applicationMetrics;
+    private final CustomerMetricsRecorder metricsRecorder;
 
     public CustomerResponse createCustomer(CreateCustomerRequest request) {
         log.info("Creating customer");
@@ -56,8 +57,7 @@ public class CustomerService {
             .name(request.getName())
             .email(request.getEmail())
             .build());
-        applicationMetrics.recordCustomerCreated();
-        applicationMetrics.stopCustomerCreationTimer(sample);
+        metricsRecorder.recordCreated(sample);
         log.info("Customer created with ID: {}", saved.getId());
         return mapToResponse(saved);
     }
@@ -101,7 +101,7 @@ public class CustomerService {
         customer.setName(request.getName());
         customer.setEmail(request.getEmail());
         Customer updated = customerRepository.saveAndFlush(customer);
-        applicationMetrics.stopCustomerCreationTimer(sample);
+        metricsRecorder.recordUpdated(sample);
         return mapToResponse(updated);
     }
 
