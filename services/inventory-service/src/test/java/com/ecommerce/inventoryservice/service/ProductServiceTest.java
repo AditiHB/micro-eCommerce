@@ -1,6 +1,5 @@
 package com.ecommerce.inventoryservice.service;
 
-import com.ecommerce.common.config.CacheConfig;
 import com.ecommerce.common.exception.BusinessException;
 import com.ecommerce.common.exception.ConflictException;
 import com.ecommerce.common.exception.PreconditionFailedException;
@@ -16,8 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.cache.Cache;
-import org.springframework.cache.CacheManager;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 
@@ -41,16 +38,13 @@ class ProductServiceTest {
     @Mock
     private ProductEventPublisher events;
     @Mock
-    private CacheManager cacheManager;
-    @Mock
-    private Cache cache;
+    private ProductCacheEvictor cacheEvictor;
 
     private ProductService service;
 
     @BeforeEach
     void setUp() {
-        service = new ProductService(repository, events, cacheManager);
-        org.mockito.Mockito.lenient().when(cacheManager.getCache(CacheConfig.PRODUCTS_CACHE)).thenReturn(cache);
+        service = new ProductService(repository, events, cacheEvictor);
         org.mockito.Mockito.lenient().when(repository.saveAndFlush(any(Product.class))).thenAnswer(inv -> {
             Product p = inv.getArgument(0);
             if (p.getId() == null) {
@@ -102,8 +96,7 @@ class ProductServiceTest {
 
         assertThat(updated.getPrice()).isEqualByComparingTo("89.99");
         assertThat(updated.getName()).as("untouched").isEqualTo("Headphones");
-        verify(cache).evict("id:1");
-        verify(cache).evict("sku:SKU-001");
+        verify(cacheEvictor).evictAsync(1L, "SKU-001");
         verify(events).updated(product);
     }
 
@@ -117,7 +110,7 @@ class ProductServiceTest {
                 .isInstanceOf(PreconditionFailedException.class);
 
         assertThat(product.getPrice()).isEqualByComparingTo("79.99");
-        verify(cache, never()).evict(any());
+        verify(cacheEvictor, never()).evictAsync(any(), any());
         verify(events, never()).updated(any());
     }
 
@@ -130,8 +123,7 @@ class ProductServiceTest {
         service.deleteProduct(1L);
 
         verify(repository).delete(product);
-        verify(cache).evict("id:1");
-        verify(cache).evict("sku:SKU-001");
+        verify(cacheEvictor).evictAsync(1L, "SKU-001");
         verify(events).deleted(1L, "SKU-001");
     }
 

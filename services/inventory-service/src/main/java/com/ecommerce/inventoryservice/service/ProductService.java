@@ -12,13 +12,13 @@ import com.ecommerce.inventoryservice.dto.ProductDTO;
 import com.ecommerce.inventoryservice.dto.UpdateProductRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.cache.Cache;
-import org.springframework.cache.CacheManager;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Collection;
 import java.util.List;
@@ -38,7 +38,7 @@ public class ProductService {
 
     private final ProductRepository productRepository;
     private final ProductEventPublisher eventPublisher;
-    private final CacheManager cacheManager;
+    private final ProductCacheEvictor cacheEvictor;
 
     @Transactional
     public ProductDTO createProduct(CreateProductRequest request) {
@@ -132,12 +132,24 @@ public class ProductService {
         eventPublisher.deleted(id, product.getSku());
     }
 
-    /** Evicts both cache entries of one product (by id and by SKU). Runs after the transaction commits. */
+    /**
+     * Evicts both cache entries of one product (by id and by SKU), off-thread, once the transaction has
+     * genuinely committed. The cache itself already defers a mid-transaction eviction until commit (it is
+     * transaction-aware - see {@code RedisConfig}), but that deferral is bound to this thread; dispatching to
+     * {@link ProductCacheEvictor}'s executor thread directly would escape it and could evict before the commit
+     * actually happens. Registering the afterCommit callback here keeps the ordering guarantee while still
+     * moving the Redis call off the caller's thread.
+     */
     private void evict(Long id, String sku) {
-        Cache cache = cacheManager.getCache(CacheConfig.PRODUCTS_CACHE);
-        if (cache != null) {
-            cache.evict("id:" + id);
-            cache.evict("sku:" + sku);
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    cacheEvictor.evictAsync(id, sku);
+                }
+            });
+        } else {
+            cacheEvictor.evictAsync(id, sku);
         }
     }
 

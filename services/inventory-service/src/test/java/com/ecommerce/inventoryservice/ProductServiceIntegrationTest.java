@@ -26,10 +26,12 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.util.AopTestUtils;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
@@ -138,8 +140,12 @@ class ProductServiceIntegrationTest {
 
         service.updateProduct(created.getId(), UpdateProductRequest.builder().price(new BigDecimal("89.99")).build(), null);
 
-        assertThat(cache().get("id:" + created.getId())).isNull();
-        assertThat(cache().get("sku:SKU-101")).isNull();
+        // Eviction now happens on its own executor thread after commit (see ProductCacheEvictor), so it is no
+        // longer guaranteed to have already run by the time updateProduct() returns.
+        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+            assertThat(cache().get("id:" + created.getId())).isNull();
+            assertThat(cache().get("sku:SKU-101")).isNull();
+        });
         assertThat(service.getProductBySku("SKU-101").getPrice()).isEqualByComparingTo("89.99");
         assertThat(outboxTypes()).containsExactly("product.created", "product.updated");
     }
@@ -152,7 +158,8 @@ class ProductServiceIntegrationTest {
 
         service.deleteProduct(created.getId());
 
-        assertThat(cache().get("id:" + created.getId())).isNull();
+        await().atMost(Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(cache().get("id:" + created.getId())).isNull());
         assertThat(outboxTypes()).containsExactly("product.created", "product.deleted");
     }
 

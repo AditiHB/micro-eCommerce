@@ -34,12 +34,14 @@ class CustomerServiceTest {
     private CustomerRepository repository;
     @Mock
     private ApplicationMetrics metrics;
+    @Mock
+    private CustomerMetricsRecorder metricsRecorder;
 
     private CustomerService service;
 
     @BeforeEach
     void setUp() {
-        service = new CustomerService(repository, metrics);
+        service = new CustomerService(repository, metrics, metricsRecorder);
     }
 
     private Customer stored(long version) {
