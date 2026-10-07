@@ -79,7 +79,7 @@ class NotificationDeliveryIntegrationTest {
         properties.setMaxAttempts(3);
         properties.setBatchSize(25);
         properties.setInitialBackoff(Duration.ofSeconds(5));
-        dispatcher = new NotificationDispatcher(repository, sender, properties, transactionManager, meters);
+        dispatcher = new NotificationDispatcher(repository, sender, properties, transactionManager, meters, Runnable::run);
         tx = new TransactionTemplate(transactionManager);
     }
 
@@ -193,7 +193,7 @@ class NotificationDeliveryIntegrationTest {
         properties.setBatchSize(8);
         List<NotificationDispatcher> dispatchers = new ArrayList<>();
         for (int i = 0; i < 3; i++) {
-            dispatchers.add(new NotificationDispatcher(repository, sender, properties, transactionManager, meters));
+            dispatchers.add(new NotificationDispatcher(repository, sender, properties, transactionManager, meters, Runnable::run));
         }
 
         ExecutorService pool = Executors.newFixedThreadPool(3);

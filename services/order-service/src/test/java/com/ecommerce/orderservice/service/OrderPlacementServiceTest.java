@@ -58,7 +58,10 @@ class OrderPlacementServiceTest {
 
     @BeforeEach
     void setUp() {
-        placement = new OrderPlacementService(orderService, catalog, customers, properties);
+        // Synchronous executor: the concurrency itself is covered by the executor's own config/behavior, not by
+        // these unit tests, which only need the customer check and the catalogue lookup to run (on whichever
+        // thread) and their results combined correctly.
+        placement = new OrderPlacementService(orderService, catalog, customers, properties, Runnable::run);
         SecurityContextHolder.getContext().setAuthentication(new TestingAuthenticationToken("alice", "n/a"));
     }
 
@@ -116,15 +119,17 @@ class OrderPlacementServiceTest {
     }
 
     @Test
-    @DisplayName("an unknown customer is a 422 and nothing is looked up or written")
+    @DisplayName("an unknown customer is a 422 and nothing is written")
     void unknownCustomer() {
         when(orderService.findReplay(any(), any(), any())).thenReturn(Optional.empty());
         when(customers.exists(7L)).thenReturn(false);
+        // The catalogue lookup and the customer check now run concurrently, so the catalogue is still called even
+        // though the order is about to be rejected - only the write is skipped.
+        catalogKnows("SKU-001", "10.00", "USD");
 
         assertThatThrownBy(() -> placement.placeOrder(request(item("SKU-001", 1)), null))
                 .isInstanceOf(UnprocessableEntityException.class)
                 .extracting(e -> ((UnprocessableEntityException) e).getErrorCode()).isEqualTo("CUSTOMER_NOT_FOUND");
-        verifyNoInteractions(catalog);
         verify(orderService, never()).place(any(), any(), anyList(), any(), any(), any());
     }
 
@@ -175,6 +180,21 @@ class OrderPlacementServiceTest {
 
         assertThatThrownBy(() -> placement.placeOrder(request(item("SKU-001", 1)), null)).isInstanceOf(DependencyUnavailableException.class);
         assertThatThrownBy(() -> placement.placeOrder(request(item("SKU-001", 1)), null)).isInstanceOf(DependencyUnavailableException.class);
+    }
+
+    @Test
+    @DisplayName("a saturated remote-call executor is also a 503, not a raw RejectedExecutionException")
+    void executorSaturated() {
+        when(orderService.findReplay(any(), any(), any())).thenReturn(Optional.empty());
+        java.util.concurrent.Executor rejecting = task -> {
+            throw new java.util.concurrent.RejectedExecutionException("pool saturated");
+        };
+        OrderPlacementService saturated = new OrderPlacementService(orderService, catalog, customers, properties, rejecting);
+
+        assertThatThrownBy(() -> saturated.placeOrder(request(item("SKU-001", 1)), null))
+                .isInstanceOf(DependencyUnavailableException.class)
+                .satisfies(e -> assertThat(((DependencyUnavailableException) e).getHttpStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+        verifyNoInteractions(catalog, customers);
     }
 
     @Test
