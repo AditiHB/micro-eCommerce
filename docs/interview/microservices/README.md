@@ -6,6 +6,10 @@ this folder is structured as Q&A you could be asked in an interview, with every 
 and line number from this codebase — so you can open the file and see the pattern for yourself, not just take
 the answer's word for it.
 
+See also [`../spring-boot/`](../spring-boot/README.md) for the Spring Boot/Spring Framework mechanics
+underneath these architectural patterns (dependency injection, auto-configuration, transactions, AOP proxies,
+and more).
+
 Each file covers one topic area. Read them in order if you're studying end-to-end, or jump straight to the
 topic you need.
 
