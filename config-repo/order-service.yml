@@ -33,6 +33,11 @@ spring:
     hibernate:
       ddl-auto: validate
     show-sql: false
+  batch:
+    jdbc:
+      initialize-schema: embedded
+    job:
+      enabled: false
 
 resilience4j:
   retry:
@@ -69,6 +74,19 @@ ecommerce:
   orders:
     saga-timeout: ${ORDER_SAGA_TIMEOUT:5m}
     idempotency-key-required: ${ORDER_IDEMPOTENCY_KEY_REQUIRED:false}
+  invoices:
+    poll-interval: ${INVOICE_POLL_INTERVAL:PT1M}
+  service-auth:
+    # This service's own machine identity (OAuth2 client credentials). No default for the secret.
+    token-uri: ${KEYCLOAK_TOKEN_URI:http://localhost:8180/realms/ecommerce/protocol/openid-connect/token}
+    client-id: ${ORDER_CLIENT_ID:order-service}
+    client-secret: ${ORDER_CLIENT_SECRET:}
+  invoice-signing:
+    private-key: ${INVOICE_SIGNING_PRIVATE_KEY:}
+    public-key: ${INVOICE_SIGNING_PUBLIC_KEY:}
+  invoice-download:
+    rsa-private-key: ${INVOICE_DOWNLOAD_PRIVATE_KEY:}
+    rsa-public-key: ${INVOICE_DOWNLOAD_PUBLIC_KEY:}
 
 management:
   server:

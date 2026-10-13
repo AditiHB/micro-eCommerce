@@ -73,6 +73,17 @@ spring:
     hibernate:
       ddl-auto: validate
     show-sql: false
+  batch:
+    jdbc:
+      # EMBEDDED (the default) is exactly right here: Spring Boot self-initializes the batch schema for
+      # H2 (embedded) and does nothing for Postgres, where V12__Spring_Batch_Schema.sql (this service's
+      # own Flyway migration) owns it instead - the same split this service already uses for every other
+      # table.
+      initialize-schema: embedded
+    job:
+      # This service's invoiceGenerationJob is launched only by InvoiceJobScheduler, on a schedule - not
+      # by Spring Boot's JobLauncherApplicationRunner at every startup.
+      enabled: false
 
 # Resilience is applied only where it is safe and useful: to READS of other services (the catalogue and the
 # customer directory). Creating an order is a local database write and is deliberately not retried - safety
@@ -118,6 +129,25 @@ ecommerce:
   orders:
     saga-timeout: ${ORDER_SAGA_TIMEOUT:5m}
     idempotency-key-required: ${ORDER_IDEMPOTENCY_KEY_REQUIRED:false}
+  invoices:
+    poll-interval: ${INVOICE_POLL_INTERVAL:PT1M}
+  service-auth:
+    # This service's own machine identity (OAuth2 client credentials): the invoice batch job has no
+    # caller token to relay, unlike this service's request-scoped CustomerDirectoryClient. No default
+    # for the secret.
+    token-uri: ${KEYCLOAK_TOKEN_URI:http://localhost:8180/realms/ecommerce/protocol/openid-connect/token}
+    client-id: ${ORDER_CLIENT_ID:order-service}
+    client-secret: ${ORDER_CLIENT_SECRET:}
+  invoice-signing:
+    # RSA keypair that signs/verifies every generated invoice PDF. Base64 DER, not PEM - see
+    # InvoiceSigningProperties. No default for either half.
+    private-key: ${INVOICE_SIGNING_PRIVATE_KEY:}
+    public-key: ${INVOICE_SIGNING_PUBLIC_KEY:}
+  invoice-download:
+    # RSA keypair the invoice download endpoint encrypts (JWE) with. A single platform-wide keypair -
+    # see the Javadoc on OrderController#downloadInvoice.
+    rsa-private-key: ${INVOICE_DOWNLOAD_PRIVATE_KEY:}
+    rsa-public-key: ${INVOICE_DOWNLOAD_PUBLIC_KEY:}
   security:
     # Identity provider (Keycloak). URLs are public configuration, not secrets; there is deliberately
     # no signing secret anywhere any more - tokens are RS256 and verified against the provider's JWKS.

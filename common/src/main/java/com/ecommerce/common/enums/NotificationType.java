@@ -6,7 +6,8 @@ package com.ecommerce.common.enums;
 public enum NotificationType {
     ORDER_CREATED("Order Created"),
     PAYMENT_SUCCESS("Payment Successful"),
-    PAYMENT_FAILED("Payment Failed");
+    PAYMENT_FAILED("Payment Failed"),
+    INVOICE_GENERATED("Invoice Generated");
 
     private final String displayName;
 

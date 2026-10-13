@@ -10,6 +10,7 @@ import com.ecommerce.common.metrics.ApplicationMetrics;
 import com.ecommerce.common.web.EntityTags;
 import com.ecommerce.customerservice.Customer;
 import com.ecommerce.customerservice.CustomerRepository;
+import com.ecommerce.customerservice.dto.AddCardRequest;
 import com.ecommerce.customerservice.dto.CreateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
 import com.ecommerce.customerservice.dto.UpdateCustomerRequest;
@@ -114,6 +115,26 @@ public class CustomerService {
         customerRepository.deleteById(id);
     }
 
+    /** Adds the customer's card on file, or replaces it if one already exists (one card per customer). */
+    @CacheEvict(value = CacheConfig.CUSTOMERS_CACHE, key = "#id")
+    public CustomerResponse addOrReplaceCard(Long id, AddCardRequest request) {
+        log.info("Setting card on file for customer {}", id);
+        Customer customer = customerRepository.findById(id)
+            .orElseThrow(() -> new ResourceNotFoundException("Customer", id));
+        customer.setCard(request.getCardNumber());
+        return mapToResponse(customerRepository.saveAndFlush(customer));
+    }
+
+    /** Removes the customer's card on file, if any. */
+    @CacheEvict(value = CacheConfig.CUSTOMERS_CACHE, key = "#id")
+    public CustomerResponse removeCard(Long id) {
+        log.info("Removing card on file for customer {}", id);
+        Customer customer = customerRepository.findById(id)
+            .orElseThrow(() -> new ResourceNotFoundException("Customer", id));
+        customer.clearCard();
+        return mapToResponse(customerRepository.saveAndFlush(customer));
+    }
+
     private CustomerResponse mapToResponse(Customer customer) {
         return CustomerResponse.builder()
             .id(customer.getId())
@@ -122,6 +143,7 @@ public class CustomerService {
             .version(customer.getVersion())
             .createdAt(customer.getCreatedAt())
             .updatedAt(customer.getUpdatedAt())
+            .cardLastFour(customer.getCardLastFour())
             .build();
     }
 }

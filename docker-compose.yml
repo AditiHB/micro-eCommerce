@@ -156,6 +156,7 @@ services:
       JAVA_OPTS_KC_HEAP: "-Xms128m -Xmx512m"
       # Substituted into realm-ecommerce.json at import time; the realm file itself holds no secret.
       NOTIFICATION_CLIENT_SECRET: "${NOTIFICATION_CLIENT_SECRET:?run scripts/gen-env.sh}"
+      ORDER_CLIENT_SECRET: "${ORDER_CLIENT_SECRET:?run scripts/gen-env.sh}"
     volumes:
       - ./infrastructure/keycloak/realm-ecommerce.json:/opt/keycloak/data/import/realm-ecommerce.json:ro
       - keycloak-data:/opt/keycloak/data
@@ -274,6 +275,9 @@ services:
       <<: *cached-env
       DB_USERNAME: "customer_owner"
       DB_PASSWORD: "${CUSTOMER_DB_PASSWORD:?run scripts/gen-env.sh}"
+      # AES-256 key (base64) that encrypts the card-on-file column (JWE). Delivered by Vault instead
+      # under the vault overlay - see docker-compose.vault.yml.
+      CARD_DIGITIZATION_KEY: "${CARD_DIGITIZATION_KEY:?run scripts/gen-env.sh}"
       JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
     mem_limit: 512m
     mem_reservation: 256m
@@ -328,9 +332,21 @@ services:
       CUSTOMER_SERVICE_URL: "http://customer-service:8081"
       DB_USERNAME: "order_owner"
       DB_PASSWORD: "${ORDER_DB_PASSWORD:?run scripts/gen-env.sh}"
-      JAVA_TOOL_OPTIONS: "-Xms96m -Xmx192m"
-    mem_limit: 512m
-    mem_reservation: 256m
+      # Machine identity (OAuth2 client credentials) for the invoice batch job's customer lookup: it
+      # runs on a schedule, with no caller token to relay, unlike this service's request-scoped calls.
+      KEYCLOAK_TOKEN_URI: "http://keycloak:8080/realms/ecommerce/protocol/openid-connect/token"
+      ORDER_CLIENT_ID: "order-service"
+      ORDER_CLIENT_SECRET: "${ORDER_CLIENT_SECRET:?run scripts/gen-env.sh}"
+      # Invoice digital signature (SHA256withRSA) and the download endpoint's JWE recipient keypair.
+      INVOICE_SIGNING_PRIVATE_KEY: "${INVOICE_SIGNING_PRIVATE_KEY:?run scripts/gen-env.sh}"
+      INVOICE_SIGNING_PUBLIC_KEY: "${INVOICE_SIGNING_PUBLIC_KEY:?run scripts/gen-env.sh}"
+      INVOICE_DOWNLOAD_PRIVATE_KEY: "${INVOICE_DOWNLOAD_PRIVATE_KEY:?run scripts/gen-env.sh}"
+      INVOICE_DOWNLOAD_PUBLIC_KEY: "${INVOICE_DOWNLOAD_PUBLIC_KEY:?run scripts/gen-env.sh}"
+      # More heap than its sibling services: PDFBox plus the zstd-jni/brotli4j native compressors run
+      # in this one JVM for the invoice batch job.
+      JAVA_TOOL_OPTIONS: "-Xms128m -Xmx320m"
+    mem_limit: 768m
+    mem_reservation: 384m
 
   payment-service:
     build:

@@ -95,6 +95,14 @@ public class NotificationService {
                 + "Please try again or use a different payment method.", orderId, reason != null ? " (" + reason + ")" : "");
     }
 
+    public static String invoiceGeneratedSubject(Long orderId) {
+        return "Your invoice for order #" + orderId + " is ready";
+    }
+
+    public static String invoiceGeneratedMessage(Long orderId) {
+        return String.format("The invoice for order #%d has been generated and is ready to download.", orderId);
+    }
+
     // ------------------------------------------------------------------ reading
 
     @Transactional(readOnly = true)

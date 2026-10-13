@@ -8,9 +8,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.startsWith;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -36,6 +38,8 @@ class CustomerControllerIntegrationTest {
     private MockMvc mockMvc;
     @Autowired
     private CustomerRepository repository;
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void setUp() {
@@ -122,5 +126,25 @@ class CustomerControllerIntegrationTest {
         mockMvc.perform(delete(CUSTOMERS + "/" + id)).andExpect(status().isNoContent());
         mockMvc.perform(get(CUSTOMERS + "/" + id)).andExpect(status().isNotFound()).andExpect(jsonPath("$.errorCode").value("RESOURCE_NOT_FOUND"));
         mockMvc.perform(delete(CUSTOMERS + "/" + id)).andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("a card on file is stored encrypted: the response shows only the last 4 digits, the DB row holds a JWE, not the PAN")
+    void cardIsEncryptedAtRest() throws Exception {
+        long id = create("John Doe", "john@example.com");
+
+        mockMvc.perform(post(CUSTOMERS + "/" + id + "/card").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"cardNumber\":\"4242424242424242\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cardLastFour").value("4242"));
+        mockMvc.perform(get(CUSTOMERS + "/" + id)).andExpect(jsonPath("$.cardLastFour").value("4242"));
+
+        String rawColumn = jdbcTemplate.queryForObject("SELECT card_ciphertext FROM customers WHERE id = ?", String.class, id);
+        assertThat(rawColumn).isNotNull().doesNotContain("4242424242424242");
+        assertThat(rawColumn.split("\\.")).hasSize(5);
+
+        mockMvc.perform(delete(CUSTOMERS + "/" + id + "/card"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cardLastFour").doesNotExist());
     }
 }

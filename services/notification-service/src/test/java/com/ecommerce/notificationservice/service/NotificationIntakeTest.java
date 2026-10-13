@@ -1,6 +1,7 @@
 package com.ecommerce.notificationservice.service;
 
 import com.ecommerce.common.enums.NotificationType;
+import com.ecommerce.common.events.InvoiceGeneratedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
 import com.ecommerce.common.exception.NonRetryableEventException;
 import com.ecommerce.common.testsupport.EventSamples;
@@ -98,5 +99,18 @@ class NotificationIntakeTest {
         event.setCustomerId(null);
 
         assertThatThrownBy(() -> intake.onPaymentProcessed(event)).isInstanceOf(NonRetryableEventException.class);
+    }
+
+    @Test
+    @DisplayName("an invoice-generated event records a notification with its own type, subject and message")
+    void invoiceGenerated() {
+        InvoiceGeneratedEvent event = EventSamples.invoiceGenerated();
+        when(repository.existsBySourceEventId(event.getEventId())).thenReturn(false);
+        when(customers.find(7L)).thenReturn(Optional.of(new CustomerInfo(7L, "Jane", "jane@example.com")));
+
+        intake.onInvoiceGenerated(event);
+
+        verify(notifications).record(eq(event.getEventId()), eq(7L), eq(42L), eq(NotificationType.INVOICE_GENERATED),
+                eq("Your invoice for order #42 is ready"), anyString(), eq("jane@example.com"));
     }
 }

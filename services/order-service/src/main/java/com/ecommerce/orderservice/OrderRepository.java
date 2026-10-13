@@ -20,4 +20,10 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("SELECT o.id FROM Order o WHERE o.status IN :open AND o.updatedAt < :cutoff ORDER BY o.updatedAt")
     List<Long> findStaleOpenOrderIds(@Param("open") Collection<OrderStatus> open,
                                      @Param("cutoff") LocalDateTime cutoff, Pageable limit);
+
+    /** Completed orders with no invoice row yet: the invoice batch job's work list (sort order is the
+     *  reader's job, via the {@link Pageable} it is given, not this query). */
+    @Query("SELECT o FROM Order o WHERE o.status = com.ecommerce.common.enums.OrderStatus.COMPLETED "
+            + "AND NOT EXISTS (SELECT 1 FROM Invoice i WHERE i.orderId = o.id)")
+    Page<Order> findCompletedWithoutInvoice(Pageable pageable);
 }

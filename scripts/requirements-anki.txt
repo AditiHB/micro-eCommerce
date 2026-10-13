@@ -1,0 +1,3 @@
+# pip install -r scripts/requirements-anki.txt
+genanki
+markdown

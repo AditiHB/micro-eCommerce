@@ -4,6 +4,7 @@ import com.ecommerce.common.constants.ApiConstants;
 import com.ecommerce.common.dto.PagedResponse;
 import com.ecommerce.common.security.CurrentUser;
 import com.ecommerce.common.web.EntityTags;
+import com.ecommerce.customerservice.dto.AddCardRequest;
 import com.ecommerce.customerservice.dto.CreateCustomerRequest;
 import com.ecommerce.customerservice.dto.UpdateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
@@ -120,6 +121,45 @@ public class CustomerController {
 
     private static ResponseEntity<CustomerResponse> withEtag(ResponseEntity.BodyBuilder builder, CustomerResponse customer) {
         return builder.eTag(EntityTags.of(customer.getVersion())).body(customer);
+    }
+
+    /**
+     * Add or replace the customer's card on file. Learning/demo feature: the card number is encrypted
+     * (JWE) before it is persisted and only its last 4 digits are ever returned.
+     */
+    @PostMapping("/{id}/card")
+    @Operation(summary = "Add or replace the customer's card on file",
+            description = "Encrypts the card number (JWE) before storing it; one card per customer, a second call replaces it")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Card stored",
+            content = @Content(schema = @Schema(implementation = CustomerResponse.class))),
+        @ApiResponse(responseCode = "400", description = "Invalid card number"),
+        @ApiResponse(responseCode = "404", description = "Customer not found")
+    })
+    public ResponseEntity<CustomerResponse> addCard(
+            @Parameter(description = "Customer ID", example = "1")
+            @PathVariable Long id,
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(description = "Card to store", required = true)
+            @Valid @RequestBody AddCardRequest request) {
+        log.info("POST /customers/{}/card - Setting card on file", id);
+        return withEtag(ResponseEntity.ok(), customerService.addOrReplaceCard(id, request));
+    }
+
+    /**
+     * Remove the customer's card on file, if any.
+     */
+    @DeleteMapping("/{id}/card")
+    @Operation(summary = "Remove the customer's card on file")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "Card removed",
+            content = @Content(schema = @Schema(implementation = CustomerResponse.class))),
+        @ApiResponse(responseCode = "404", description = "Customer not found")
+    })
+    public ResponseEntity<CustomerResponse> removeCard(
+            @Parameter(description = "Customer ID", example = "1")
+            @PathVariable Long id) {
+        log.info("DELETE /customers/{}/card - Removing card on file", id);
+        return withEtag(ResponseEntity.ok(), customerService.removeCard(id));
     }
 
     /**

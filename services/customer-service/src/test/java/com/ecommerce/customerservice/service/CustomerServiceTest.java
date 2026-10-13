@@ -7,6 +7,7 @@ import com.ecommerce.common.exception.ResourceNotFoundException;
 import com.ecommerce.common.metrics.ApplicationMetrics;
 import com.ecommerce.customerservice.Customer;
 import com.ecommerce.customerservice.CustomerRepository;
+import com.ecommerce.customerservice.dto.AddCardRequest;
 import com.ecommerce.customerservice.dto.CreateCustomerRequest;
 import com.ecommerce.customerservice.dto.CustomerResponse;
 import com.ecommerce.customerservice.dto.UpdateCustomerRequest;
@@ -131,5 +132,61 @@ class CustomerServiceTest {
         assertThatThrownBy(() -> service.getAllCustomers(0, 20, "password"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo("INVALID_SORT_FIELD");
+    }
+
+    @Test
+    @DisplayName("adding a card derives and returns only the last 4 digits")
+    void addCard() {
+        Customer current = stored(0L);
+        when(repository.findById(1L)).thenReturn(Optional.of(current));
+        when(repository.saveAndFlush(current)).thenReturn(current);
+        AddCardRequest request = new AddCardRequest();
+        request.setCardNumber("4242424242424242");
+
+        CustomerResponse response = service.addOrReplaceCard(1L, request);
+
+        assertThat(response.getCardLastFour()).isEqualTo("4242");
+        assertThat(current.getCardNumber()).isEqualTo("4242424242424242");
+    }
+
+    @Test
+    @DisplayName("a second card replaces the first: one card per customer")
+    void replaceCard() {
+        Customer current = stored(0L);
+        current.setCard("1111222233334444");
+        when(repository.findById(1L)).thenReturn(Optional.of(current));
+        when(repository.saveAndFlush(current)).thenReturn(current);
+        AddCardRequest request = new AddCardRequest();
+        request.setCardNumber("4242424242424242");
+
+        CustomerResponse response = service.addOrReplaceCard(1L, request);
+
+        assertThat(response.getCardLastFour()).isEqualTo("4242");
+        assertThat(current.getCardNumber()).isEqualTo("4242424242424242");
+    }
+
+    @Test
+    @DisplayName("removing a card clears both the number and the displayed last 4 digits")
+    void removeCard() {
+        Customer current = stored(0L);
+        current.setCard("4242424242424242");
+        when(repository.findById(1L)).thenReturn(Optional.of(current));
+        when(repository.saveAndFlush(current)).thenReturn(current);
+
+        CustomerResponse response = service.removeCard(1L);
+
+        assertThat(response.getCardLastFour()).isNull();
+        assertThat(current.getCardNumber()).isNull();
+    }
+
+    @Test
+    @DisplayName("adding or removing a card on an unknown customer is a 404")
+    void cardOnUnknownCustomer() {
+        when(repository.findById(9L)).thenReturn(Optional.empty());
+        AddCardRequest request = new AddCardRequest();
+        request.setCardNumber("4242424242424242");
+
+        assertThatThrownBy(() -> service.addOrReplaceCard(9L, request)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.removeCard(9L)).isInstanceOf(ResourceNotFoundException.class);
     }
 }

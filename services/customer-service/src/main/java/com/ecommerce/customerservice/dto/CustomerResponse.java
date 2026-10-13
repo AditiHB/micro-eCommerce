@@ -17,4 +17,6 @@ public class CustomerResponse {
     private Long version;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    /** Last 4 digits of the card on file, or null if none - never the encrypted card number itself. */
+    private String cardLastFour;
 }

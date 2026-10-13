@@ -72,6 +72,12 @@ services:
       VAULT_ADDR: "http://vault:8200"
       REDIS_PASSWORD: "${REDIS_PASSWORD:?run scripts/gen-env.sh}"
       NOTIFICATION_CLIENT_SECRET: "${NOTIFICATION_CLIENT_SECRET:?run scripts/gen-env.sh}"
+      CARD_DIGITIZATION_KEY: "${CARD_DIGITIZATION_KEY:?run scripts/gen-env.sh}"
+      ORDER_CLIENT_SECRET: "${ORDER_CLIENT_SECRET:?run scripts/gen-env.sh}"
+      INVOICE_SIGNING_PRIVATE_KEY: "${INVOICE_SIGNING_PRIVATE_KEY:?run scripts/gen-env.sh}"
+      INVOICE_SIGNING_PUBLIC_KEY: "${INVOICE_SIGNING_PUBLIC_KEY:?run scripts/gen-env.sh}"
+      INVOICE_DOWNLOAD_PRIVATE_KEY: "${INVOICE_DOWNLOAD_PRIVATE_KEY:?run scripts/gen-env.sh}"
+      INVOICE_DOWNLOAD_PUBLIC_KEY: "${INVOICE_DOWNLOAD_PUBLIC_KEY:?run scripts/gen-env.sh}"
       CUSTOMER_DB_PASSWORD: "${CUSTOMER_DB_PASSWORD:?run scripts/gen-env.sh}"
       ORDER_DB_PASSWORD: "${ORDER_DB_PASSWORD:?run scripts/gen-env.sh}"
       INVENTORY_DB_PASSWORD: "${INVENTORY_DB_PASSWORD:?run scripts/gen-env.sh}"
@@ -100,7 +106,10 @@ services:
         condition: service_completed_successfully
 
   customer-service:
-    environment: *vault-env
+    environment:
+      <<: *vault-env
+      # Delivered by Vault (secret/customer-service) instead.
+      CARD_DIGITIZATION_KEY: !reset null
     volumes:
       # This service's AppRole credentials (files named after the Spring properties), read via configtree.
       - ./.vault/approle/customer-service:/run/secrets:ro
@@ -118,7 +127,14 @@ services:
         condition: service_completed_successfully
 
   order-service:
-    environment: *vault-env
+    environment:
+      <<: *vault-env
+      # Delivered by Vault (secret/order-service) instead.
+      ORDER_CLIENT_SECRET: !reset null
+      INVOICE_SIGNING_PRIVATE_KEY: !reset null
+      INVOICE_SIGNING_PUBLIC_KEY: !reset null
+      INVOICE_DOWNLOAD_PRIVATE_KEY: !reset null
+      INVOICE_DOWNLOAD_PUBLIC_KEY: !reset null
     volumes:
       # This service's AppRole credentials (files named after the Spring properties), read via configtree.
       - ./.vault/approle/order-service:/run/secrets:ro

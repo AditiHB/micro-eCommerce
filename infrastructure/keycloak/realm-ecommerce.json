@@ -137,6 +137,39 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "order-service",
+      "name": "order-service (machine identity)",
+      "description": "Confidential client using the client-credentials grant; its service account holds the SERVICE role. Used by the invoice batch job, which runs on a schedule and has no caller token to relay.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "${ORDER_CLIENT_SECRET}",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "attributes": {
+        "access.token.lifespan": "300"
+      },
+      "defaultClientScopes": ["profile", "roles"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "ecommerce-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "ecommerce-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
 
@@ -145,6 +178,12 @@
       "username": "service-account-notification-service",
       "enabled": true,
       "serviceAccountClientId": "notification-service",
+      "realmRoles": ["SERVICE"]
+    },
+    {
+      "username": "service-account-order-service",
+      "enabled": true,
+      "serviceAccountClientId": "order-service",
       "realmRoles": ["SERVICE"]
     }
   ]
