@@ -73,6 +73,8 @@ service (profile `vault` active)
 | `secret/application` | `spring.data.redis.password` | every service and the gateway |
 | `secret/<service>` (customer, order, inventory, payment, notification, product) | `db.migration.username`, `db.migration.password` | that service |
 | `secret/notification-service` (extra) | `ecommerce.service-auth.client-secret` | notification-service |
+| `secret/customer-service` (extra) | `ecommerce.card-digitization.encryption-key` - the AES-256 key (base64) that JWE-encrypts the card-on-file column | customer-service |
+| `secret/order-service` (extra) | `ecommerce.service-auth.client-secret` (the invoice batch job's own machine identity - it has no caller token to relay); `ecommerce.invoice-signing.private-key` / `-public-key` (RSA keypair, base64 DER, signs/verifies every generated invoice PDF); `ecommerce.invoice-download.rsa-private-key` / `-public-key` (RSA keypair, base64 DER, the invoice download endpoint's JWE recipient key) | order-service |
 | `database/creds/<service>` | dynamic `username` / `password` | that service |
 | `auth/approle/role/<service>` | role-id / secret-id | issued to the service at bootstrap |
 
@@ -107,6 +109,11 @@ docker compose exec vault tail -f /vault/logs/audit.log      # every request, wh
 * **Redis password / Flyway login / client secrets:** `vault kv put secret/...` a new value, then restart the
   service(s) that read it (values are read at startup). Change the consumer (Redis server, Postgres role,
   Keycloak client) in the same maintenance step.
+* **Card-digitization key / invoice-signing / invoice-download keypairs:** these are symmetric keys or RSA
+  keypairs, not a password - rotating one means every value it already encrypted/signed needs to stay
+  decryptable, so `vault kv put` a new value and restart alone is not safe for these three. This repo does not
+  implement key-versioned decryption for them (a real deployment would keep the old key available for reads
+  while re-encrypting under the new one, or version the JWK/key id in the stored ciphertext).
 * **AppRole secret-id:** `vault write -f auth/approle/role/<svc>/secret-id`, write it to
   `.vault/approle/<svc>/spring.cloud.vault.app-role.secret-id`, restart the service. Revoke the old one with
   `vault write auth/approle/role/<svc>/secret-id/destroy secret_id=...`.

@@ -225,6 +225,64 @@
             }
           },
           "response": []
+        },
+        {
+          "name": "Add or Replace Card on File",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cardNumber\": \"4242424242424242\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/customers/1/card",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "customers",
+                "1",
+                "card"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Remove Card on File",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/customers/1/card",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "customers",
+                "1",
+                "card"
+              ]
+            }
+          },
+          "response": []
         }
       ]
     },
@@ -345,6 +403,31 @@
                   "key": "status",
                   "value": "CONFIRMED"
                 }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Download Invoice (JWE-encrypted)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/orders/1/invoice",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "orders",
+                "1",
+                "invoice"
               ]
             }
           },

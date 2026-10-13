@@ -99,11 +99,11 @@ Every container in `docker-compose.yml` has a `mem_limit`/`mem_reservation`, and
 
 | Profiles active | Approx. RAM | Notes |
 |---|---|---|
-| *(none)* - core stack, H2 | **~3.8 GB** | Zookeeper, Kafka, Redis, Config Server, Discovery Server, API Gateway, 5 microservices. Fits a 12GB/i3 laptop with plenty of headroom for the OS, Docker Desktop/WSL2, and your IDE. |
+| *(none)* - core stack, H2 | **~4.0 GB** | Zookeeper, Kafka, Redis, Config Server, Discovery Server, API Gateway, 5 microservices. order-service runs higher than its siblings (768Mi vs. 512Mi) because its invoice batch job loads PDFBox plus the zstd-jni/brotli4j native compressors in the same JVM. Still fits a 12GB/i3 laptop with plenty of headroom for the OS, Docker Desktop/WSL2, and your IDE. |
 | `postgres` | +~320 MB | One extra lightweight Postgres container |
 | `https` | +~64 MB | Nginx is tiny |
 | `observability` | **+~3 GB** | ELK (Elasticsearch/Logstash/Kibana) + Prometheus/Grafana/Alertmanager/exporters/Loki - nearly as expensive as the whole application. Only start this when you actually want to browse logs in Kibana or dashboards in Grafana |
-| All profiles (full stack) | **~7.2 GB** | Still comfortable headroom on a 12GB machine |
+| All profiles (full stack) | **~7.4 GB** | Still comfortable headroom on a 12GB machine |
 
 ### HTTPS setup
 
@@ -238,13 +238,28 @@ mvn spring-boot:run
 # ✓ Running at http://localhost:8084
 ```
 
-#### Terminal 5 - API Gateway
+#### Terminal 5 - Notification Service
+```bash
+cd services/notification-service
+mvn spring-boot:run
+
+# ✓ Running at http://localhost:8086
+```
+
+#### Terminal 6 - API Gateway
 ```bash
 cd infrastructure/api-gateway
 mvn spring-boot:run
 
 # ✓ Running at http://localhost:8080 (main entry point)
 ```
+
+> order-service additionally needs a Keycloak client-credentials secret (`ecommerce.service-auth.client-secret` /
+> `ORDER_CLIENT_SECRET`) and an RSA keypair for invoice signing/download (`ecommerce.invoice-signing.*`,
+> `ecommerce.invoice-download.*`) - all generated into `.env` by `scripts/gen-env.sh`. Running it bare with
+> `mvn spring-boot:run` and no `.env` sourced into the shell will fail to start (these have no default). See
+> [KEYCLOAK_IDENTITY.md](KEYCLOAK_IDENTITY.md#5-service-to-service-calls) and
+> [VAULT_SECRETS.md](VAULT_SECRETS.md#3-what-is-stored-where).
 
 ### Option 2: Run with Docker Compose
 
@@ -598,6 +613,11 @@ kubectl logs -n ecommerce -f deployment/customer-service
 "Connection refused": Check if service port is correct
 "JWT expired": Check system time synchronization
 "Rate limit exceeded": Check rate limiting configuration
+"algid parse error, not a sequence" (order-service, at startup): one of the invoice RSA keys in .env is
+    PKCS#1 DER, not PKCS#8 - regenerate it with `scripts/gen-env.sh` (which uses `openssl pkcs8 -topk8`,
+    not plain `openssl pkey`)
+"409 Conflict / INVOICE_NOT_READY" on GET /api/orders/{id}/invoice: the batch job hasn't run yet for this
+    order (default poll interval 1 minute - ecommerce.invoices.poll-interval) or the order isn't COMPLETED
 ```
 
 ### Database Schema Issues

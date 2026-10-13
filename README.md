@@ -81,6 +81,7 @@ This project implements a cloud-native microservices architecture for an e-comme
   - Customer registration and profile management
   - Shipping and billing address management
   - Account verification and authentication
+  - One "card on file" per customer, JWE-encrypted at rest (last 4 digits only ever returned) - see [docs/VAULT_SECRETS.md](docs/VAULT_SECRETS.md)
 
 ### 2. **Inventory Service** (Port 8082)
 - **Responsibility:** The product catalogue and stock management (the former Product Service was merged into this service - one owner for everything about a product)
@@ -99,6 +100,9 @@ This project implements a cloud-native microservices architecture for an e-comme
   - Order status tracking (PENDING, COMPLETED, CANCELLED)
   - Saga choreography for order fulfillment
   - Order history and retrieval
+  - A scheduled batch job renders, signs and compresses (gzip/zstd/brotli) an invoice PDF for every completed
+    order; `GET /api/orders/{id}/invoice` returns it JWE-encrypted together with the order details. Holds its
+    own Keycloak client-credentials identity for this - see [docs/KEYCLOAK_IDENTITY.md](docs/KEYCLOAK_IDENTITY.md#5-service-to-service-calls)
 
 ### 4. **Payment Service** (Port 8084)
 - **Responsibility:** Payment processing and transaction management
@@ -107,6 +111,13 @@ This project implements a cloud-native microservices architecture for an e-comme
   - Multiple payment gateway support
   - Refund management
   - Transaction logging and reconciliation
+
+### 5. **Notification Service** (Port 8086)
+- **Responsibility:** Customer-facing notifications for saga events
+- **Key Features:**
+  - Listens for `order.created`, `payment.processed`, `payment.failed` and `invoice.generated`
+  - Looks up the customer's email (its own Keycloak client-credentials identity, `SERVICE` role)
+  - Records and dispatches the notification with retry/backoff; a delivery failure never drops the record
 
 ---
 
@@ -253,6 +264,12 @@ cd services/payment-service
 mvn spring-boot:run
 ```
 
+**Terminal 8: Notification Service**
+```bash
+cd services/notification-service
+mvn spring-boot:run
+```
+
 ---
 
 ## 🐳 Docker Deployment
@@ -262,7 +279,8 @@ mvn spring-boot:run
 No credential is stored in this repository. Generate your own secrets first (random, git-ignored `.env`):
 
 ```bash
-scripts/gen-env.sh          # creates .env: database/Redis passwords, Keycloak admin, client secrets, test-user passwords
+scripts/gen-env.sh          # creates .env: database/Redis passwords, Keycloak admin, client secrets, test-user
+                             # passwords, and the card-digitization/invoice-signing/invoice-download keys
 ```
 
 A single `docker-compose.yml` covers the local scenarios via Compose **profiles**, and two optional **overlay files** add Vault and the internal CA. This is a local-only project (Docker Compose here, or the Kubernetes manifests under `k8s/` for a cluster); there is no distinct "production" compose variant. Every published port is bound to `127.0.0.1`.
@@ -309,6 +327,7 @@ See **[docs/SETUP_AND_DEPLOYMENT.md](docs/SETUP_AND_DEPLOYMENT.md)** for the ful
 - **Inventory Service:** http://localhost:8082
 - **Order Service:** http://localhost:8083
 - **Payment Service:** http://localhost:8084
+- **Notification Service:** http://localhost:8086
 - **Kafka Broker:** localhost:9092
 - **Zookeeper:** localhost:2181
 
@@ -347,6 +366,8 @@ http://localhost:8080/api
 - `GET /api/customers/{id}` - Get customer details
 - `PUT /api/customers/{id}` - Update customer
 - `DELETE /api/customers/{id}` - Delete customer
+- `POST /api/customers/{id}/card` - Add or replace the card on file (stored JWE-encrypted; response shows only the last 4 digits)
+- `DELETE /api/customers/{id}/card` - Remove the card on file
 
 #### Inventory Service
 - `GET /api/inventory` - List all products
@@ -359,6 +380,7 @@ http://localhost:8080/api
 - `GET /api/orders/{id}` - Get order details
 - `GET /api/orders` - List all orders
 - `PUT /api/orders/{id}/cancel` - Cancel order
+- `GET /api/orders/{id}/invoice` - Download the invoice (PDF + order details, JWE-encrypted); `409` until the batch job has generated one
 
 #### Payment Service
 - `POST /api/payments` - Process payment
@@ -469,6 +491,9 @@ curl http://localhost:8083/actuator/health
 
 # Payment Service Health
 curl http://localhost:8084/actuator/health
+
+# Notification Service Health
+curl http://localhost:8086/actuator/health
 ```
 
 ### Eureka Dashboard
@@ -528,4 +553,4 @@ All project documentation lives under [`docs/`](docs/). Start with **[DOCUMENTAT
 
 ---
 
-**Last Updated:** 2026-09-27
+**Last Updated:** 2026-10-13
