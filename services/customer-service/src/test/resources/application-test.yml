@@ -56,6 +56,9 @@ ecommerce:
     jwk-set-uri: http://localhost:0/jwks
     issuer: http://issuer.test/realms/ecommerce
     audience: ecommerce-api
+  card-digitization:
+    # Test-only AES-256 key (32 random bytes, base64) - never used outside this test profile.
+    encryption-key: 8jil3LtR6PjxTqHcLBi0WFLuDPCg9p0Du6b/yjUlMLE=
 
 server:
   port: 8081

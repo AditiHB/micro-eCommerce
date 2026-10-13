@@ -1,5 +1,6 @@
 package com.ecommerce.customerservice;
 
+import com.ecommerce.customerservice.crypto.CardCiphertextConverter;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -45,4 +46,27 @@ public class Customer {
     /** Optimistic lock and the resource's ETag. */
     @Version
     private Long version;
+
+    /** One card on file, at most. Holds the plain number in memory; {@link CardCiphertextConverter}
+     *  JWE-encrypts it on the way to the {@code card_ciphertext} column and decrypts it on the way back. */
+    @Convert(converter = CardCiphertextConverter.class)
+    @Column(name = "card_ciphertext")
+    private String cardNumber;
+
+    /** Not sensitive on its own (PCI-DSS allows a truncated PAN in the clear) - kept in plain text so a
+     *  response can show "card ending in 4242" without decrypting on every read. */
+    @Column(name = "card_last_four", length = 4)
+    private String cardLastFour;
+
+    /** Sets (or replaces) the card on file, deriving the plaintext last-4 digits shown in responses. */
+    public void setCard(String fullCardNumber) {
+        this.cardNumber = fullCardNumber;
+        this.cardLastFour = fullCardNumber.substring(fullCardNumber.length() - 4);
+    }
+
+    /** Removes the card on file. */
+    public void clearCard() {
+        this.cardNumber = null;
+        this.cardLastFour = null;
+    }
 }

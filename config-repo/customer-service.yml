@@ -47,6 +47,11 @@ spring:
     redis:
       time-to-live: 600000
 
+ecommerce:
+  card-digitization:
+    # AES-256 key (base64) that encrypts the card-on-file column (JWE). No default for the key itself.
+    encryption-key: ${CARD_DIGITIZATION_KEY:}
+
 management:
   server:
     port: ${MANAGEMENT_SERVER_PORT:9081}

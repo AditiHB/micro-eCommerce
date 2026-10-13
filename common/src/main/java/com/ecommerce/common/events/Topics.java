@@ -15,6 +15,7 @@ public final class Topics {
     public static final String PAYMENT_FAILED = "payment-failed";
     public static final String REFUND_COMPLETED = "refund-completed";
     public static final String PRODUCT_EVENTS = "product-events";
+    public static final String INVOICE_GENERATED = "invoice-generated";
 
     /** Suffix of the dead-letter topic of every topic above: {@code <topic>-dlq}. */
     public static final String DLQ_SUFFIX = "-dlq";

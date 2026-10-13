@@ -4,6 +4,7 @@ import com.ecommerce.common.events.DomainEvent;
 import com.ecommerce.common.events.InventoryFailedEvent;
 import com.ecommerce.common.events.InventoryReleasedEvent;
 import com.ecommerce.common.events.InventoryReservedEvent;
+import com.ecommerce.common.events.InvoiceGeneratedEvent;
 import com.ecommerce.common.events.LineItem;
 import com.ecommerce.common.events.OrderCancelledEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
@@ -60,6 +61,10 @@ public final class EventSamples {
         return fix(new RefundCompletedEvent(42L, 9L, 7L, new BigDecimal("172.97"), "USD"));
     }
 
+    public static InvoiceGeneratedEvent invoiceGenerated() {
+        return fix(new InvoiceGeneratedEvent(5L, 42L, 7L, Instant.parse("2026-01-01T10:20:00Z")));
+    }
+
     // Variants for a particular order and event id, for tests that drive a handler with several events.
 
     public static OrderCreatedEvent orderCreated(long orderId, String eventId) {
@@ -108,7 +113,8 @@ public final class EventSamples {
                 "inventory.released", inventoryReleased(),
                 "payment.processed", paymentProcessed(),
                 "payment.failed", paymentFailed(),
-                "refund.completed", refundCompleted());
+                "refund.completed", refundCompleted(),
+                "invoice.generated", invoiceGenerated());
     }
 
     private static <E extends DomainEvent> E fix(E event) {

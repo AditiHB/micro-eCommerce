@@ -85,9 +85,12 @@ class AuthorizationMatrixTest {
                 new Rule(HttpMethod.POST, "/api/v1/customers", BACK_OFFICE),
                 new Rule(HttpMethod.PUT, "/api/v1/customers/1", BACK_OFFICE),
                 new Rule(HttpMethod.DELETE, "/api/v1/customers/1", ADMIN_ONLY),
+                new Rule(HttpMethod.POST, "/api/v1/customers/1/card", BACK_OFFICE),
+                new Rule(HttpMethod.DELETE, "/api/v1/customers/1/card", ADMIN_ONLY),
                 // order-service
                 new Rule(HttpMethod.GET, "/api/v1/orders", ANYONE_AUTHENTICATED),
                 new Rule(HttpMethod.GET, "/api/v1/orders/1", ANYONE_AUTHENTICATED),
+                new Rule(HttpMethod.GET, "/api/v1/orders/1/invoice", ANYONE_AUTHENTICATED),
                 new Rule(HttpMethod.POST, "/api/v1/orders", Set.of(Roles.USER, Roles.MANAGER, Roles.ADMIN)),
                 new Rule(HttpMethod.POST, "/api/v1/orders/1/cancel", Set.of(Roles.USER, Roles.MANAGER, Roles.ADMIN)),
                 new Rule(HttpMethod.PUT, "/api/v1/orders/1/status", BACK_OFFICE),

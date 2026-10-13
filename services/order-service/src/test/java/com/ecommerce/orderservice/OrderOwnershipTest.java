@@ -7,6 +7,7 @@ import com.ecommerce.common.security.CurrentUser;
 import com.ecommerce.common.security.SecurityConfig;
 import com.ecommerce.orderservice.dto.OrderResponse;
 import com.ecommerce.orderservice.exception.GlobalExceptionHandler;
+import com.ecommerce.orderservice.service.InvoiceDownloadService;
 import com.ecommerce.orderservice.service.OrderPlacementService;
 import com.ecommerce.orderservice.service.OrderService;
 import org.junit.jupiter.api.DisplayName;
@@ -64,6 +65,9 @@ class OrderOwnershipTest {
 
     @MockBean
     private OrderPlacementService placementService;
+
+    @MockBean
+    private InvoiceDownloadService invoiceDownloadService;
 
     @MockBean
     private JwtDecoder jwtDecoder;

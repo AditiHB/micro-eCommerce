@@ -1,0 +1,12 @@
+{
+  "eventId" : "evt-invoice.generated",
+  "occurredAt" : "2026-01-01T10:15:30Z",
+  "aggregateId" : "42",
+  "aggregateType" : "Invoice",
+  "version" : 1,
+  "invoiceId" : 5,
+  "orderId" : 42,
+  "customerId" : 7,
+  "generatedAt" : "2026-01-01T10:20:00Z",
+  "eventType" : "invoice.generated"
+}

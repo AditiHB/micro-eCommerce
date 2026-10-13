@@ -58,3 +58,7 @@ infrastructure/nginx/certs/*
 *.jks
 k8s/base/generated/
 k8s/overlays/*/generated/
+
+# Generated Anki deck (scripts/build-anki-deck.py produces this; genanki/markdown, not committed)
+*.apkg
+scripts/out/

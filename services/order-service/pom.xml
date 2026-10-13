@@ -61,6 +61,46 @@
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
+        <!-- This service's own machine identity (OAuth2 client credentials): the invoice batch job has
+             no caller token to relay, unlike this service's request-scoped CustomerDirectoryClient. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-client</artifactId>
+        </dependency>
+        <!-- Invoice generation pipeline: renders the PDF, compresses it three ways, and schedules the job. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-batch</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.luben</groupId>
+            <artifactId>zstd-jni</artifactId>
+        </dependency>
+        <!-- brotli4j's decoder result type (DirectDecompress) is declared against io.netty.buffer.ByteBuf
+             even though the byte[] decompress path never touches it; brotli4j does not declare this
+             dependency itself, so it must be added explicitly. Pure Java, no native component of its own. -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-buffer</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.aayushatharva.brotli4j</groupId>
+            <artifactId>brotli4j</artifactId>
+        </dependency>
+        <!-- One native jar per OS/arch: Linux x86_64 for this image's Docker runtime, Windows x86_64 so
+             tests also run directly on a developer machine. -->
+        <dependency>
+            <groupId>com.aayushatharva.brotli4j</groupId>
+            <artifactId>native-linux-x86_64</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.aayushatharva.brotli4j</groupId>
+            <artifactId>native-windows-x86_64</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.ecommerce</groupId>
             <artifactId>common</artifactId>
@@ -69,6 +109,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- JobLauncherTestUtils, for running invoiceGenerationJob directly in integration tests. -->
+        <dependency>
+            <groupId>org.springframework.batch</groupId>
+            <artifactId>spring-batch-test</artifactId>
             <scope>test</scope>
         </dependency>
         <!-- Shared integration-test fixtures: Testcontainers PostgreSQL and Kafka -->

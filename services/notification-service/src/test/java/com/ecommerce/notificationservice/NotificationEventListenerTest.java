@@ -1,5 +1,6 @@
 package com.ecommerce.notificationservice;
 
+import com.ecommerce.common.events.InvoiceGeneratedEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
@@ -32,14 +33,17 @@ class NotificationEventListenerTest {
         OrderCreatedEvent created = EventSamples.orderCreated();
         PaymentProcessedEvent processed = EventSamples.paymentProcessed();
         PaymentFailedEvent failed = EventSamples.paymentFailed();
+        InvoiceGeneratedEvent invoiceGenerated = EventSamples.invoiceGenerated();
 
         listener.handleOrderCreated(created);
         listener.handlePaymentProcessed(processed);
         listener.handlePaymentFailed(failed);
+        listener.handleInvoiceGenerated(invoiceGenerated);
 
         verify(intake).onOrderCreated(created);
         verify(intake).onPaymentProcessed(processed);
         verify(intake).onPaymentFailed(failed);
+        verify(intake).onInvoiceGenerated(invoiceGenerated);
     }
 
     @Test
@@ -52,14 +56,15 @@ class NotificationEventListenerTest {
     }
 
     @Test
-    @DisplayName("it listens to the three customer-facing events, in its own group")
+    @DisplayName("it listens to the four customer-facing events, in its own group")
     void subscriptions() {
         Map<String, String> topicToGroup = Arrays.stream(NotificationEventListener.class.getDeclaredMethods())
                 .map(m -> m.getAnnotation(KafkaListener.class))
                 .filter(a -> a != null)
                 .collect(Collectors.toMap(a -> a.topics()[0], KafkaListener::groupId));
 
-        assertThat(topicToGroup).containsOnlyKeys(Topics.ORDER_CREATED, Topics.PAYMENT_PROCESSED, Topics.PAYMENT_FAILED);
+        assertThat(topicToGroup).containsOnlyKeys(
+                Topics.ORDER_CREATED, Topics.PAYMENT_PROCESSED, Topics.PAYMENT_FAILED, Topics.INVOICE_GENERATED);
         assertThat(topicToGroup.values()).containsOnly(Topics.GROUP_NOTIFICATION);
     }
 }

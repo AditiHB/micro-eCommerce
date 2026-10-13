@@ -80,6 +80,45 @@
                 <artifactId>flyway-core</artifactId>
                 <version>9.22.3</version>
             </dependency>
+            <!-- JOSE/JWE: encrypts the card-on-file field (customer-service) and the invoice download
+                 envelope (order-service). Verifying signed Keycloak tokens uses Spring's own Nimbus
+                 integration already pulled in by spring-boot-starter-oauth2-resource-server; this is the
+                 separate, explicit dependency needed to mint/read JWE ourselves. -->
+            <dependency>
+                <groupId>com.nimbusds</groupId>
+                <artifactId>nimbus-jose-jwt</artifactId>
+                <version>9.37.3</version>
+            </dependency>
+            <!-- Invoice generation (order-service): PDF rendering and two of the three compression codecs
+                 the invoice batch job demonstrates (the third, gzip, is JDK-builtin). -->
+            <dependency>
+                <groupId>org.apache.pdfbox</groupId>
+                <artifactId>pdfbox</artifactId>
+                <version>2.0.31</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.luben</groupId>
+                <artifactId>zstd-jni</artifactId>
+                <version>1.5.6-3</version>
+            </dependency>
+            <dependency>
+                <groupId>com.aayushatharva.brotli4j</groupId>
+                <artifactId>brotli4j</artifactId>
+                <version>1.16.0</version>
+            </dependency>
+            <!-- brotli4j ships one native jar per OS/arch (there is no single fat jar): Linux x86_64
+                 covers this image's Docker runtime, Windows x86_64 covers running tests directly on a
+                 developer machine like this one. -->
+            <dependency>
+                <groupId>com.aayushatharva.brotli4j</groupId>
+                <artifactId>native-linux-x86_64</artifactId>
+                <version>1.16.0</version>
+            </dependency>
+            <dependency>
+                <groupId>com.aayushatharva.brotli4j</groupId>
+                <artifactId>native-windows-x86_64</artifactId>
+                <version>1.16.0</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 

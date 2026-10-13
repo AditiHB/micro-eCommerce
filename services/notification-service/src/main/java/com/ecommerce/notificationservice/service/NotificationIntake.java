@@ -1,6 +1,7 @@
 package com.ecommerce.notificationservice.service;
 
 import com.ecommerce.common.enums.NotificationType;
+import com.ecommerce.common.events.InvoiceGeneratedEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
@@ -49,6 +50,12 @@ public class NotificationIntake {
         record(event.getEventId(), event.getCustomerId(), event.getOrderId(), NotificationType.PAYMENT_FAILED,
                 NotificationService.paymentFailedSubject(event.getOrderId()),
                 NotificationService.paymentFailedMessage(event.getOrderId(), event.getReason()));
+    }
+
+    public void onInvoiceGenerated(InvoiceGeneratedEvent event) {
+        record(event.getEventId(), event.getCustomerId(), event.getOrderId(), NotificationType.INVOICE_GENERATED,
+                NotificationService.invoiceGeneratedSubject(event.getOrderId()),
+                NotificationService.invoiceGeneratedMessage(event.getOrderId()));
     }
 
     private void record(String eventId, Long customerId, Long orderId, NotificationType type, String subject, String message) {

@@ -211,6 +211,36 @@ curl -X DELETE http://localhost:8080/api/customers/1 \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
+### Add or Replace the Card on File
+
+The card number is JWE-encrypted (`A256KW`+`A256GCM`) before it is stored; a second call replaces the
+existing card (one card per customer). The response - and every later `GET /api/customers/{id}` - shows only
+the last 4 digits, never the stored ciphertext.
+
+```bash
+curl -X POST http://localhost:8080/api/customers/1/card \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{ "cardNumber": "4242424242424242" }'
+```
+
+```json
+{
+  "id": 1,
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "version": 1,
+  "cardLastFour": "4242"
+}
+```
+
+### Remove the Card on File
+
+```bash
+curl -X DELETE http://localhost:8080/api/customers/1/card \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
 ## Order API
 
 ### List Orders
@@ -317,11 +347,30 @@ order = response.json()
 ### Update Order Status
 
 ```bash
-curl -X PUT "http://localhost:8080/api/orders/1/status?status=CONFIRMED" \
+curl -X PUT "http://localhost:8080/api/orders/1/status?status=CANCELLED" \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-Status values: `PENDING`, `CONFIRMED`, `SHIPPED`, `DELIVERED`, `CANCELLED`, `FAILED`
+Status values: `PENDING`, `INVENTORY_RESERVED`, `PAYMENT_PROCESSING`, `COMPLETED`, `CANCELLED`, `FAILED`. Only
+`CANCELLED`/`FAILED` can be set this way - every other transition belongs to the saga.
+
+### Download the Invoice
+
+A scheduled batch job renders a PDF invoice for every `COMPLETED` order (default poll interval: 1 minute).
+The response is a single JWE compact-serialization string (`RSA-OAEP-256`+`A256GCM`) wrapping the order
+details and the PDF (base64) together - decrypting it needs the private key matching
+`ecommerce.invoice-download.rsa-public-key` (see [KEYCLOAK_IDENTITY.md](KEYCLOAK_IDENTITY.md) /
+[VAULT_SECRETS.md](VAULT_SECRETS.md); this is a single platform-wide keypair for this worked example, not a
+real per-customer key-exchange system).
+
+```bash
+curl -X GET http://localhost:8080/api/orders/1/invoice \
+  -H "Authorization: Bearer YOUR_TOKEN"
+# -> eyJhbGciOiJSU0EtT0FFUC0yNTYi....  (five dot-separated base64url segments)
+```
+
+`409 INVOICE_NOT_READY` means the order has no invoice yet (not `COMPLETED`, or the batch job hasn't run for
+it); `404` means the order itself doesn't exist.
 
 ## Inventory API
 

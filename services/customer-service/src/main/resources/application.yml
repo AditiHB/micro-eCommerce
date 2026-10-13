@@ -96,6 +96,11 @@ ecommerce:
     jwk-set-uri: ${SECURITY_JWK_SET_URI:http://localhost:8180/realms/ecommerce/protocol/openid-connect/certs}
     issuer: ${SECURITY_ISSUER:http://localhost:8180/realms/ecommerce}
     audience: ${SECURITY_AUDIENCE:ecommerce-api}
+  card-digitization:
+    # Base64 of 32 random bytes (AES-256 key wrapping key for the card-on-file JWE column). Sourced from
+    # Vault in real environments (see infrastructure/vault/bootstrap.sh); blank here on purpose so a
+    # deployment that forgets to provide it fails to start instead of silently storing unencrypted cards.
+    encryption-key: ${CARD_DIGITIZATION_KEY:}
 
 management:
   server:

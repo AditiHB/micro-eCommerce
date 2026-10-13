@@ -1,5 +1,6 @@
 package com.ecommerce.notificationservice;
 
+import com.ecommerce.common.events.InvoiceGeneratedEvent;
 import com.ecommerce.common.events.OrderCreatedEvent;
 import com.ecommerce.common.events.PaymentFailedEvent;
 import com.ecommerce.common.events.PaymentProcessedEvent;
@@ -11,8 +12,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Notification service's Kafka consumers - the events that keep the customer informed:
- * {@code order.created} ("we received your order"), {@code payment.processed} ("your payment succeeded") and
- * {@code payment.failed} ("your payment failed").
+ * {@code order.created} ("we received your order"), {@code payment.processed} ("your payment succeeded"),
+ * {@code payment.failed} ("your payment failed") and {@code invoice.generated} ("your invoice is ready").
  *
  * <p>A handler that fails does NOT swallow the error and acknowledge (which used to lose the notification for
  * good): it lets the exception propagate, and the container's error handler retries with backoff and finally
@@ -38,5 +39,10 @@ public class NotificationEventListener {
     @KafkaListener(topics = Topics.PAYMENT_FAILED, groupId = Topics.GROUP_NOTIFICATION)
     public void handlePaymentFailed(PaymentFailedEvent event) {
         intake.onPaymentFailed(event);
+    }
+
+    @KafkaListener(topics = Topics.INVOICE_GENERATED, groupId = Topics.GROUP_NOTIFICATION)
+    public void handleInvoiceGenerated(InvoiceGeneratedEvent event) {
+        intake.onInvoiceGenerated(event);
     }
 }

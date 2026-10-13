@@ -90,12 +90,14 @@ spec:
               name: ecommerce-secrets
               key: redis-password
         resources:
+          # Higher than this manifest's sibling services: the invoice batch job runs PDFBox plus the
+          # zstd-jni/brotli4j native compressors in this one JVM (see InvoiceCompressor).
           requests:
             cpu: 250m
-            memory: 256Mi
+            memory: 384Mi
           limits:
-            cpu: 500m
-            memory: 512Mi
+            cpu: 1000m
+            memory: 768Mi
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness

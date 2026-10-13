@@ -21,6 +21,32 @@ command -v openssl >/dev/null || { echo "openssl is required" >&2; exit 1; }
 
 secret() { openssl rand -base64 48 | tr -d '/+=\n' | cut -c1-"${1:-32}"; }
 
+# Generates an RSA-2048 keypair and writes each half, base64-encoded DER (not PEM, so it is one line
+# and drops straight into a KEY=VALUE .env entry), to the two given files. The private half MUST be
+# PKCS#8 (java.security.spec.PKCS8EncodedKeySpec expects exactly that ASN.1 shape) - `openssl pkey
+# -outform DER` alone emits the bare PKCS#1 RSAPrivateKey structure instead, which Java's KeyFactory
+# rejects with "algid parse error, not a sequence"; `pkcs8 -topk8` is what actually wraps it.
+rsa_keypair() { # $1=private-key-out-file $2=public-key-out-file
+  local pem; pem="$(mktemp)"
+  openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$pem" 2>/dev/null
+  openssl pkcs8 -topk8 -nocrypt -inform PEM -in "$pem" -outform DER 2>/dev/null | openssl base64 -A > "$1"
+  openssl pkey -in "$pem" -pubout -outform DER 2>/dev/null | openssl base64 -A > "$2"
+  rm -f "$pem"
+}
+
+# Generates the keypair only if at least one of its two halves is still missing, and adds both with
+# ensure() (which itself no-ops on a half that's already present) - keeps a from-scratch run and a
+# top-up run both correct without ever regenerating a keypair that is already fully in place.
+ensure_rsa_keypair() { # $1=private-key-env-name $2=public-key-env-name
+  if ! grep -q "^$1=" "$ENV_FILE" || ! grep -q "^$2=" "$ENV_FILE"; then
+    priv="$(mktemp)"; pub="$(mktemp)"
+    rsa_keypair "$priv" "$pub"
+    ensure "$1" "$(cat "$priv")"
+    ensure "$2" "$(cat "$pub")"
+    rm -f "$priv" "$pub"
+  fi
+}
+
 touch "$ENV_FILE"
 chmod 600 "$ENV_FILE" 2>/dev/null || true
 
@@ -52,12 +78,24 @@ ensure VAULT_DB_ADMIN_PASSWORD   "$(secret)"
 ensure KC_BOOTSTRAP_ADMIN_USERNAME admin
 ensure KC_BOOTSTRAP_ADMIN_PASSWORD "$(secret)"
 ensure NOTIFICATION_CLIENT_SECRET  "$(secret 40)"
+ensure ORDER_CLIENT_SECRET         "$(secret 40)"
 
 # Development-only identities used by scripts and the Karate suite (see infrastructure/keycloak/seed-dev.sh).
 ensure E2E_CLIENT_SECRET         "$(secret 40)"
 ensure E2E_ADMIN_PASSWORD        "$(secret)"
 ensure E2E_MANAGER_PASSWORD      "$(secret)"
 ensure E2E_USER_PASSWORD         "$(secret)"
+
+# --- customer-service: card-on-file encryption (JWE) --------------------------------------------
+# A real base64-encoded 32-byte key (not the alnum-only secret() helper above): it is decoded back to
+# exactly 32 bytes for AES-256 key wrapping (A256KW), so it must stay valid base64 with its padding.
+ensure CARD_DIGITIZATION_KEY     "$(openssl rand -base64 32)"
+
+# --- order-service: invoice signing and the download endpoint's JWE keypair ---------------------
+# Two independent RSA-2048 keypairs: one signs/verifies the generated PDF, the other is the download
+# endpoint's JWE recipient key (RSA-OAEP-256). Each stored as base64 DER (see rsa_keypair() above).
+ensure_rsa_keypair INVOICE_SIGNING_PRIVATE_KEY   INVOICE_SIGNING_PUBLIC_KEY
+ensure_rsa_keypair INVOICE_DOWNLOAD_PRIVATE_KEY  INVOICE_DOWNLOAD_PUBLIC_KEY
 
 # --- platform services & dashboards -------------------------------------------------------------
 ensure GRAFANA_ADMIN_PASSWORD    "$(secret)"

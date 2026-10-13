@@ -7,6 +7,7 @@ import com.ecommerce.common.security.CurrentUser;
 import com.ecommerce.common.web.EntityTags;
 import com.ecommerce.orderservice.dto.CreateOrderRequest;
 import com.ecommerce.orderservice.dto.OrderResponse;
+import com.ecommerce.orderservice.service.InvoiceDownloadService;
 import com.ecommerce.orderservice.service.OrderPlacementService;
 import com.ecommerce.orderservice.service.OrderService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -45,6 +46,7 @@ public class OrderController {
 
     private final OrderService orderService;
     private final OrderPlacementService placementService;
+    private final InvoiceDownloadService invoiceDownloadService;
     private final CurrentUser currentUser;
 
     @GetMapping
@@ -149,6 +151,28 @@ public class OrderController {
             @Parameter(description = "New order status", example = "CANCELLED") @RequestParam OrderStatus status) {
         log.info("PUT /orders/{}/status -> {}", id, status);
         return withEtag(ResponseEntity.ok(), orderService.updateOrderStatus(id, status));
+    }
+
+    /**
+     * Downloads the order's invoice: the PDF and the order details, together in one JWE-encrypted
+     * envelope (the PDF is treated as sensitive). Decrypting the response needs the private key that
+     * matches {@code ecommerce.invoice-download.rsa-public-key} - a single platform-wide keypair for
+     * this worked example, not a real per-customer key-exchange system.
+     */
+    @GetMapping(value = "/{orderId}/invoice", produces = "application/jwe")
+    @Operation(summary = "Download the order's invoice",
+        description = "Returns the invoice PDF and order details as one JWE compact-serialization string (RSA-OAEP-256 + A256GCM). "
+            + "'application/jwe' is this API's own convention, not a registered media type.")
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "200", description = "A JWE compact-serialization string"),
+        @ApiResponse(responseCode = "404", description = "Order not found"),
+        @ApiResponse(responseCode = "409", description = "The order has no invoice yet")
+    })
+    public ResponseEntity<String> downloadInvoice(
+            @Parameter(description = "Order ID", example = "1") @PathVariable Long orderId) {
+        OrderResponse order = orderService.getOrder(orderId);
+        currentUser.requireAccessToCustomer(order.getCustomerId(), "Order", orderId);
+        return ResponseEntity.ok(invoiceDownloadService.buildEncryptedDownload(orderId));
     }
 
     private static ResponseEntity<OrderResponse> withEtag(ResponseEntity.BodyBuilder builder, OrderResponse order) {

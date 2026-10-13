@@ -48,11 +48,13 @@ Code: `common/.../security/SecurityConfig.java` (services), `api-gateway/.../Gat
 | `USER` | a customer | their own customer record, their own orders |
 | `MANAGER` | back-office staff | cross-customer reads and operational changes |
 | `ADMIN` | administrator | everything a manager can do, plus creating inventory and deleting customers |
-| `SERVICE` | a machine identity (`notification-service`) | read customers/orders on behalf of the platform |
+| `SERVICE` | a machine identity (`notification-service`, `order-service`) | read customers/orders on behalf of the platform |
 
 The URL rules are **deny by default**: an endpoint that is not listed is refused for everybody. They are
-asserted exhaustively - every endpoint × every role - by `AuthorizationMatrixTest` (187 cases), so loosening a
-rule or adding an unprotected endpoint fails the build.
+asserted exhaustively - every endpoint × every role - by `AuthorizationMatrixTest` (222 cases), so loosening a
+rule fails the build. Note this matrix is a manually curated list of rules, not auto-discovered from the
+controllers: a genuinely new endpoint needs its own `Rule` added here, or it is simply untested, not
+unprotected (`SecurityConfig`'s own wildcard patterns, e.g. `/customers/**`, still deny-by-default it).
 
 | Endpoint | USER | MANAGER | ADMIN | SERVICE |
 | --- | :-: | :-: | :-: | :-: |
@@ -60,7 +62,10 @@ rule or adding an unprotected endpoint fails the build.
 | `GET /api/customers/{id}` | own only | ✔ | ✔ | ✔ |
 | `POST/PUT /api/customers` | – | ✔ | ✔ | – |
 | `DELETE /api/customers/{id}` | – | – | ✔ | – |
+| `POST /api/customers/{id}/card` (add/replace card on file) | – | ✔ | ✔ | – |
+| `DELETE /api/customers/{id}/card` | – | – | ✔ | – |
 | `GET /api/orders`, `GET /api/orders/{id}` | own only | ✔ | ✔ | ✔ |
+| `GET /api/orders/{id}/invoice` (JWE-encrypted PDF + order details) | own only | ✔ | ✔ | ✔ |
 | `POST /api/orders` | for self only | ✔ | ✔ | – |
 | `PUT /api/orders/{id}/status` | – | ✔ | ✔ | – |
 | `GET /api/payments…` | – | ✔ | ✔ | – |
@@ -129,25 +134,34 @@ Decode a token to see what services see: `echo "$TOKEN" | cut -d. -f2 | base64 -
 
 ## 5. Service-to-service calls
 
-`notification-service` needs customer and order details to address notifications. It is a **Keycloak client**
-(`notification-service`) using the OAuth2 *client-credentials* grant: it exchanges its client id and secret for
-a short-lived token whose service account holds the `SERVICE` role, caches it, and attaches it to its calls
-(`ServiceAuthConfig`, `ServiceAccountAuthInterceptor`). The secret is injected from the environment or Vault -
+Two services hold their own machine identity, each a **Keycloak client** using the OAuth2
+*client-credentials* grant: it exchanges its client id and secret for a short-lived token whose service
+account holds the `SERVICE` role, caches it, and attaches it to its calls (`ServiceAuthConfig`,
+`ServiceAccountAuthInterceptor`). The secret is injected from the environment or Vault -
 `ecommerce.service-auth.client-secret` is required and has no default.
+
+* **`notification-service`** needs customer and order details to address notifications.
+* **`order-service`** needs customer details (name, email) to render an invoice. This is the *invoice batch
+  job's* identity specifically - it runs on a schedule with no caller to relay a token from, unlike this
+  service's request-scoped `CustomerDirectoryClient`, which still relays whichever user's token placed the
+  order. The two clients exist side by side in the same service for exactly that reason: a live request has a
+  real caller to act as; a scheduled job does not.
 
 ## 6. Managing users, roles and clients
 
-* **Realm as code:** `infrastructure/keycloak/realm-ecommerce.json` - roles, the `ecommerce-web` and
-  `notification-service` clients, audience/role/`customer_id` mappers, password policy (12+ chars), brute-force
-  lockout, 5-minute access tokens. It is imported when Keycloak starts; `${NOTIFICATION_CLIENT_SECRET}` is
-  substituted from the environment, so the file contains no secret.
+* **Realm as code:** `infrastructure/keycloak/realm-ecommerce.json` - roles, the `ecommerce-web`,
+  `notification-service` and `order-service` clients, audience/role/`customer_id` mappers, password policy
+  (12+ chars), brute-force lockout, 5-minute access tokens. It is imported when Keycloak starts;
+  `${NOTIFICATION_CLIENT_SECRET}` and `${ORDER_CLIENT_SECRET}` are substituted from the environment, so the
+  file contains no secret.
 * **Add a customer login:** create the Keycloak user, assign role `USER`, and set attribute `customer_id` to the id
   of their row in `customer-service`. (Self-registration is off; the customer record and the login are linked by an
   administrator or an onboarding job.)
 * **Add a role:** add it to the realm file, to `Roles.java`, to the rules in `SecurityConfig`, and to the matrix in
   `AuthorizationMatrixTest`.
-* **Rotate the notification client secret:** change `NOTIFICATION_CLIENT_SECRET`, restart Keycloak (re-import with a
-  fresh volume) or update the client in the admin console, then restart `notification-service`.
+* **Rotate a service's client secret:** change `NOTIFICATION_CLIENT_SECRET` or `ORDER_CLIENT_SECRET`, restart
+  Keycloak (re-import with a fresh volume) or update the client in the admin console, then restart the
+  matching service.
 
 ## 7. Configuration reference
 
@@ -159,7 +173,7 @@ a short-lived token whose service account holds the `SERVICE` role, caches it, a
 | `ecommerce.security.customer-id-claim` | services | Claim carrying the bound customer id (`customer_id`) |
 | `ecommerce.security.jwks-ssl-bundle` | gateway, services | Spring SSL bundle used to reach Keycloak over TLS ([SMALLSTEP_PKI.md](SMALLSTEP_PKI.md)) |
 | `ecommerce.security.docs-public` | services | Expose Swagger UI/OpenAPI (off by default) |
-| `ecommerce.service-auth.*` | notification-service | Token URL, client id, **client secret** (no default), SSL bundle |
+| `ecommerce.service-auth.*` | notification-service, order-service | Token URL, client id, **client secret** (no default), SSL bundle |
 
 The issuer and the JWKS host differ on purpose: tokens carry the URL a *client* used (`localhost:8180`), while
 services fetch keys over the internal network (`keycloak:8080`). Keycloak runs with

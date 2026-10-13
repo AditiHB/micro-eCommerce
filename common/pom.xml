@@ -95,6 +95,12 @@
             <artifactId>flyway-core</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- JWE encrypt/decrypt helper shared by customer-service (card-on-file) and order-service
+             (invoice download envelope). Version pinned in the root dependencyManagement. -->
+        <dependency>
+            <groupId>com.nimbusds</groupId>
+            <artifactId>nimbus-jose-jwt</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
